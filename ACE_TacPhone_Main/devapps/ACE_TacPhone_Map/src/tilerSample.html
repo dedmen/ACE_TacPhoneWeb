@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>In-Browser SVG Tiler</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; }
+        #drop-zone { border: 2px dashed #ccc; padding: 30px; text-align: center; margin-bottom: 20px; }
+        #output { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
+        .tile-box { border: 1px solid #ddd; padding: 5px; text-align: center; }
+        img { display: block; max-width: 128px; height: auto; }
+    </style>
+</head>
+<body>
+
+    <div id="drop-zone">Drag and drop your large SVG file here</div>
+    <progress id="progress" value="0" max="100" style="width: 100%; display: none;"></progress>
+    <div id="output"></div>
+
+<script>
+const dropZone = document.getElementById('drop-zone');
+const progress = document.getElementById('progress');
+const output = document.getElementById('output');
+const TILE_SIZE = 256; // Standard web map tile size
+
+dropZone.addEventListener('dragover', (e) => e.preventDefault());
+dropZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    const file = e.dataTransfer.files[0];
+    if (file && file.type === 'image/svg+xml') {
+        processSVG(file);
+    }
+});
+
+function processSVG(file) {
+    const reader = new FileReader();
+    reader.onload = function(event) {
+        const img = new Image();
+        img.onload = function() {
+            // Determine dimensions and max zoom level
+            const width = img.naturalWidth || img.width;
+            const height = img.naturalHeight || img.height;
+            const maxDimension = Math.max(width, height);
+            
+            // Calculate deepest zoom level where dimensions fit into 256px tiles
+            const maxZoom = Math.ceil(Math.log2(maxDimension / TILE_SIZE));
+            
+            progress.style.display = 'block';
+            output.innerHTML = `<h3>Generating tiles up to Zoom Level ${maxZoom}...</h3>`;
+            
+            // Generate tiles for the highest zoom level as an example
+            generateTilesForZoom(img, width, height, maxZoom);
+        };
+        img.src = event.target.result;
+    };
+    reader.readAsDataURL(file);
+}
+
+function generateTilesForZoom(img, originalWidth, originalHeight, zoom) {
+    // Calculate total dimensions at this specific zoom level
+    const scale = Math.pow(2, zoom);
+    const zoomWidth = TILE_SIZE * scale;
+    const zoomHeight = TILE_SIZE * scale;
+    
+    // Scale the original SVG dimensions to fit the tile grid bounds
+    const renderScale = Math.min(zoomWidth / originalWidth, zoomHeight / originalHeight);
+    const finalWidth = originalWidth * renderScale;
+    const finalHeight = originalHeight * renderScale;
+
+    // Create an offscreen canvas to render the scaled SVG
+    const canvas = document.createElement('canvas');
+    canvas.width = zoomWidth;
+    canvas.height = zoomHeight;
+    const ctx = canvas.getContext('2d');
+    
+    // Center the SVG inside the map tile matrix bounds
+    const offsetX = (zoomWidth - finalWidth) / 2;
+    const offsetY = (zoomHeight - finalHeight) / 2;
+    ctx.drawImage(img, offsetX, offsetY, finalWidth, finalHeight);
+
+    const cols = scale;
+    const rows = scale;
+    
+    // Create a temporary single-tile canvas for cropping slices
+    const tileCanvas = document.createElement('canvas');
+    tileCanvas.width = TILE_SIZE;
+    tileCanvas.height = TILE_SIZE;
+    const tileCtx = tileCanvas.getContext('2d');
+
+    // Slice the main canvas into individual x/y tile images
+    for (let x = 0; x < cols; x++) {
+        for (let y = 0; y < rows; y++) {
+            tileCtx.clearRect(0, 0, TILE_SIZE, TILE_SIZE);
+            
+            // Crop the 256x256 chunk from the primary canvas
+            tileCtx.drawImage(
+                canvas, 
+                x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE, 
+                0, 0, TILE_SIZE, TILE_SIZE
+            );
+
+            // Export to data URL or Blob object
+            const tileDataUrl = tileCanvas.toDataURL('image/png');
+            displayTile(tileDataUrl, zoom, x, y);
+        }
+    }
+    progress.style.display = 'none';
+}
+
+function displayTile(dataUrl, z, x, y) {
+    const box = document.createElement('div');
+    box.className = 'tile-box';
+    box.innerHTML = `<strong>zoom/${x}/${y}.png</strong>`;
+    const tileImg = new Image();
+    tileImg.src = dataUrl;
+    box.appendChild(tileImg);
+    output.appendChild(box);
+}
+</script>
+</body>
+</html>

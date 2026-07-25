@@ -1,4 +1,4 @@
-﻿using System.Runtime.InteropServices;
+using System.Runtime.InteropServices;
 // ReSharper disable InconsistentNaming
 
 // This hosts a simple HTTP webserver, serving files (loaded from in-game, typically only index.html)

@@ -2,15 +2,20 @@ import { defineConfig } from 'vite'
 import react, { reactCompilerPreset } from '@vitejs/plugin-react'
 import babel from '@rolldown/plugin-babel'
 import { viteSingleFile } from "vite-plugin-singlefile"
+import dts from 'vite-plugin-dts'
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [
-    react(),
-    babel({ presets: [reactCompilerPreset()] }),
-    viteSingleFile()
-  ],
-  
+    plugins: [
+        react(),
+        dts({ include: ['src'], insertTypesEntry: true, tsconfigPath: "./tsconfig.app.json",  }),
+        babel({ presets: [reactCompilerPreset()] }),
+        viteSingleFile()
+    ],
+    build: {
+        minify: false,
+        sourcemap: 'inline',
+    },
 })
 
 //#TODO https://github.com/originjs/vite-plugin-federation plugins so mods can provide components?

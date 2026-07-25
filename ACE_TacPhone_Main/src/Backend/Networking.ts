@@ -3,6 +3,7 @@ import "./A3API";
 interface Networking {
  Request(params:object): Promise<object>;
  LoadGameFileText(path: string): Promise<string>;
+ LoadGameFileTexture(path: string, maxSize: number): Promise<string>;
 }
 
 
@@ -37,6 +38,9 @@ class NetworkingA3 implements Networking {
         return window.A3API.RequestFile(path);
     }
 
+    LoadGameFileTexture(path: string, maxSize: number): Promise<string>{
+        return window.A3API.RequestTexture(path, maxSize);
+    }
 };
 
 
@@ -66,10 +70,11 @@ class NetworkingWebsocket implements Networking {
         console.log("NetworkStartup WebSocket");
 
         // Establish websocket connection to our server
-        console.log(`ws://${window.location.host}/ws`);
-        this.socket = new WebSocket(`wss://${window.location.host}/ws`);
-        //this.socket = new WebSocket(`ws://localhost:8001/ws`, null, null, null, {rejectUnauthorized: false});
 
+        let wsURL = IsLocalDev() ? `wss://localhost:8001/ws` : `wss://${window.location.host}/ws`;
+
+        console.log(wsURL);
+        this.socket = new WebSocket(wsURL);
         this.socket.onopen = () => {
             console.log("[open] Connection established");
         };
@@ -77,6 +82,7 @@ class NetworkingWebsocket implements Networking {
         this.socket.onmessage = (event) => {
             console.log(`[message] Data received from server: ${event.data}`);
             let jsonData = JSON.parse(event.data);
+            console.log("recv", jsonData);
             this._response(jsonData.k, jsonData.d);
         };
 
@@ -112,13 +118,14 @@ class NetworkingWebsocket implements Networking {
                     reject 
                 }
                 ))
-              
-
-            try {
-                this.socket.send(JSON.stringify({k: reqKey, d:data}));
-            } catch (error) {
-                console.error(error);
-            }       
+            {
+                try {
+                    console.log("send", {k: reqKey, d:data});
+                    this.socket.send(JSON.stringify({k: reqKey, d:data}));
+                } catch (error) {
+                    console.error(error);
+                }  
+            }
         });
     }
 
@@ -127,14 +134,14 @@ class NetworkingWebsocket implements Networking {
     }
 
 
+    //#TODO engine side needs to be able to load texture, currently only a webbrowser can do
+    LoadGameFileTexture(path: string, maxSize: number): Promise<string>{
+        return window.A3API.RequestTexture(path, maxSize);
+    }
+
 };
 
 
-
-// Its a global, accessible to everyone
-declare global {
-    interface Window { Networking: Networking; }
-}
 
 // Are we running inside Arma game, or are we standalone browser page
 export function IsArma()
@@ -147,7 +154,13 @@ export function IsArma()
 export function IsLocalDev()
 {
     // Arma loads content into a sandbox iframe with blob: url
-    return window.location.href.includes("localhost:4000");
+    return window.location.href.startsWith("http://localhost"); // non-dev webbrowser will be https (for now..)
+}
+
+
+// Its a global, accessible to everyone
+declare global {
+    interface Window { Networking: Networking; }
 }
 
 window.Networking = window.Networking || (IsArma() ? new NetworkingA3() : new NetworkingWebsocket());

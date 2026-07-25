@@ -1,6 +1,10 @@
-import { type UserConfig, type PluginOption, version as viteVersion } from "vite"
-import type { OutputChunk, OutputAsset, OutputOptions } from "rollup"
+import { type UserConfig, type PluginOption } from "vite"
+import type { OutputChunk, OutputAsset } from "rollup"
 import micromatch from "micromatch"
+
+// This is a modified variant of https://www.npmjs.com/package/vite-plugin-singlefile
+// Instead of merging into a .html, we merge into a .js
+// The javascript should already bundle all the scripts, but we need to resolve css imports, by converting them into a data URL
 
 export type Config = {
 	// Modifies the Vite build config to make this plugin work well. See `_useRecommendedBuildConfig`
@@ -9,10 +13,6 @@ export type Config = {
 	//
 	// @default true
 	useRecommendedBuildConfig?: boolean
-	// Remove the unused Vite module loader. Safe to do since all JS is inlined by this plugin.
-	//
-	// @default false
-	removeViteModuleLoader?: boolean
 	// Optionally, only inline assets that match one or more glob patterns.
 	//
 	// @default []
@@ -27,23 +27,30 @@ export type Config = {
 	overrideConfig?: Partial<UserConfig>
 }
 
-const defaultConfig = { useRecommendedBuildConfig: true, removeViteModuleLoader: false, deleteInlinedFiles: true }
+const defaultConfig = { useRecommendedBuildConfig: true, deleteInlinedFiles: true }
 
-export function replaceCss(jsContent: string, scriptFilename: string, scriptCode: string): string {
+export function replaceCss(jsContent: string, cssFilename: string, cssCode: string): string {
 
     // https://web.dev/articles/css-module-scripts#dynamically_imported_stylesheets
     // We cannot use import from file, because in Arma we are not running in a browser, so, we convert to a dynamic import, and use the core file loading API to fetch it
     //#TODO we can also choose to embed a data URL?
 
+    // We turn `import './main.css' into import 'data:text/css;base64,...'`
+
+    var cssUrl = 'data:text/css;charset=UTF-8,' + encodeURIComponent(cssCode);
+
+
+    var repSource = `import './${cssFilename}'`;
+    
+    // Doesn't work, mimetype missmatch
+    //var repTarget = `import '${cssUrl}' with { type: "css" };`;
+
+    // Convert it into a stylesheet link we'll insert into head
+    var repTarget = `(()=> {const link = document.createElement('link'); link.rel = 'stylesheet'; link.href = '${cssUrl}'; document.head.appendChild(link);})()`;
 
 
 
-                debugger;
-
-	const f = scriptFilename.replaceAll(".", "\\.")
-	const reStyle = new RegExp(`<link([^>]*?) href="(?:[^"]*?/)?${f}"([^>]*)>`)
-	const newCode = scriptCode.replace(`@charset "UTF-8";`, "")
-	const inlined = jsContent.replace(reStyle, (_, beforeSrc, afterSrc) => `<style${beforeSrc}${afterSrc}>${newCode.trim()}</style>`)
+	const inlined = jsContent.replace(repSource, (_) => repTarget)
 	return inlined
 }
 
@@ -73,36 +80,23 @@ export function viteSingleFile({
 		// Then the embedded resources can be loaded by relative path.
 		config.build.assetsDir = ""
 
-		if (!config.build.rollupOptions) config.build.rollupOptions = {}
-		if (!config.build.rollupOptions.output) config.build.rollupOptions.output = {}
-
-		const viteMajor = parseInt(viteVersion.split(".")[0], 10)
-		const updateOutputOptions = (out: OutputOptions) => {
-			// Ensure that as many resources as possible are inlined.
-			// Vite 8+ (Rolldown) uses codeSplitting:false; earlier versions use inlineDynamicImports:true
-			if (viteMajor >= 8) {
-				;(out as OutputOptions & { codeSplitting: boolean }).codeSplitting = false
-			} else {
-				out.inlineDynamicImports = true
-			}
-		}
-
-		if (Array.isArray(config.build.rollupOptions.output)) {
-			for (const o of config.build.rollupOptions.output) updateOutputOptions(o as OutputOptions)
-		} else {
-			updateOutputOptions(config.build.rollupOptions.output as OutputOptions)
-		}
-
 		Object.assign(config, overrideConfig)
 	}
 
 	return {
 		name: "vite:singlefile",
-		config: useRecommendedBuildConfig ? _useRecommendedBuildConfig : undefined,
+		config: !useRecommendedBuildConfig ? _useRecommendedBuildConfig : undefined,
 		enforce: "post",
+
+        //async configResolved(config) {
+        //    const resolvedNames = config.plugins.map(p => p.name)
+        //    console.log(resolvedNames);
+        //},
+
+
 		generateBundle(_options: unknown, bundle: Record<string, unknown>) {
 			const warnNotInlined = (filename: string) => this.info(`NOTE: asset not inlined: ${filename}`)
-			this.info("\n")
+
 			const files = {
 				html: [] as string[],
 				css: [] as string[],
@@ -135,7 +129,7 @@ export function viteSingleFile({
 				//	if (jsChunk.code != null) {
 				//		this.info(`Inlining: ${filename}`)
 				//		bundlesToDelete.push(filename)
-				//		replacedHtml = replaceScript(replacedHtml, jsChunk.fileName, jsChunk.code, removeViteModuleLoader)
+				//		replacedHtml = replaceScript(replacedHtml, jsChunk.fileName, jsChunk.code)
 				//	}
 				//}
 				for (const filename of files.css) {

@@ -5,18 +5,18 @@ import babel from '@rolldown/plugin-babel'
 import dts from 'vite-plugin-dts'
 import { libInjectCss } from 'vite-plugin-lib-inject-css'
 //import { viteSingleFile } from "vite-plugin-singlefile"
-//import { viteSingleFile } from "./build/singlefile.ts"
+import { viteSingleFile } from "./build/singlefile.ts"
 import Inspect from 'vite-plugin-inspect'
 
 // https://vite.dev/config/
 export default defineConfig({
-  //devtools: true,
+  devtools: false,
   plugins: [
     react(),
-    dts({ include: ['src'], insertTypesEntry: true, tsconfigPath: "./tsconfig.app.json", bundleTypes: true }),
+    dts({ include: ['src'], bundleTypes: true, }),
     libInjectCss(),
     babel({ presets: [reactCompilerPreset()] }),
-    //viteSingleFile(),
+    viteSingleFile(),
     Inspect()
   ],
 
@@ -28,31 +28,36 @@ export default defineConfig({
 
   
   build: {
+    minify: false,
+    sourcemap: 'inline',
     lib: {
-      entry: resolve(import.meta.dirname, 'src/main.tsx'),
-      name: 'ace_tacphone_map',
-      fileName: 'ace_tacphone_map', //(format) => `ace_tacphone_maps.${format}.js`
-    formats: ['es'],
+        entry: resolve(import.meta.dirname, 'src/main.tsx'),
+        name: 'ace_tacphone_map',
+        fileName: () => `ace_tacphone_map.js`,
+        formats: ['es'], // UMD format works best for global injection
     },
     rollupOptions: {
-      external: ['react', 'react/jsx-runtime', 'react/compiler-runtime'],
-      output: {
-          sourcemap: true,
-          sourcemapBaseUrl: 'YOUR SOURCEMAP BASE URL', // https://www.my-source-maps.com
-      }
-    },
-    rolldownOptions: {
-      // make sure to externalize deps that shouldn't be bundled
-      // into your library
-      external: ['react', 'react/jsx-runtime', 'react/compiler-runtime'],
-      output: {
-        // Provide global variables to use in the UMD build
-        // for externalized deps
-        globals: {
-          react: 'react',
-        },
-      },
-    },
+
+        // See ACE_TacPhoneMain/src/main.tsx, it declares what is publicly available
+        external: ['react', 'react-dom', 'react-dom/client', 'react/compiler-runtime', 'react/jsx-runtime'],
+        output: {
+
+            // Map the externalized React imports to the framework's window globals
+            //globals: {
+            //'react': 'React',
+            //'react-dom': 'ReactDOM',
+            //'react/jsx-runtime': 'ReactJSXRuntime'
+            //},
+
+            // These can be used to map names the library has in import, to the names of the ACE_TacPhone_Main's index.html import map.
+            // In this case we don't care though, as we just make them be equal
+            paths: {
+                //react: 'react',
+                //'react-dom': 'ReactDOM',
+                //'react/jsx-runtime': 'ReactJSXRuntime'
+            },
+        }
+    }
   },
 
 })
