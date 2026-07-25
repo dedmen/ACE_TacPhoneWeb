@@ -1,4 +1,4 @@
-import type { IDockviewPanelProps } from "dockview-react";
+
 import React from "react";
 import styles from './AppChooserPanel.module.css'
 
@@ -8,13 +8,10 @@ import styles from './AppChooserPanel.module.css'
 export class AppChooserPanel extends React.Component<{},{
     activeElement : React.JSX.Element | undefined
 }> {
-    props: IDockviewPanelProps;
-    //activeElement : React.ComponentClass;
     activeElement : React.ReactNode;
 
-    constructor(props: IDockviewPanelProps) {
+    constructor(props: {}) {
         super(props);
-        this.props = props;
         this.state = {activeElement: undefined}; 
 
         let knownPanels = window.AppDirectory.knownPanels;
@@ -31,15 +28,14 @@ export class AppChooserPanel extends React.Component<{},{
     }
 
     componentDidMount() {
-        if (typeof this.props.params.activeApp === "string")
-            this.switchToApp(this.props.params.activeApp);
+        //#TODO load from model?
+        //    this.switchToApp(this.props.params.activeApp);
     }
 
     componentWillUnmount() {
     }
 
     switchToApp(appName: string) {
-        this.props.api.updateParameters({activeApp: appName});
         let panelInfo = window.AppDirectory.knownPanels?.get(appName);
         if (!panelInfo)
             return;

@@ -9,13 +9,13 @@ import './Backend/Networking'
 import './Backend/AppDirectory'
 //import {CreateTacPhoneApp} from '../../ACE_TacPhone_Map'
 
-import { DockviewReact, type DockviewReadyEvent, type IDockviewPanelProps } from 'dockview-react';
-import 'dockview-react/dist/styles/dockview.css';
+import { Actions, AddIcon, BorderNode, DockLocation, Layout, Model, TabNode, TabSetNode, type ITabSetRenderValues } from 'flexlayout-react';
+import 'flexlayout-react/style/dark.css';  
 
 //const MyPanel = () => {
 //    return CreateTacPhoneApp();
 //};
-
+/*
 class PlayerPosPanel extends React.Component<{},{
     playerPos: Array<number>,
     time: number
@@ -23,7 +23,7 @@ class PlayerPosPanel extends React.Component<{},{
 
     interval: number | undefined;
 
-    constructor(props: IDockviewPanelProps) {
+    constructor(props: {}) {
         super(props);
         this.state = {playerPos: [0,0,0], time: 0};  
     }
@@ -59,57 +59,121 @@ class PlayerPosPanel extends React.Component<{},{
         ;
     }
 };
-
+*/
 import {AppChooserPanel} from './Panels/AppChooserPanel'
 
 
-const PlayerPosPanelWrap = (_props: IDockviewPanelProps) => {
-    return <PlayerPosPanel/>;
-};
+class App extends React.Component<{}, {loading: boolean}> {
 
+    constructor(props: {})
+    {
+        super(props);
+        this.state = { loading: true};
+    }
 
-const AppChooserPanelWrap = (_props: IDockviewPanelProps) => {
-    return <AppChooserPanel api={_props.api} containerApi={_props.containerApi} params={_props.params}/>;
-};
+    factory = (node: TabNode) => {
+        const component = node.getComponent()!;
 
-const components : { [key: string]: any } = { /*default: MyPanel,*/ playerPos: PlayerPosPanelWrap, appChooser: AppChooserPanelWrap };
+        if (component === "AppChooser"){
+            return <AppChooserPanel />;
+        }
 
-class App extends React.Component {
+        let knownPanels = window.AppDirectory.knownPanels;
+        let panelInfo = knownPanels.get(component);
+        if (panelInfo)
+            return React.createElement(panelInfo.appComponent, null);
+
+        return <div>Unknown panel?? {component}/{node.getName()}</div>;
+    }
+
+    componentDidMount(): void {
+
+        //#TODO we want to wait for networking to be connected
+        window.setTimeout(async () => {
+            await window.AppDirectory.LoadAvailableApps();
+
+            this.setState({ loading: false })
+        }, 500);
+    }
 
     render() {
-        const onReady = (event: DockviewReadyEvent) => {
+        if (this.state.loading)
+            return <div>LOADING!</div>;
 
-            event.api.addPanel({ id: 'panel_1', component: 'playerPos', title: 'Player Pos', floating: false });
 
-
-            //window.setTimeout(() => {
-            //    window.Networking.Request({}).then(result => console.log("result", result));
-            //}, 1000); // Need to wait till websocket connected
-
-            // Dynamically load the extra component
-            window.setTimeout(async () => {
-                await window.AppDirectory.LoadAvailableApps();
-
-                event.api.addPanel({ id: 'panel_2', component: 'appChooser', title: 'Choose',
-                    position: { referencePanel: 'panel_1', direction: 'right' }
-                });
-            }, 5000);
-
+        const json = {
+            global: {tabEnablePopoutFloatIcon: true},
+            borders: [],
+            layout: {
+                type: "row",
+                weight: 100,
+                children: [
+                    {
+                        type: "tabset",
+                        weight: 50,
+                        children: [
+                            {
+                                type: "tab",
+                                name: "One",
+                                component: "AppChooser",
+                            }
+                        ]
+                    },
+                    {
+                        type: "tabset",
+                        weight: 50,
+                        children: [
+                            {
+                                type: "tab",
+                                name: "Two",
+                                component: "AppChooser",
+                            }
+                        ]
+                    }
+                ]
+            }
         };
 
-    return (
-        <>         
-        <div style={{ width: '100%', height: '100vh' }}>
-            <DockviewReact
-                className="dockview-theme-abyss"
-                onReady={onReady}
-                components={components}
-            />
-        </div>  
-        </>
-    )
+        const model = Model.fromJson(json);
+
+        const onRenderTabSet = (node: TabSetNode | BorderNode, renderValues: ITabSetRenderValues) => {
+            if (node instanceof TabSetNode) {
+                renderValues.stickyButtons.push(
+                    <button
+                        key="Add"
+                        title="Add"
+                        className="flexlayout__tab_toolbar_button"
+                        onClick={() => {
+                            model.doAction(Actions.addTab({
+                                component: "AppChooser",
+                                name: "Added "
+                            }, node.getId(), DockLocation.CENTER, -1, true));
+                        }}
+                    ><AddIcon/></button>);
+            }
+        }
+
+        // model.doAction(Actions.)
+
+        return (
+            <>         
+            <div style={{ width: '100%', height: '100vh', position: 'absolute' }}>
+                <Layout
+                    model={model}
+                    factory={this.factory} 
+                    
+                    onRenderTabSet={onRenderTabSet}
+                    realtimeResize={true}
+                    />
+            </div>  
+            </>
+        )
     }
 
 }
 
 export default App
+
+
+//#TODO keep mobile screen active https://stackoverflow.com/questions/64139507/how-to-keep-mobile-display-active-in-javascript (Settings)
+//#TODO mobile fullscreen mode (hide address bar)

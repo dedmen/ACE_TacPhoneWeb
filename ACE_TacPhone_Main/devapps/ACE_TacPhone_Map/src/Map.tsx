@@ -10,14 +10,28 @@ import { getTopLeft } from 'ol/extent.js';
 import TileGrid from 'ol/tilegrid/TileGrid.js';
 import ImageTileSource from 'ol/source/ImageTile';
 
+function makeid(length: number) {
+    var result           = '';
+    var characters       = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    var charactersLength = characters.length;
+    for ( var i = 0; i < length; i++ ) {
+        result += characters.charAt(Math.floor(Math.random() * charactersLength));
+    }
+    return result;
+}
+
+
 class App extends React.Component<{},{
     count : number
 }> {
     map: Map |undefined;
+    mapUUID: string;
 
     constructor(props: {}) {
         super(props);
         this.state = {count: 0};
+
+        this.mapUUID = makeid(5); // We need a unique ID, because multiple maps might be open, and the Map's would all spawn into the same divs. target doesn't search inside shadow DOM (Which I think we don't even have here?)
     }
 
     componentDidMount() {
@@ -31,7 +45,7 @@ class App extends React.Component<{},{
         });
 
         this.map = new Map({
-            target: "map",
+            target: `map_${this.mapUUID}`,
             layers: [
                 //imgLayer,
                 //vectorLayer,
@@ -46,7 +60,7 @@ class App extends React.Component<{},{
             }),
         });
 
-        window.Networking.LoadGameFileText("\\z\\ace\\addons\\tacphone\\apps\\map\\data\\altis.svg")
+        window.Networking.LoadGameFileText("/z/ace/addons/tacphone/apps/map/data/altis.svg")
         //fetch("/devapps/ACE_TacPhone_Map/assets/altis.svg")
         .then(async res => {
 
@@ -134,6 +148,9 @@ class App extends React.Component<{},{
             },
         });
 
+        //#TODO all maps we open, will be using the same background source (terrain data)
+        // We can re-use the tile source, its the most expensive part, then we don't need to load the same map multiple times
+
         masterImg.onload = () => {
             this.map!.addLayer(new Tile({
                 source: svgTileSource,
@@ -150,7 +167,7 @@ class App extends React.Component<{},{
     }
 
     render() {
-        return <div id="map" className={`${styles.map}`} style={{width: "100%", height: "100%"}}/>;
+        return <div id={`map_${this.mapUUID}`} className={`${styles.map}`} style={{width: "100%", height: "100%"}}/>;
     }
 }
 

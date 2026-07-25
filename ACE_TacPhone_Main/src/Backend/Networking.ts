@@ -35,6 +35,7 @@ class NetworkingA3 implements Networking {
     }
 
     LoadGameFileText(path: string): Promise<string> {
+        path = path.replaceAll("/", "\\");
         return window.A3API.RequestFile(path);
     }
 
@@ -130,12 +131,14 @@ class NetworkingWebsocket implements Networking {
     }
 
     async LoadGameFileText(path: string): Promise<string> {
-        return path; //#TODO request through websocket
+        let fetchURL = IsLocalDev() ? `https://localhost:8001/${path}` : path;
+        var fetchRes = await fetch(fetchURL);
+        return fetchRes.text();
     }
 
-
-    //#TODO engine side needs to be able to load texture, currently only a webbrowser can do
-    LoadGameFileTexture(path: string, maxSize: number): Promise<string>{
+    LoadGameFileTexture(path: string, maxSize: number): Promise<string> {
+        // not yet implemented
+        //#TODO engine side needs to be able to load texture, currently only a webbrowser can do
         return window.A3API.RequestTexture(path, maxSize);
     }
 
