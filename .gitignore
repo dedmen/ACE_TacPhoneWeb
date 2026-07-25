@@ -86,3 +86,15 @@ typings/
 
 # DynamoDB Local files
 .dynamodb/
+
+WebHostExtension_FeatureFlagsExport/.vs/
+
+WebHostExtension_FeatureFlagsExport/x64/
+
+*.user
+
+WebServerExtension/.vs/
+
+WebServerExtension/bin/
+
+WebServerExtension/obj/

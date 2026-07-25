@@ -1,0 +1,10 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="../WebHostExtension_FeatureFlagsExport/WebHostExtension_FeatureFlagsExport.vcxproj" Id="c668f0ec-935f-4df7-bc49-13025a1577d5" />
+  <Project Path="ArmaServerSide.csproj">
+    <Platform Project="x64" />
+  </Project>
+</Solution>

@@ -1,0 +1,56 @@
+{
+  "name": "ace-tacphone-map",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "main": "./dist/ace_tacphone_map.js",
+  "types": "./dist/ace_tacphone_map.d.ts",
+  "files": [
+    "dist"
+  ],
+  "sideEffects": [
+    "**/*.css"
+  ],
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/ace_tacphone_map.d.ts",
+        "default": "./dist/ace_tacphone_map.js"
+      }
+    }
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "lint": "oxlint",
+    "preview": "vite preview"
+  },
+  "peerDependencies": {
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.29.7",
+    "@microsoft/api-extractor": "^7.58.12",
+    "@rolldown/plugin-babel": "^0.2.3",
+    "@types/babel__core": "^7.20.5",
+    "@types/micromatch": "^4.0.10",
+    "@types/node": "^24.13.2",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/devtools": "^0.3.4",
+    "@vitejs/plugin-react": "^6.0.3",
+    "babel-plugin-react-compiler": "^1.0.0",
+    "micromatch": "^4.0.8",
+    "oxlint": "^1.71.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "rollup": "^4.62.2",
+    "typescript": "~6.0.2",
+    "vite": "^8.1.1",
+    "vite-plugin-dts": "^5.0.3",
+    "vite-plugin-inspect": "^12.0.2",
+    "vite-plugin-lib-inject-css": "^2.2.2",
+    "vite-plugin-singlefile": "^2.3.3"
+  }
+}

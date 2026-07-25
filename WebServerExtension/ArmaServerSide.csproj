@@ -1,0 +1,33 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+	<OutputType>Library</OutputType>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+	<PlatformTarget>x64</PlatformTarget>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Platforms>x64</Platforms>
+	<RuntimeIdentifier>win-x64</RuntimeIdentifier>
+	<PublishAot>true</PublishAot>
+	<SelfContained>true</SelfContained>
+	<NativeLib>Shared</NativeLib>
+	<AssemblyName>arma_webhost_x64</AssemblyName>
+	<IsTrimmable>false</IsTrimmable>
+  </PropertyGroup>
+  
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" /> <!-- https://learn.microsoft.com/en-us/aspnet/core/fundamentals/target-aspnetcore?view=aspnetcore-10.0&tabs=visual-studio#use-the-aspnet-core-shared-framework -->
+  </ItemGroup>
+  
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Http" Version="2.3.11" />
+    <PackageReference Include="Microsoft.AspNetCore.WebSockets" Version="2.3.11" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.10" />
+  </ItemGroup>
+  
+  <ItemGroup>
+    <NativeLibrary Include="FeatureFlags.obj" />
+	<IlcArg Include="--export-dynamic-symbol:RVExtensionFeatureFlags,DATA" />
+  </ItemGroup>
+</Project>

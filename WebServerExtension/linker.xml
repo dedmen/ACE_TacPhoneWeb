@@ -1,0 +1,8 @@
+﻿
+<!-- DO NOT MODIFY THIS FILE MANUALLY - THIS FILE UPDATES AUTOMATICALLY -->
+<linker>
+    <assembly fullname="arma_webhost_x64">
+        <type fullname="arma_webhost.*" preserve="all" />
+    </assembly>
+</linker>
+    
