@@ -4,6 +4,9 @@ interface Networking {
  Request(params:object): Promise<object>;
  LoadGameFileText(path: string): Promise<string>;
  LoadGameFileTexture(path: string, maxSize: number): Promise<string>;
+ LoadGameTerrain(config: object): Promise<string>;
+
+ OnMessageFromGame(message: object): void;
 }
 
 
@@ -39,11 +42,54 @@ class NetworkingA3 implements Networking {
         return window.A3API.RequestFile(path);
     }
 
-    LoadGameFileTexture(path: string, maxSize: number): Promise<string>{
+    LoadGameFileTexture(path: string, maxSize: number): Promise<string> {
         return window.A3API.RequestTexture(path, maxSize);
     }
+
+    LoadGameTerrain(config: object): Promise<string> {
+        return window.A3API.RequestTerrainSVG(config);
+    }
+
+    OnMessageFromGame(message: object): void {
+        // The game sent us a message, probably a notification about something
+        // Forward it to the App its destined for
+
+        console.log("Message from game", message);
+
+        const { a } = message as { a: string };
+        window.AppDirectory.knownApps.get(a)?.module.OnMessageFromGame(message);
+    }
+
 };
 
+// 2. Decompress a Base64 string back to the original string
+async function decompressFromBase64(base64Input: string): Promise<string> {
+  // Reconstruct a full Data URL from the Base64 string
+  const dataUrl = `data:application/octet-stream;base64,${base64Input}`;
+  
+  // Use fetch ONLY to convert the data URL into a Blob (this does not hit the network)
+  const blob = await fetch(dataUrl).then(res => res.blob());
+
+  // Use FileReader to safely read the blob as an ArrayBuffer
+  const buffer = await new Promise<ArrayBuffer>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result as ArrayBuffer);
+    reader.onerror = reject;
+    reader.readAsArrayBuffer(blob);
+  });
+  
+  // Create a decompression stream using 'gzip'
+  const stream = new Blob([buffer]).stream();
+  const decompressionStream = new DecompressionStream("gzip");
+  const decompressedStream = stream.pipeThrough(decompressionStream);
+  
+  // Read the decompressed stream into an ArrayBuffer
+  const response = new Response(decompressedStream);
+  const decompressedBuffer = await response.arrayBuffer();
+  
+  // Decode the ArrayBuffer back to a string
+  return new TextDecoder().decode(decompressedBuffer);
+}
 
 class NetworkingWebsocket implements Networking {
     requestCounter: number = 0;
@@ -84,6 +130,12 @@ class NetworkingWebsocket implements Networking {
             console.log(`[message] Data received from server: ${event.data}`);
             let jsonData = JSON.parse(event.data);
             console.log("recv", jsonData);
+
+            if (jsonData.k == "command") {
+                // The game sent a command to us, not a reply
+                this.OnMessageFromGame(jsonData.d);
+            }
+
             this._response(jsonData.k, jsonData.d);
         };
 
@@ -109,6 +161,7 @@ class NetworkingWebsocket implements Networking {
     Request(data:object): Promise<object> {
 
         // We are reusing the existing A3API for request/response
+        // Request will land in ExtensionCallback
 
         return new Promise((resolve, reject) => {
             let reqKey = this.GenerateRequestID();
@@ -140,6 +193,26 @@ class NetworkingWebsocket implements Networking {
         // not yet implemented
         //#TODO engine side needs to be able to load texture, currently only a webbrowser can do
         return window.A3API.RequestTexture(path, maxSize);
+    }
+
+    LoadGameTerrain(config: object): Promise<string> {
+
+        // Ask the webhost (the connected Arma client), to send us the terrain back
+
+        return new Promise((resolve, _reject) => {
+            this.Request({a: "ACE_TacPhone_Map", c: "RequestTerrainSVG", config: config}).then(async result => {
+                
+                // ACE_TacPhone_Map main.tsx OnMessageFromGame compressed it for us
+                var decompressed = await decompressFromBase64(result as unknown as string);
+                //#TODO handle failure when ingame phone isn't open
+                resolve(decompressed);
+            });
+        });
+    }
+
+    OnMessageFromGame(message: object): void {
+        // The game sent us a message, probably a notification about something
+        message;
     }
 
 };

@@ -10,6 +10,7 @@ interface AppPanelInfo {
 
 interface AppModule {
     GetTacPhoneApps(): Array<AppPanelInfo>;
+    OnMessageFromGame(message: object): void;
 }
 
 // Networking
@@ -17,6 +18,13 @@ interface Networking {
     Request(params: object): Promise<object>;
     LoadGameFileText(path: string): Promise<string>;
     LoadGameFileTexture(path: string, maxSize: number): Promise<string>;
+    /**
+     * Loads and preprocesses file from game filesystem.
+     *
+     * @param config - JSON object of bool true/false entries: { drawTreeObjects, layerTerrain, layerCountlines, layerAir, layerTownNames, layerMountains, layerGrid, layerForest, layerRock, layerRoads, layerObjects, simpleRoads }
+     * @returns The terrain as SVG image  
+     */
+    LoadGameTerrain(config: object): Promise<string>;
 }
 
 declare global {
@@ -57,6 +65,7 @@ export declare class A3API {
     RequestPreprocessedFile(filePath: string): Promise<string>;
     SendAlert(content: string): void;
     SendConfirm(content: string): Promise<string>;
+    RequestTerrainSVG(config: object): Promise<string>;
 }
 declare global {
     interface Window {

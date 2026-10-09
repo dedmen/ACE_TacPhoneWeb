@@ -60,7 +60,8 @@ class App extends React.Component<{},{
             }),
         });
 
-        window.Networking.LoadGameFileText("/z/ace/addons/tacphone/apps/map/data/altis.svg")
+        //window.Networking.LoadGameFileText("/z/ace/addons/tacphone/apps/map/data/altis.svg")
+        window.Networking.LoadGameTerrain({ drawTreeObjects: false, layerMountains: false, simpleRoads: true })
         //fetch("/devapps/ACE_TacPhone_Map/assets/altis.svg")
         .then(async res => {
 

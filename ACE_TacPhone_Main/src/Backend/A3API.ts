@@ -71,6 +71,19 @@ export class A3API {
         window.parent.postMessage({ confirm: content }, '*');
     });
   }
+
+  /**
+ * Loads and preprocesses file from game filesystem.
+ *
+ * @param config - JSON object of bool true/false entries: { drawTreeObjects, layerTerrain, layerCountlines, layerAir, layerTownNames, layerMountains, layerGrid, layerForest, layerRock, layerRoads, layerObjects, simpleRoads }
+ * @returns The terrain as SVG image  
+ */
+  RequestTerrainSVG(config: object): Promise<string> {
+    return new Promise((resolve, reject) => {
+      if (this._push(`t:'k'`, { resolve, reject }))
+        this.SendAlert(`__A3TerSVGReq;k;${btoa(JSON.stringify(config))}`);
+    });
+  }
 }
 
 declare global {

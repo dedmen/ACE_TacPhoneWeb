@@ -10,4 +10,5 @@ interface AppPanelInfo {
 
 interface AppModule {
     GetTacPhoneApps(): Array<AppPanelInfo>;
+    OnMessageFromGame(message: object): void;
 }
