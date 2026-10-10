@@ -94,9 +94,5 @@ WebHostExtension_FeatureFlagsExport/x64/
 *.user
 
 WebServerExtension/.vs/
-
 WebServerExtension/bin/
-
 WebServerExtension/obj/
-
-ACE_TacPhone_Main/devapps/ACE_TacPhone_Map/assets/altis.svg

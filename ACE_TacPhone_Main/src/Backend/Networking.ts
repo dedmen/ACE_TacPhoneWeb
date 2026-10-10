@@ -43,6 +43,9 @@ class NetworkingA3 implements Networking {
     }
 
     LoadGameFileTexture(path: string, maxSize: number): Promise<string> {
+        if (path.startsWith("\\"))
+            path = path.substring(1);
+
         return window.A3API.RequestTexture(path, maxSize);
     }
 
@@ -190,19 +193,30 @@ class NetworkingWebsocket implements Networking {
     }
 
     LoadGameFileTexture(path: string, maxSize: number): Promise<string> {
-        // not yet implemented
-        //#TODO engine side needs to be able to load texture, currently only a webbrowser can do
-        return window.A3API.RequestTexture(path, maxSize);
+
+        if (path.startsWith("\\"))
+            path = path.substring(1);
+
+        // currently only a in-game webbrowser can load textures, so we need to proxy the request into the game and back out
+
+        // Ask the webhost (the connected Arma client), to send us the terrain back
+        return new Promise((resolve, _reject) => {
+            this.Request({a: "main", c: "RequestTexture", path: path, maxSize: maxSize}).then(async result => {
+                
+                // MainApps/main.tsx OnMessageFromGame compressed it for us
+                var decompressed = await decompressFromBase64(result as unknown as string);
+                //#TODO handle failure when ingame phone isn't open
+                resolve(decompressed);
+            });
+        });
     }
 
     LoadGameTerrain(config: object): Promise<string> {
-
         // Ask the webhost (the connected Arma client), to send us the terrain back
-
         return new Promise((resolve, _reject) => {
-            this.Request({a: "ACE_TacPhone_Map", c: "RequestTerrainSVG", config: config}).then(async result => {
+            this.Request({a: "main", c: "RequestTerrainSVG", config: config}).then(async result => {
                 
-                // ACE_TacPhone_Map main.tsx OnMessageFromGame compressed it for us
+                // MainApps/main.tsx OnMessageFromGame compressed it for us
                 var decompressed = await decompressFromBase64(result as unknown as string);
                 //#TODO handle failure when ingame phone isn't open
                 resolve(decompressed);
@@ -212,7 +226,12 @@ class NetworkingWebsocket implements Networking {
 
     OnMessageFromGame(message: object): void {
         // The game sent us a message, probably a notification about something
-        message;
+        // Forward it to the App its destined for
+
+        console.log("Message from game", message);
+
+        const { a } = message as { a: string };
+        window.AppDirectory.knownApps.get(a)?.module.OnMessageFromGame(message);
     }
 
 };

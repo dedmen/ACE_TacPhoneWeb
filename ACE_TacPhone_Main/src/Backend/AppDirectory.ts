@@ -53,11 +53,13 @@ class AppDirectory
         
         this.knownApps = new Map(Object.entries(appData));
 
-        this.knownApps.delete("main"); // We don't care about main, we know it's there
-
         // immediately load their modules here
         for (let [key, value] of this.knownApps) {
-            value.module = await this.fetchExternalModule(key, value);
+
+            if (key == "main") // Main is provided by us, we are main, not an external module
+                value.module = await import('../MainApps/main');
+            else
+                value.module = await this.fetchExternalModule(key, value);
             value.panels = value.module.GetTacPhoneApps();
 
             value.panels.forEach(panel => {

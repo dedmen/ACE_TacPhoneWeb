@@ -14,6 +14,7 @@ import JSXRuntime from 'react/jsx-runtime';
 (window as any).ReactDOM = ReactDOM;
 (window as any).ReactJSXRuntime = JSXRuntime;
 
+import './Backend/MessageRouter.ts'; // Must be in so it sets the globally accessible prototype
 
 createRoot(document.getElementById('root')!).render(
 

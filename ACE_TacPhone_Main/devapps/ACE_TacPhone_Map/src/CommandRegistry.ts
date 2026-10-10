@@ -1,0 +1,1 @@
+export const mapCommandRegistry = new window.TacPhoneUtils.CommandRegistry();

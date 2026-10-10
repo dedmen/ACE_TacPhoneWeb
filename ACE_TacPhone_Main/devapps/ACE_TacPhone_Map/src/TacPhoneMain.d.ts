@@ -92,3 +92,30 @@ declare global {
         AppDirectory: AppDirectory;
     }
 }
+
+export type CommandHandler = (payload: object) => void;
+export declare class CommandRegistry {
+    private registry;
+    /**
+     * Registers a callback for a specific action.
+     * @returns A cleanup function to unregister this specific listener.
+     */
+    register(action: string, handler: CommandHandler): () => void;
+    /**
+     * Parses a raw WebSocket message string and routes it to all matching subscribers.
+     */
+    routeMessage(packet: {
+        c: string;
+    }): void;
+    /**
+     * Purges all subscribers across all commands.
+     */
+    clear(): void;
+}
+declare global {
+    interface Window {
+        TacPhoneUtils: {
+            CommandRegistry: typeof CommandRegistry;
+        };
+    }
+}
