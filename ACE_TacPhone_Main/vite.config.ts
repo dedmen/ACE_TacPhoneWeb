@@ -4,13 +4,52 @@ import babel from '@rolldown/plugin-babel'
 import { viteSingleFile } from "vite-plugin-singlefile"
 import dts from 'vite-plugin-dts'
 
+// These are added to global window, see main.tsx
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import * as ReactJSXRuntime from 'react/jsx-runtime';
+
+
 // https://vite.dev/config/
 export default defineConfig({
     plugins: [
         react(),
         dts({ include: ['src'], insertTypesEntry: true, tsconfigPath: "./tsconfig.app.json",  }),
         babel({ presets: [reactCompilerPreset()] }),
-        viteSingleFile()
+        viteSingleFile(),
+
+        {
+            name: 'dynamic-importmap-injector',
+            // This hook modifies the index.html file right before it is served to the browser
+            transformIndexHtml(html) {
+                // 1. Gather all the keys from your local node_modules installation of React
+                const skippedKeys = new Set(['__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED', '__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE', '__COMPILER_RUNTIME']);
+
+                const generateExports = (x: any, locName: string) => {
+                    return `export default ${locName}; `
+                    +
+                    Object.keys(x || {})
+                    .filter(key => !skippedKeys.has(key))
+                    .map(key => `export const ${key} = ${locName}.${key};`)
+                    .join(' ');
+                }
+
+                // 2. Build the stringified import map matching your pattern
+                const importMap = {
+                    imports: {
+                        "react": `data:text/javascript,${generateExports(React, "window.React")}`,
+                        "react-dom": `data:text/javascript,${generateExports(ReactDOM, " window.ReactDOM")}`,
+                        "react/jsx-runtime": `data:text/javascript,${generateExports(ReactJSXRuntime, "window.ReactJSXRuntime")}`
+                    }
+                };
+
+                const importMapHtml = `<script type="importmap">${JSON.stringify(importMap)}</script>`;
+
+                // 3. Inject it cleanly at the very top of the <head> tag
+                return html.replace('<head>', `<head>\n    ${importMapHtml}`);
+            }
+        }
+
     ],
     build: {
         minify: false,

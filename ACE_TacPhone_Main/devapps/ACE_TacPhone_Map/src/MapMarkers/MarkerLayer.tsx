@@ -2,7 +2,7 @@ import VectorLayer from 'ol/layer/Vector';
 import VectorSource from 'ol/source/Vector';
 import Feature, { type FeatureLike } from 'ol/Feature';
 import Point from 'ol/geom/Point';
-import { Style, Icon, Text, Fill, Stroke } from 'ol/style';
+import { Style, Icon, Text, Fill } from 'ol/style';
 import { mapCommandRegistry } from '../CommandRegistry';
 
 
@@ -142,7 +142,7 @@ export class MarkerLayerManager {
         if (zoom < 0.5)
             zoom = 0.5;
 
-        var textSize = 32 * zoom;
+        //var textSize = 32 * zoom;
 
         var text = new Text({
             text: feature.get('label'), // Will be updated per feature

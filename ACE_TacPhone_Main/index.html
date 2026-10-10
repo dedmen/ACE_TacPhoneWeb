@@ -1,31 +1,18 @@
 <!doctype html>
 <html lang="en">
-  <head>
+
+<head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>ace-tacphone-main</title>
 
-    <!--      
-    The name on the left matches what our app libraries import, or their vite.config.ts has a rollupOptions.output.paths to remap them from what it imports, to what we specify in our importmap here.
-    The names on the right (the things we forward/re-export), match the names we stored into window in src/main.tsx
+    <!-- Note vite.config.ts plugin will fill in a importmap here! -->
+</head>
 
-    Now if a library does `import "react"`, they will land at the importmap, which provides the data url. Which when loaded, forwards the modules we stored in window.
-    -->
-    <script type="importmap">
-    {
-        "imports": {
-            "react": "data:text/javascript,export default window.React; export const useState = window.React.useState; export const useEffect = window.React.useEffect; export const useMemo = window.React.useMemo;",
-            "react-dom": "data:text/javascript,export default window.ReactDOM;",
-            "react/jsx-runtime": "data:text/javascript,export default window.ReactJSXRuntime; export const jsx = window.ReactJSXRuntime.jsx; export const jsxs = window.ReactJSXRuntime.jsxs; export const Fragment = window.ReactJSXRuntime.Fragment;"
-        }
-    }
-    </script>
-
-
-  </head>
-  <body>
+<body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
-  </body>
+</body>
+
 </html>
