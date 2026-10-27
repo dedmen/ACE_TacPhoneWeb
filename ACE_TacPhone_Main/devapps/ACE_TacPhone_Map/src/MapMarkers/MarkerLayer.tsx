@@ -11,7 +11,7 @@ import { mapCommandRegistry } from '../CommandRegistry';
 // name, type, color, dir, pos, text, shape, alpha, brush, size, channel, polyline
 type MarkerUpdate = [string, string, string, number, [number, number, number], string, string, number, string, string, string, string];
 
-interface MarkerType {
+export interface MarkerType {
     className: string;
     name: string;
     color: string;
@@ -20,7 +20,7 @@ interface MarkerType {
     icon: string;
 }
 
-interface MarkerColor {
+export interface MarkerColor {
     className: string;
     name: string;
     color: string;
@@ -54,12 +54,18 @@ export class MarkerLayerManager {
 
     private markerTextures: Map<string, string | Promise<string>> = new Map();
 
+    private markerConfigReady: Promise<void>;
+    private resolveMarkerConfigReady!: () => void;
 
     private markerStyleCache: Map<string, Style> = new Map();
 
     private unregisterHooks: Array<() => void> = [];
 
     constructor(title: string = 'Live Markers') {
+        this.markerConfigReady = new Promise<void>((resolve) => {
+            this.resolveMarkerConfigReady = resolve;
+        });
+
         this.source = new VectorSource();
         this.layer = new VectorLayer({
             properties: { title },
@@ -102,6 +108,10 @@ export class MarkerLayerManager {
                 const [className, name, texture, drawBorder] = type;
                 this.markerBrushes.set(className, {className, name, texture, drawBorder});
             });
+        }).catch((error: unknown) => {
+            console.error('Failed to load marker types', error);
+        }).finally(() => {
+            this.resolveMarkerConfigReady();
         });
 
         window.Networking.Request({a: "ACE_TacPhone_Map", c: "GetAllMarkers"}).then((markerInfo: object) => {
@@ -122,6 +132,53 @@ export class MarkerLayerManager {
         this.unregisterHooks.forEach((unregister) => unregister());
         this.unregisterHooks = [];
         this.source.clear();
+    }
+
+    /**
+     * Resolves once the marker types and colors have been received from the game.
+     */
+    public whenMarkerConfigLoaded(): Promise<void> {
+        return this.markerConfigReady;
+    }
+
+    public getMarkerTypes(): MarkerType[] {
+        return Array.from(this.markerTypes.values());
+    }
+
+    public getMarkerColors(): MarkerColor[] {
+        return Array.from(this.markerColors.values());
+    }
+
+    /**
+     * Loads (and caches) the icon texture of a marker type.
+     */
+    public loadMarkerIcon(iconPath: string): Promise<string> {
+        if (!iconPath) {
+            return Promise.reject(new Error('Marker type has no icon'));
+        }
+
+        const cachedTexture = this.markerTextures.get(iconPath);
+
+        if (typeof cachedTexture === 'string') {
+            return Promise.resolve(cachedTexture);
+        }
+
+        if (cachedTexture) {
+            return cachedTexture;
+        }
+
+        const texturePromise = window.Networking.LoadGameFileTexture(iconPath, 64).then((iconData) => {
+            this.markerTextures.set(iconPath, iconData); // Replace promise with real data, so that others won't wait on it
+            this.source.changed(); // Notify the layer of the change, it needs to refresh the icon
+            return iconData;
+        }).catch((error: unknown) => {
+            this.markerTextures.delete(iconPath);
+            throw error;
+        });
+
+        this.markerTextures.set(iconPath, texturePromise);
+
+        return texturePromise;
     }
 
     private dynamicIconStyleFunction(feature: FeatureLike, resolution: number)
@@ -267,33 +324,11 @@ export class MarkerLayerManager {
             return resStyle;
         }
 
-        if (!this.markerTextures.has(typeResolved.icon)) {
-            // Fetch icon from game
-
-            var texLoadPromise = new Promise<string>((resolve) => {
-                window.Networking.LoadGameFileTexture(typeResolved!.icon, 64).then(iconData => {
-                    this.markerTextures.set(typeResolved!.icon, iconData); // Replace promise with real data, so that others won't wait on it
-                    resolve(iconData);
-                    this.source.changed(); // Notify the layer of the change, it needs to refresh the icon
-                });
-            });
-
-            this.markerTextures.set(typeResolved!.icon, texLoadPromise);
-        };
-
-        // If the icon is in markerTextures, we either have it in cache, or we are in the process of receiving it from game
-        const markerTexture = this.markerTextures.get(typeResolved.icon)!;
-
-        if (typeof markerTexture === 'string') {
-            markerIcon.setSrc(markerTexture);
-        }
-        else 
-        {
-            // Its a promise, once its done we'll update the icon after the fact
-            (markerTexture as Promise<string>).then(iconData =>
-                markerIcon.setSrc(iconData)
-            );
-        }
+        this.loadMarkerIcon(typeResolved.icon).then((iconData) => {
+            markerIcon.setSrc(iconData);
+        }).catch(() => {
+            // Keep the placeholder spinner if the icon could not be loaded
+        });
 
         var colorResolved = this.markerColors.get(color == "" ? typeResolved.color : color);
 

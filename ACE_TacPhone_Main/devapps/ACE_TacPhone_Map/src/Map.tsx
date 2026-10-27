@@ -8,6 +8,8 @@ import { View } from 'ol';
 //import { Tile} from 'ol/layer.js';
 import TileLayer from 'ol/layer/Tile';
 import BaseLayer from 'ol/layer/Base';
+import DoubleClickZoom from 'ol/interaction/DoubleClickZoom';
+import type { MapBrowserEvent } from 'ol';
 
 
 import Projection from 'ol/proj/Projection';
@@ -16,7 +18,19 @@ import TileGrid from 'ol/tilegrid/TileGrid.js';
 import ImageTileSource from 'ol/source/ImageTile';
 
 //import { LayerSwitcher } from './LayerSwitcher';
-import { MarkerLayerManager } from './MapMarkers/MarkerLayer';
+import { MarkerLayerManager, type MarkerColor, type MarkerType } from './MapMarkers/MarkerLayer';
+import { MarkerCreateDialog } from './MapMarkers/MarkerCreateDialog';
+import { createMarker, type MarkerCreationData } from './MapMarkers/MarkerApi';
+
+const LONG_PRESS_DURATION_MS = 600;
+const LONG_PRESS_MOVE_TOLERANCE_PX = 10;
+
+interface MarkerDialogState {
+  isOpen: boolean;
+  coordinate: [number, number] | null;
+  markerTypes: MarkerType[];
+  markerColors: MarkerColor[];
+}
 
 interface LayerData {
   id: string;
@@ -27,7 +41,8 @@ interface LayerData {
 
 interface MapState {
   layers: LayerData[];
-  layerSwitcherIsOpen: boolean; 
+  layerSwitcherIsOpen: boolean;
+  markerDialog: MarkerDialogState;
 }
 
 class App extends React.Component<{},MapState> {
@@ -39,12 +54,29 @@ class App extends React.Component<{},MapState> {
 
     private markerManager: MarkerLayerManager | null = null;
 
+    private longPressTimer: number | null = null;
+    private longPressStart: { x: number; y: number; pointerId: number; coordinate: [number, number] } | null = null;
+
+    private loadMarkerIcon = (iconPath: string): Promise<string> => {
+        if (!this.markerManager) {
+            return Promise.reject(new Error('Marker manager is not initialized'));
+        }
+
+        return this.markerManager.loadMarkerIcon(iconPath);
+    };
+
 
     constructor(props: {}) {
         super(props);
         this.state = {
             layers: [],
-            layerSwitcherIsOpen: false
+            layerSwitcherIsOpen: false,
+            markerDialog: {
+                isOpen: false,
+                coordinate: null,
+                markerTypes: [],
+                markerColors: [],
+            },
         };
     }
 
@@ -87,6 +119,24 @@ class App extends React.Component<{},MapState> {
 
         this.markerManager = new MarkerLayerManager('Markers');
 
+        // Double-click (desktop) creates a marker. Remove the default double-click zoom
+        // interaction so that creating a marker doesn't also zoom the map.
+        [...this.map.getInteractions().getArray()].forEach((interaction) => {
+            if (interaction instanceof DoubleClickZoom) {
+                this.map!.removeInteraction(interaction);
+            }
+        });
+
+        this.map.on('dblclick', this.handleMapDoubleClick);
+
+        // Long-press (touch) creates a marker.
+        const viewport = this.map.getViewport();
+        viewport.addEventListener('pointerdown', this.handleMapPointerDown);
+        viewport.addEventListener('pointermove', this.handleMapPointerMove);
+        viewport.addEventListener('pointerup', this.handleMapPointerUp);
+        viewport.addEventListener('pointercancel', this.handleMapPointerUp);
+        viewport.addEventListener('contextmenu', this.handleMapContextMenu);
+
         window.Networking.LoadGameTerrain({ drawTreeObjects: false, layerMountains: true, simpleRoads: true })
             .then(async res => {
                 var bytes = Uint8Array.from(res, c => c.charCodeAt(0));
@@ -96,12 +146,23 @@ class App extends React.Component<{},MapState> {
     }
 
     componentWillUnmount(): void {
+        this.cancelLongPress();
+
         if (this.map) {
             // Clean up collection event listeners to prevent memory leaks
             const layersCollection = this.map.getLayers();
             layersCollection.un('add', this.updateLayersState);
             layersCollection.un('remove', this.updateLayersState);
-            
+
+            this.map.un('dblclick', this.handleMapDoubleClick);
+
+            const viewport = this.map.getViewport();
+            viewport.removeEventListener('pointerdown', this.handleMapPointerDown);
+            viewport.removeEventListener('pointermove', this.handleMapPointerMove);
+            viewport.removeEventListener('pointerup', this.handleMapPointerUp);
+            viewport.removeEventListener('pointercancel', this.handleMapPointerUp);
+            viewport.removeEventListener('contextmenu', this.handleMapContextMenu);
+
             // Detach the map from the DOM target
             this.map.setTarget(undefined);
         }
@@ -158,6 +219,140 @@ class App extends React.Component<{},MapState> {
 
     private toggleLayerSwitcherMenu = (): void => {
         this.setState((prevState) => ({ layerSwitcherIsOpen: !prevState.layerSwitcherIsOpen }));
+    };
+
+    private handleMapDoubleClick = (event: MapBrowserEvent): void => {
+        // OpenLayers also emulates double-click for touch double taps.
+        // Only desktop double-clicks should open the dialog.
+        const originalEvent = event.originalEvent as PointerEvent;
+        if (originalEvent.pointerType === 'touch') {
+            return;
+        }
+
+        this.openMarkerDialog([event.coordinate[0], event.coordinate[1]]);
+    };
+
+    private handleMapPointerDown = (event: PointerEvent): void => {
+        if (event.pointerType !== 'touch' && event.pointerType !== 'pen') {
+            return;
+        }
+
+        if (!event.isPrimary) {
+            return;
+        }
+
+        // Ignore map controls (zoom buttons, attribution, ...) and OpenLayers overlays.
+        if (event.target instanceof Element && event.target.closest('.ol-overlaycontainer-stopevent')) {
+            return;
+        }
+
+        this.cancelLongPress();
+
+        const coordinate = this.map?.getEventCoordinate(event);
+        if (!coordinate) {
+            return;
+        }
+
+        this.longPressStart = {
+            x: event.clientX,
+            y: event.clientY,
+            pointerId: event.pointerId,
+            coordinate: [coordinate[0], coordinate[1]],
+        };
+
+        this.longPressTimer = window.setTimeout(() => {
+            const start = this.longPressStart;
+            this.longPressTimer = null;
+
+            if (!start) {
+                return;
+            }
+
+            this.longPressStart = null;
+            this.openMarkerDialog(start.coordinate);
+        }, LONG_PRESS_DURATION_MS);
+    };
+
+    private handleMapPointerMove = (event: PointerEvent): void => {
+        const start = this.longPressStart;
+        if (!start || event.pointerId !== start.pointerId) {
+            return;
+        }
+
+        const dx = event.clientX - start.x;
+        const dy = event.clientY - start.y;
+
+        if (dx * dx + dy * dy > LONG_PRESS_MOVE_TOLERANCE_PX * LONG_PRESS_MOVE_TOLERANCE_PX) {
+            this.cancelLongPress();
+        }
+    };
+
+    private handleMapPointerUp = (event: PointerEvent): void => {
+        if (this.longPressStart && event.pointerId === this.longPressStart.pointerId) {
+            this.cancelLongPress();
+        }
+    };
+
+    private handleMapContextMenu = (event: MouseEvent): void => {
+        // A long press can otherwise trigger the browser context menu on touch.
+        event.preventDefault();
+    };
+
+    private cancelLongPress(): void {
+        if (this.longPressTimer !== null) {
+            window.clearTimeout(this.longPressTimer);
+            this.longPressTimer = null;
+        }
+
+        this.longPressStart = null;
+    }
+
+    private openMarkerDialog = (coordinate: [number, number]): void => {
+        const markerManager = this.markerManager;
+
+        if (!markerManager) {
+            return;
+        }
+
+        const markerTypes = markerManager.getMarkerTypes();
+        const markerColors = markerManager.getMarkerColors();
+
+        this.setState({
+            layerSwitcherIsOpen: false,
+            markerDialog: {
+                isOpen: true,
+                coordinate,
+                markerTypes,
+                markerColors,
+            },
+        });
+
+        if (markerTypes.length === 0 || markerColors.length === 0) {
+            void markerManager.whenMarkerConfigLoaded().then(() => {
+                this.setState((prevState) => ({
+                    markerDialog: {
+                        ...prevState.markerDialog,
+                        markerTypes: markerManager.getMarkerTypes(),
+                        markerColors: markerManager.getMarkerColors(),
+                    },
+                }));
+            });
+        }
+    };
+
+    private closeMarkerDialog = (): void => {
+        this.setState((prevState) => ({
+            markerDialog: {
+                ...prevState.markerDialog,
+                isOpen: false,
+                coordinate: null,
+            },
+        }));
+    };
+
+    private handleCreateMarker = (marker: MarkerCreationData): void => {
+        createMarker(marker);
+        this.closeMarkerDialog();
     };
 
 
@@ -364,6 +559,17 @@ class App extends React.Component<{},MapState> {
                     </div>
                     )}
                 </div>
+                )}
+
+                {this.state.markerDialog.isOpen && this.state.markerDialog.coordinate !== null && (
+                    <MarkerCreateDialog
+                        coordinate={this.state.markerDialog.coordinate}
+                        markerTypes={this.state.markerDialog.markerTypes}
+                        markerColors={this.state.markerDialog.markerColors}
+                        loadMarkerIcon={this.loadMarkerIcon}
+                        onSubmit={this.handleCreateMarker}
+                        onCancel={this.closeMarkerDialog}
+                    />
                 )}
             </div>
         );
