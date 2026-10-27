@@ -351,7 +351,9 @@ class App extends React.Component<{},MapState> {
     };
 
     private handleCreateMarker = (marker: MarkerCreationData): void => {
-        createMarker(marker);
+        createMarker(marker).catch((error: unknown) => {
+            console.error('Failed to create marker', error);
+        });
         this.closeMarkerDialog();
     };
 
