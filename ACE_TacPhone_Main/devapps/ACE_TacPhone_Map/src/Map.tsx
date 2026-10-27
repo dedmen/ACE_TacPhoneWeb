@@ -138,8 +138,8 @@ class App extends React.Component<{},MapState> {
         viewport.addEventListener('contextmenu', this.handleMapContextMenu);
 
         window.Networking.LoadGameTerrain({ drawTreeObjects: false, layerMountains: true, simpleRoads: true })
-            .then(async res => {
-                var bytes = Uint8Array.from(res, c => c.charCodeAt(0));
+            .then(async svgString => {
+                var bytes = new TextEncoder().encode(svgString);
                 this.applyNewTerrainSVG(bytes);
             });
 

@@ -44,7 +44,7 @@ class AppDirectory
         //#TODO we need a global module/app directory, where we can look up from classname to in-game path
         let content = await window.Networking.LoadGameFileText(appInfo.file); //  `/z/ace/addons/tacphone/apps/${name}.js`
         // Store it in a blob url and then return it
-        let url = URL.createObjectURL(new Blob([Uint8Array.from(content, c => c.charCodeAt(0))], {type: 'application/javascript'}));
+        let url = URL.createObjectURL(new Blob([content], {type: 'application/javascript'}));
         return import(/* @vite-ignore */ url);
     }
 
