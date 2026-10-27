@@ -80,21 +80,11 @@ class AppDirectory
     }
 
     private parseAppData(raw: unknown): Record<string, unknown> {
-        let data = raw;
-
-        // Depending on the transport (in-game A3API or WebSocket), this can be a JSON string or an already parsed object.
-        if (typeof data === "string") {
-            try {
-                data = JSON.parse(data);
-            } catch (error) {
-                throw new Error(`GetAvailableApps returned invalid JSON: ${errorMessage(error)}`);
-            }
-        }
-
-        if (typeof data !== "object" || data === null || Array.isArray(data))
+        // The game returns a hashmap; the transport serializes and deserializes it for us.
+        if (typeof raw !== "object" || raw === null || Array.isArray(raw))
             throw new Error("GetAvailableApps returned an unexpected value; expected an object keyed by app name");
 
-        return data as Record<string, unknown>;
+        return raw as Record<string, unknown>;
     }
 
     private parseAppInfo(name: string, raw: unknown): AppInfoSource {
