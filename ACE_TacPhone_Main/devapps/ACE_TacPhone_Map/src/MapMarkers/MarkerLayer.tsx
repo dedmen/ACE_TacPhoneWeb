@@ -9,7 +9,11 @@ import { mapCommandRegistry } from '../CommandRegistry';
 
 //#TODO size is "12,123", decompose it into two numbers
 // name, type, color, dir, pos, text, shape, alpha, brush, size, channel, polyline
-type MarkerUpdate = [string, string, string, number, [number, number, number], string, string, number, string, string, string, string];
+type MarkerUpdate = [string, string, string, number, [number, number, number], string, string, number, string, string, number, string];
+
+type PendingMarkerOperation =
+    | { kind: 'upsert'; marker: MarkerUpdate }
+    | { kind: 'delete'; name: string };
 
 export interface MarkerType {
     className: string;
@@ -39,6 +43,27 @@ function colorToHex(rgba: [number, number, number, number]): string {
     return `#${toHex(r)}${toHex(g)}${toHex(b)}${toHex(a)}`;
 }
 
+function applyAlphaToColor(color: string, alpha: number): string {
+    if (alpha === undefined || alpha === null || alpha === 1) {
+        return color;
+    }
+
+    // Hex colors from the game are #rrggbbaa. Strokes have no separate opacity,
+    // so the marker alpha has to be part of the stroke color.
+    if (color.startsWith('#') && color.length === 9) {
+        const r = parseInt(color.slice(1, 3), 16);
+        const g = parseInt(color.slice(3, 5), 16);
+        const b = parseInt(color.slice(5, 7), 16);
+        return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    }
+
+    if (color.startsWith('rgba')) {
+        return color.replace(/rgba\(([^,]+),([^,]+),([^,]+),([^)]+)\)/, `rgba($1,$2,$3,${alpha})`);
+    }
+
+    return color;
+}
+
 
 export class MarkerLayerManager {
     public layer: VectorLayer<VectorSource>;
@@ -57,7 +82,8 @@ export class MarkerLayerManager {
     private markerConfigReady: Promise<void>;
     private resolveMarkerConfigReady!: () => void;
 
-    private markerStyleCache: Map<string, Style> = new Map();
+    private initialMarkersLoaded = false;
+    private pendingMarkerOperations: PendingMarkerOperation[] = [];
 
     private unregisterHooks: Array<() => void> = [];
 
@@ -114,15 +140,25 @@ export class MarkerLayerManager {
             this.resolveMarkerConfigReady();
         });
 
-        window.Networking.Request({a: "ACE_TacPhone_Map", c: "GetAllMarkers"}).then((markerInfo: object) => {
+        // Marker updates can arrive while GetMarkerTypes is still in flight.
+        // Wait for the config, then apply the initial snapshot before replaying
+        // any updates that were queued in the meantime.
+        void this.whenMarkerConfigLoaded().then(() => {
+            return window.Networking.Request({a: "ACE_TacPhone_Map", c: "GetAllMarkers"});
+        }).then((markerInfo: object) => {
             const {markers} = markerInfo as
             {
                 markers: Array<MarkerUpdate>
             };
 
             markers.forEach(marker => {
-                this.handleUpsert(marker);
+                this.applyUpsert(marker);
             });
+        }).catch((error: unknown) => {
+            console.error('Failed to load markers', error);
+        }).finally(() => {
+            this.initialMarkersLoaded = true;
+            this.flushPendingMarkerOperations();
         });
 
     }
@@ -183,7 +219,9 @@ export class MarkerLayerManager {
 
     private dynamicIconStyleFunction(feature: FeatureLike, resolution: number)
     {
-        // Everything we can dynamically solve here, is slower (updated every render, instead of once at marker creation), but we don't fill the style cache with lots of crap
+        // Each feature owns its base style. Anything that changes per update is
+        // baked into that style in createFeatureStyle; only render-time values
+        // are applied here.
 
         const baseStyle = feature.get('baseStyle') as Style;
         if (!baseStyle) {
@@ -192,28 +230,8 @@ export class MarkerLayerManager {
 
         const geometry = feature.getGeometry();
         if (geometry instanceof LineString) {
-            const alpha = feature.get('alpha') as number;
-            if (alpha !== undefined && alpha !== null && alpha !== 1) {
-                const stroke = baseStyle.getStroke();
-                if (stroke) {
-                    const color = stroke.getColor();
-
-                    // this is quite annoying, unlike icons/images, stroke has no opacity, it needs to be in the color#
-                    // We initially set it as #hex
-
-                    if (typeof color === 'string') {
-                        if (color.startsWith('#') && color.length === 9) {
-                            const r = parseInt(color.slice(1,3), 16);
-                            const g = parseInt(color.slice(3,5), 16);
-                            const b = parseInt(color.slice(5,7), 16);
-                            stroke.setColor(`rgba(${r}, ${g}, ${b}, ${alpha})`);
-                        } else if (color.startsWith('rgba')) {
-                            // replace alpha
-                            stroke.setColor(color.replace(/rgba\(([^,]+),([^,]+),([^,]+),([^)]+)\)/, `rgba($1,$2,$3,${alpha})`));
-                        }
-                    }
-                }
-            }
+            // The line color (including marker alpha) is baked into this
+            // feature's own style when it is created/updated.
             return baseStyle;
         }
 
@@ -277,27 +295,21 @@ export class MarkerLayerManager {
         return baseStyle;
     }
 
-    private createFeatureStyle(type: string, shape: string, color: string, brush: string, size: string): Style {
-
-        var cacheKey = `${type}_${shape}_${color}_${brush}_${size}`;
-
-        if (this.markerStyleCache.has(cacheKey))
-            return this.markerStyleCache.get(cacheKey)!;
+    private createFeatureStyle(type: string, shape: string, color: string, _brush: string, _size: string, alpha: number): Style {
 
         if (shape === 'POLYLINE' || shape === 'polyline') {
             var colorResolved = this.markerColors.get(color);
             var lineColor = colorResolved ? colorResolved.color : '#000000';
             var strokeWidth = 2;
 
-            var resStyle = new Style({
+            // Styles are per-feature, so applying the alpha here cannot leak
+            // into another polyline and is restored when alpha becomes 1.
+            return new Style({
                 stroke: new Stroke({
-                    color: lineColor,
+                    color: applyAlphaToColor(lineColor, alpha),
                     width: strokeWidth,
                 }),
             });
-
-            this.markerStyleCache.set(cacheKey, resStyle);
-            return resStyle;
         }
 
         var markerIcon = new Icon({
@@ -312,43 +324,73 @@ export class MarkerLayerManager {
             image: markerIcon,
         });
 
-        this.markerStyleCache.set(cacheKey, resStyle);
-
 
         /// Texture from main type
 
         var typeResolved = this.markerTypes.get(type);
 
         if (typeResolved == null) {
-            //#TODO ????? Can markers even have non existing types?
+            console.warn(`Unknown marker type "${type}"`);
             return resStyle;
         }
 
-        this.loadMarkerIcon(typeResolved.icon).then((iconData) => {
-            markerIcon.setSrc(iconData);
-        }).catch(() => {
-            // Keep the placeholder spinner if the icon could not be loaded
-        });
+        var cachedTexture = this.markerTextures.get(typeResolved.icon);
+        if (typeof cachedTexture === 'string') {
+            markerIcon.setSrc(cachedTexture);
+        } else {
+            this.loadMarkerIcon(typeResolved.icon).then((iconData) => {
+                markerIcon.setSrc(iconData);
+            }).catch(() => {
+                // Keep the placeholder spinner if the icon could not be loaded
+            });
+        }
 
         var colorResolved = this.markerColors.get(color == "" ? typeResolved.color : color);
 
-        if (colorResolved == null) {
-            //#TODO ????? Can markers even have non existing types?
-            return resStyle;
-        }
-
-        markerIcon.setColor(colorResolved.color);
+        markerIcon.setColor(colorResolved ? colorResolved.color : '#ffffff');
         return resStyle;
+    }
+
+    private markerKey(name: string, channel: number): string {
+        return `${channel ?? 0}:${name}`;
+    }
+
+    private getMarkerShadow(type: string): boolean {
+        return (this.markerTypes.get(type)?.shadow ?? 0) !== 0;
+    }
+
+    private flushPendingMarkerOperations(): void {
+        const pending = this.pendingMarkerOperations;
+        this.pendingMarkerOperations = [];
+
+        pending.forEach((operation) => {
+            if (operation.kind === 'upsert') {
+                this.applyUpsert(operation.marker);
+            } else {
+                this.deleteMarker(operation.name);
+            }
+        });
     }
 
     /**
      * Processes an incoming addition or position update
      */
     public handleUpsert(data: MarkerUpdate): void {
+        if (!this.initialMarkersLoaded) {
+            this.pendingMarkerOperations.push({ kind: 'upsert', marker: data });
+            return;
+        }
 
-        const [name, type, color, dir, pos, text, shape, alpha, brush, size, _channel, polyline] = data;
+        this.applyUpsert(data);
+    }
+
+    private applyUpsert(data: MarkerUpdate): void {
+        const [name, type, color, dir, pos, text, shape, alpha, brush, size, channel, polyline] = data;
+        const registryKey = this.markerKey(name, channel);
 
         var sizeSplit = size.split(",").map(x => Number(x));
+        var featureStyle = this.createFeatureStyle(type, shape, color, brush, size, alpha);
+        var shadow = this.getMarkerShadow(type);
 
         // Parse polyline if present
         if (polyline && polyline.length > 0) {
@@ -361,7 +403,7 @@ export class MarkerLayerManager {
             }
 
             if (coordinates.length > 0) {
-                const existingFeature = this.markerRegistry.get(name);
+                const existingFeature = this.markerRegistry.get(registryKey);
 
                 if (existingFeature) {
                     const geometry = existingFeature.getGeometry();
@@ -370,20 +412,23 @@ export class MarkerLayerManager {
                     } else {
                         // Replace point with polyline
                         this.source.removeFeature(existingFeature);
-                        this.markerRegistry.delete(name);
+                        this.markerRegistry.delete(registryKey);
                         const newFeature = new Feature({
                             geometry: new LineString(coordinates),
                             id: name,
                             label: text,
                         });
-                        newFeature.set("baseStyle", this.createFeatureStyle(type, shape, color, brush, size));
+                        newFeature.set("dir", dir);
                         newFeature.set("alpha", alpha);
+                        newFeature.set("size", sizeSplit);
+                        newFeature.set("baseStyle", featureStyle);
+                        newFeature.set("shadow", shadow);
                         this.source.addFeature(newFeature);
-                        this.markerRegistry.set(name, newFeature);
+                        this.markerRegistry.set(registryKey, newFeature);
                         return;
                     }
 
-                    existingFeature.set("baseStyle", this.createFeatureStyle(type, shape, color, brush, size));
+                    existingFeature.set("baseStyle", featureStyle);
                     existingFeature.set("label", text);
                     existingFeature.set("alpha", alpha);
                 } else {
@@ -392,16 +437,16 @@ export class MarkerLayerManager {
                         id: name,
                         label: text,
                     });
-                    newFeature.set("baseStyle", this.createFeatureStyle(type, shape, color, brush, size));
                     newFeature.set("alpha", alpha);
+                    newFeature.set("baseStyle", featureStyle);
                     this.source.addFeature(newFeature);
-                    this.markerRegistry.set(name, newFeature);
+                    this.markerRegistry.set(registryKey, newFeature);
                 }
                 return;
             }
         }
 
-        const existingFeature = this.markerRegistry.get(name);
+        const existingFeature = this.markerRegistry.get(registryKey);
 
         if (existingFeature) {
             // Update coordinates smoothly
@@ -411,7 +456,7 @@ export class MarkerLayerManager {
             } else if (geometry instanceof LineString) {
                 // Switching from polyline to point
                 this.source.removeFeature(existingFeature);
-                this.markerRegistry.delete(name);
+                this.markerRegistry.delete(registryKey);
                 const newFeature = new Feature({
                     geometry: new Point(pos),
                     id: name,
@@ -420,18 +465,19 @@ export class MarkerLayerManager {
                 newFeature.set("dir", dir);
                 newFeature.set("alpha", alpha);
                 newFeature.set("size", sizeSplit);
-                newFeature.set("baseStyle", this.createFeatureStyle(type, shape, color, brush, size));
-                newFeature.set("shadow", this.markerTypes.get(type)!.shadow != 0);
+                newFeature.set("baseStyle", featureStyle);
+                newFeature.set("shadow", shadow);
                 this.source.addFeature(newFeature);
-                this.markerRegistry.set(name, newFeature);
+                this.markerRegistry.set(registryKey, newFeature);
                 return;
             }
 
             existingFeature.set("dir", dir);
             existingFeature.set("alpha", alpha);
             existingFeature.set("size", sizeSplit);
-            existingFeature.set("baseStyle", this.createFeatureStyle(type, shape, color, brush, size));
+            existingFeature.set("baseStyle", featureStyle);
             existingFeature.set("label", text);
+            existingFeature.set("shadow", shadow);
 
             //#TODO all the others
 
@@ -443,27 +489,45 @@ export class MarkerLayerManager {
                 label: text,
             });
 
-            //newFeature.setStyle(this.createFeatureStyle(type, shape, color, brush, dir, alpha, size));
             newFeature.set("dir", dir);
             newFeature.set("alpha", alpha);
             newFeature.set("size", sizeSplit);
-            newFeature.set("baseStyle", this.createFeatureStyle(type, shape, color, brush, size));
-            newFeature.set("shadow", this.markerTypes.get(type)!.shadow != 0);
+            newFeature.set("baseStyle", featureStyle);
+            newFeature.set("shadow", shadow);
 
             this.source.addFeature(newFeature);
-            this.markerRegistry.set(name, newFeature);
+            this.markerRegistry.set(registryKey, newFeature);
         }
+    }
+
+    private deleteMarker(name: string): void {
+        const suffix = `:${name}`;
+
+        // The game sends deletes by name only, so remove every channel entry
+        // with that name. Marker names are normally unique anyway.
+        [...this.markerRegistry.keys()].forEach((key) => {
+            if (key !== name && !key.endsWith(suffix)) {
+                return;
+            }
+
+            const feature = this.markerRegistry.get(key);
+            if (feature) {
+                this.source.removeFeature(feature);
+                this.markerRegistry.delete(key);
+            }
+        });
     }
 
     /**
      * Deletes a marker when it leaves or disconnects
      */
     public handleDelete(id: string): void {
-        const feature = this.markerRegistry.get(id);
-        if (feature) {
-            this.source.removeFeature(feature);
-            this.markerRegistry.delete(id);
+        if (!this.initialMarkersLoaded) {
+            this.pendingMarkerOperations.push({ kind: 'delete', name: id });
+            return;
         }
+
+        this.deleteMarker(id);
     }
 
     /**
