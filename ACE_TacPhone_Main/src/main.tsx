@@ -10,10 +10,12 @@ import App from './App.tsx'
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import JSXRuntime from 'react/jsx-runtime';
+import * as ReactCompilerRuntime from 'react/compiler-runtime';
 // Expose dependencies to sub-apps
 (window as any).React = React;
 (window as any).ReactDOM = ReactDOM;
 (window as any).ReactJSXRuntime = JSXRuntime;
+(window as any).ReactCompilerRuntime = ReactCompilerRuntime;
 
 import './Backend/MessageRouter.ts'; // Must be in so it sets the globally accessible prototype
 

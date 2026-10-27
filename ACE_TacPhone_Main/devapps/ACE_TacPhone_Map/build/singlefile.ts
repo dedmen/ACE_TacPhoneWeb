@@ -29,28 +29,43 @@ export type Config = {
 
 const defaultConfig = { useRecommendedBuildConfig: true, deleteInlinedFiles: true }
 
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
 export function replaceCss(jsContent: string, cssFilename: string, cssCode: string): string {
 
     // https://web.dev/articles/css-module-scripts#dynamically_imported_stylesheets
     // We cannot use import from file, because in Arma we are not running in a browser, so, we convert to a dynamic import, and use the core file loading API to fetch it
     //#TODO we can also choose to embed a data URL?
 
-    // We turn `import './main.css' into import 'data:text/css;base64,...'`
+    // We turn `import './main.css'` into an inline stylesheet, regardless of the quoting and whitespace a minifier chose.
 
     var cssUrl = 'data:text/css;charset=UTF-8,' + encodeURIComponent(cssCode);
 
-
-    var repSource = `import './${cssFilename}'`;
-    
     // Doesn't work, mimetype missmatch
     //var repTarget = `import '${cssUrl}' with { type: "css" };`;
 
     // Convert it into a stylesheet link we'll insert into head
-    var repTarget = `(()=> {const link = document.createElement('link'); link.rel = 'stylesheet'; link.href = '${cssUrl}'; document.head.appendChild(link);})()`;
+    var repTarget = `(()=> {const link = document.createElement('link'); link.rel = 'stylesheet'; link.href = '${cssUrl}'; document.head.appendChild(link);})();`;
 
+    // Match both static imports and dynamic imports, with single or double quotes and arbitrary whitespace.
+    const importPattern = new RegExp(
+        `import\\s*(?:\\(\\s*)?(['"])(?:[^'"]*[/\\\\])?${escapeRegExp(cssFilename)}\\1\\s*\\)?`,
+        "g"
+    );
 
+    let replacementCount = 0;
+    const inlined = jsContent.replace(importPattern, () => {
+        replacementCount++;
+        return repTarget;
+    });
 
-	const inlined = jsContent.replace(repSource, (_) => repTarget)
+    if (replacementCount === 0) {
+        // When CSS code splitting is disabled, no JS import for the stylesheet may be emitted. Add it ourselves.
+        return `${inlined}\n${repTarget}`;
+    }
+
 	return inlined
 }
 
@@ -85,7 +100,7 @@ export function viteSingleFile({
 
 	return {
 		name: "vite:singlefile",
-		config: !useRecommendedBuildConfig ? _useRecommendedBuildConfig : undefined,
+		config: useRecommendedBuildConfig ? _useRecommendedBuildConfig : undefined,
 		enforce: "post",
 
         //async configResolved(config) {
@@ -114,7 +129,9 @@ export function viteSingleFile({
 				}
 			}
 
-            //#TODO there should only be one .js file, if we have multiple we need to convert all their imports into dynamic...
+			if (files.js.length > 1) {
+				this.error(`vite:singlefile expects a single JavaScript chunk, but ${files.js.length} were emitted: ${files.js.join(", ")}`)
+			}
 
 			const bundlesToDelete = [] as string[]
 			for (const name of files.js) {

@@ -34,28 +34,16 @@ export default defineConfig({
         entry: resolve(import.meta.dirname, 'src/main.tsx'),
         name: 'ace_tacphone_map',
         fileName: () => `ace_tacphone_map.js`,
-        formats: ['es'], // UMD format works best for global injection
+        formats: ['es'], // The production loader imports this file as an ES module from a blob URL
     },
     rollupOptions: {
 
-        // See ACE_TacPhoneMain/src/main.tsx, it declares what is publicly available
-        external: ['react', 'react-dom', 'react-dom/client', 'react/compiler-runtime', 'react/jsx-runtime'],
+        // Only the exact bare specifiers provided by ACE_TacPhone_Main's import map may stay external.
+        // Everything else has to be bundled into the single output file.
+        external: ['react', 'react-dom', 'react/jsx-runtime', 'react/compiler-runtime'],
         output: {
-
-            // Map the externalized React imports to the framework's window globals
-            //globals: {
-            //'react': 'React',
-            //'react-dom': 'ReactDOM',
-            //'react/jsx-runtime': 'ReactJSXRuntime'
-            //},
-
-            // These can be used to map names the library has in import, to the names of the ACE_TacPhone_Main's index.html import map.
-            // In this case we don't care though, as we just make them be equal
-            paths: {
-                //react: 'react',
-                //'react-dom': 'ReactDOM',
-                //'react/jsx-runtime': 'ReactJSXRuntime'
-            },
+            // The production loader can only fetch one file. Never emit separate chunks.
+            codeSplitting: false,
         }
     }
   },

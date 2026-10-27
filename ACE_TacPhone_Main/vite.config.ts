@@ -8,6 +8,7 @@ import dts from 'vite-plugin-dts'
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import * as ReactJSXRuntime from 'react/jsx-runtime';
+import * as ReactCompilerRuntime from 'react/compiler-runtime';
 
 
 // https://vite.dev/config/
@@ -39,7 +40,8 @@ export default defineConfig({
                     imports: {
                         "react": `data:text/javascript,${generateExports(React, "window.React")}`,
                         "react-dom": `data:text/javascript,${generateExports(ReactDOM, "window.ReactDOM")}`,
-                        "react/jsx-runtime": `data:text/javascript,${generateExports(ReactJSXRuntime, "window.ReactJSXRuntime")}`
+                        "react/jsx-runtime": `data:text/javascript,${generateExports(ReactJSXRuntime, "window.ReactJSXRuntime")}`,
+                        "react/compiler-runtime": `data:text/javascript,${generateExports(ReactCompilerRuntime, "window.ReactCompilerRuntime")}`
                     }
                 };
 
