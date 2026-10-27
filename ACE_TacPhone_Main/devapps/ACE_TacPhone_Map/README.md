@@ -108,12 +108,12 @@ host's `window.TacPhoneUtils.CommandRegistry`.
 
 ## Packaging constraints
 
-The production loader reads one file from the game filesystem and imports it
-from a blob URL. The Map build therefore must stay a single ESM file:
+The production loader reads the entry file from the game filesystem and imports
+it from a blob URL. The Map build therefore stays a single ESM entry file:
 
 - Format is `es`.
 - React is external and resolves through the host import map.
-- No dynamic chunks, `React.lazy` imports, or relative imports.
+- No bundle-relative dynamic imports, `React.lazy` imports, or relative imports.
 - CSS is inlined by `build/singlefile.ts`; no sidecar CSS file is emitted.
 - Only `react`, `react-dom`, `react/jsx-runtime`, and
   `react/compiler-runtime` may remain bare external imports. The host import map
@@ -133,6 +133,10 @@ output: {
 }
 ```
 
-If you add a dependency that emits a separate chunk or asset, inline it or
-bundle it before shipping. A second `.js` file will not be available next to
-the blob URL at runtime.
+This is a packaging choice for the Map app, not a hard limitation of the host.
+Extra JavaScript or CSS files can be shipped separately and loaded on demand
+with `window.Networking.LoadGameFileText`; see
+[Loading additional files manually](../../README.md#loading-additional-files-manually).
+The trade-off is an extra game-filesystem read before the module or stylesheet
+can be used, so cache the loaded file. A relative `.js` import from the entry
+bundle still cannot resolve next to the blob URL.

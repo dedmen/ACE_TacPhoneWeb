@@ -110,7 +110,7 @@ class ace_tacphone_apps {
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `scope` | Yes | Must be greater than `0`; use `2`. |
-| `ace_tacphone_file` | Yes, except `main` | Path to the single production ES module in the game filesystem. It is read with `loadFile` and imported from a blob URL. |
+| `ace_tacphone_file` | Yes, except `main` | Path to the production ES module entry in the game filesystem. It is read with `LoadGameFileText` and imported from a blob URL. |
 | `ace_tacphone_devFile` | Recommended | Entry point relative to the app folder. Keep it as `src\main.tsx`. The current dev loader uses the folder name and the fixed `src/main.tsx` path. |
 | `ace_tacphone_requestProcessor` | For app requests | Name of the SQF function that handles requests sent with `a: "<AppName>"`. It receives the request hashmap and may return any JSON-serializable value or a promise. |
 | `icon` | No | Currently reserved; panel icons come from `GetTacPhoneIcon()`. |
@@ -243,7 +243,7 @@ Rules for app builds:
 In development Vite resolves the bare imports for you. The import map matters
 most for a prebuilt app bundle loaded with `import()` from a blob URL.
 
-## Production packaging: one ESM file per app
+## Production packaging: one ESM entry file per app
 
 The production loader in `src/Backend/AppDirectory.ts` reads
 `ace_tacphone_file` with `LoadGameFileText`, creates a `Blob`, and imports it:
@@ -256,17 +256,10 @@ const url = URL.createObjectURL(
 return import(/* @vite-ignore */ url);
 ```
 
-That loader can fetch exactly one file. Therefore an app's production output
-must be:
-
-- one JavaScript file,
-- an ES module (`format: 'es'`),
-- self-contained: no relative imports, no dynamic chunks, and no sidecar CSS,
-  JSON, image, font, worker, or WASM files.
-
-A dynamic `import('./chunk.js')`, `React.lazy(() => import(...))`, CSS code
-splitting, or an asset URL that points at another emitted file will fail because
-the blob URL has no sibling files to load.
+The entry file must be one self-contained ES module. A normal bundle-relative
+`import('./chunk.js')`, `React.lazy(() => import(...))`, CSS code splitting, or
+an asset URL that points at another emitted file will fail because the blob URL
+has no sibling files to resolve against.
 
 Recommended library build settings:
 
@@ -296,6 +289,120 @@ Inline CSS and assets in the bundle. The Map app's custom
 [`build/singlefile.ts`](devapps/ACE_TacPhone_Map/build/singlefile.ts) inlines CSS
 as a `data:` URL; the host itself uses `vite-plugin-singlefile`. Keep assets as
 data URLs rather than separate files.
+
+### Loading additional files manually
+
+Dynamic loading and CSS splitting are still possible. The difference is that
+you cannot rely on a relative chunk URL; explicitly read the extra game file
+through `window.Networking.LoadGameFileText`, then import it or attach it:
+
+```ts
+const moduleCache = new Map<string, Promise<unknown>>();
+
+export function loadGameModule(path: string): Promise<unknown> {
+    let promise = moduleCache.get(path);
+    if (!promise) {
+        promise = (async () => {
+            const source = await window.Networking.LoadGameFileText(path);
+            const url = URL.createObjectURL(
+                new Blob([source], { type: 'text/javascript' }),
+            );
+            try {
+                return await import(/* @vite-ignore */ url);
+            } finally {
+                URL.revokeObjectURL(url);
+            }
+        })();
+        moduleCache.set(path, promise);
+        promise.catch(() => {
+            if (moduleCache.get(path) === promise)
+                moduleCache.delete(path);
+        });
+    }
+    return promise;
+}
+
+const stylesheetCache = new Map<string, Promise<void>>();
+
+export function loadGameStylesheet(path: string): Promise<void> {
+    let promise = stylesheetCache.get(path);
+    if (!promise) {
+        promise = (async () => {
+            const css = await window.Networking.LoadGameFileText(path);
+            const url = URL.createObjectURL(
+                new Blob([css], { type: 'text/css' }),
+            );
+            await new Promise<void>((resolve, reject) => {
+                const link = document.createElement('link');
+                link.rel = 'stylesheet';
+                link.href = url;
+                link.onload = () => resolve();
+                link.onerror = () => {
+                    link.remove();
+                    URL.revokeObjectURL(url);
+                    reject(new Error(`Failed to load stylesheet ${path}`));
+                };
+                document.head.appendChild(link);
+            });
+        })();
+        stylesheetCache.set(path, promise);
+        promise.catch(() => {
+            if (stylesheetCache.get(path) === promise)
+                stylesheetCache.delete(path);
+        });
+    }
+    return promise;
+}
+```
+
+Use game-filesystem paths in the same format as `ace_tacphone_file`, and ship
+the extra files in the PBO:
+
+```ts
+const { openAdvancedMap } = await loadGameModule(
+    '\\z\\my_mod\\addons\\my_app\\data\\advanced-map.js',
+) as typeof import('./advanced-map');
+
+await loadGameStylesheet(
+    '\\z\\my_mod\\addons\\my_app\\data\\advanced-map.css',
+);
+```
+
+A split JavaScript file is another ES module. It can use the host-provided bare
+imports (`react`, `react/jsx-runtime`, and so on), but it cannot resolve relative
+imports of its own: those specifiers would resolve against the blob URL and
+fail. The same applies to `new URL(..., import.meta.url)` asset lookups; inline
+those assets too. Build each split module as a leaf with no relative imports,
+and load any dependency explicitly through `loadGameModule`. A module that
+default-exports a component works with `React.lazy`:
+
+```ts
+const AdvancedMap = React.lazy(() =>
+    loadGameModule('\\z\\my_mod\\addons\\my_app\\data\\advanced-map.js')
+        as Promise<{ default: React.ComponentType }>,
+);
+```
+
+For CSS, you can also use a `data:text/css` URL instead of a blob URL. A split
+stylesheet cannot resolve relative `url()` references either; inline images and
+fonts as data URLs.
+
+Build each extra JavaScript module as its own single-file ES library build.
+Build the CSS with your usual CSS/Sass build, or enable CSS code splitting and
+ship the resulting file. Do not ship Vite's automatically generated chunk graph
+with relative imports; only ship files that the manual loader can read and
+import directly.
+
+This does have a cost. Every additional file is another game-filesystem read,
+blob creation, and module parse/evaluation (or stylesheet load). The first use
+is therefore slower than a normal bundler chunk, especially through the external
+WebSocket transport; a large CSS file also has to be fetched and parsed before
+the styles apply. Cache loaded modules/styles per path, and prefetch on idle if
+a feature is likely to be opened. During development the file must be available
+through the game/WebHost filesystem, not only from the Vite output directory.
+
+Do not use a bundle-relative dynamic import in the production entry module; use
+`LoadGameFileText` for any file that is not part of the entry bundle.
 
 ## Related documentation
 
