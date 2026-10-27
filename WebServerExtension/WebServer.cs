@@ -15,19 +15,20 @@ namespace ArmaServerSide
     // Connection Manager Class
     public class WebSocketConnectionManager
     {
+        private readonly ConcurrentDictionary<string, WebSocketConnection> _connections = new();
 
-        private readonly ConcurrentDictionary<string, WebSocket> _connections = new();
-
-        public async Task AddConnectionAsync(string connectionId, WebSocket webSocket)
+        public Task AddConnectionAsync(string connectionId, WebSocket webSocket)
         {
-            _connections.TryAdd(connectionId, webSocket);
+            _connections.TryAdd(connectionId, new WebSocketConnection(webSocket));
             Console.WriteLine($"Connection added: {connectionId}. Total connections: {_connections.Count}");
+            return Task.CompletedTask;
         }
 
         public async Task RemoveConnectionAsync(string connectionId)
         {
-            if (_connections.TryRemove(connectionId, out var webSocket))
+            if (_connections.TryRemove(connectionId, out var connection))
             {
+                var webSocket = connection.WebSocket;
                 if (webSocket.State == WebSocketState.Open)
                 {
                     await webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Connection closed", CancellationToken.None);
@@ -41,13 +42,13 @@ namespace ArmaServerSide
             }
         }
 
-        public async Task BroadcastAsync(string message, string excludeConnectionId = null)
+        public async Task BroadcastAsync(string message, string? excludeConnectionId = null)
         {
             var tasks = new List<Task>();
 
             foreach (var connection in _connections)
             {
-                if (connection.Key != excludeConnectionId && connection.Value.State == WebSocketState.Open)
+                if (connection.Key != excludeConnectionId && connection.Value.WebSocket.State == WebSocketState.Open)
                 {
                     tasks.Add(SendMessageToConnectionAsync(connection.Value, message));
                 }
@@ -56,10 +57,18 @@ namespace ArmaServerSide
             await Task.WhenAll(tasks);
         }
 
-        private async Task SendMessageToConnectionAsync(WebSocket webSocket, string message)
+        private async Task SendMessageToConnectionAsync(WebSocketConnection connection, string message)
         {
+            // WebSocket only allows one send at a time, so serialize sends per connection.
+            await connection.SendLock.WaitAsync();
             try
             {
+                var webSocket = connection.WebSocket;
+                if (webSocket.State != WebSocketState.Open)
+                {
+                    return;
+                }
+
                 var bytes = Encoding.UTF8.GetBytes(message);
                 await webSocket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
             }
@@ -67,19 +76,34 @@ namespace ArmaServerSide
             {
                 Console.WriteLine($"Error sending message: {ex.Message}");
             }
+            finally
+            {
+                connection.SendLock.Release();
+            }
         }
 
         public async Task SendMessageToConnectionAsync(string connectionId, string message)
         {
-            if (_connections.TryGetValue(connectionId, out var webSocket))
+            if (_connections.TryGetValue(connectionId, out var connection))
             {
-                await SendMessageToConnectionAsync(webSocket, message);
+                await SendMessageToConnectionAsync(connection, message);
             }
 
             //#TODO error?
         }
 
         public int GetConnectionCount() => _connections.Count;
+
+        private sealed class WebSocketConnection
+        {
+            public WebSocket WebSocket { get; }
+            public SemaphoreSlim SendLock { get; } = new(1, 1);
+
+            public WebSocketConnection(WebSocket webSocket)
+            {
+                WebSocket = webSocket;
+            }
+        }
     }
 
     internal class WebServer
@@ -140,26 +164,44 @@ namespace ArmaServerSide
             {
                 // Ask Arma for the file
 
-                var promise = new TaskCompletionSource<string>();
-
                 var fileName = context.Request.Path;
 
                 //if (fileName == "/")
                 //    fileName = "index.html";
 
-                _filesWaiting.Add(fileName, promise);
+                var promise = GetOrCreatePendingFile(fileName, out var created);
+                if (created)
+                {
+                    DllEntry.callback("ArmaWebHost", "GetFile", System.Text.Encoding.UTF8.GetBytes(fileName));
+                }
 
-                DllEntry.callback("ArmaWebHost", "GetFile", System.Text.Encoding.UTF8.GetBytes(fileName));
                 // Wait for Arma to reply
-
                 var completed = await Task.WhenAny(promise.Task, Task.Delay(2000));
                 if (completed != promise.Task) // Timeout
                 {
-                    context.Response.ContentType = "text/html";
-                    await context.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes("aaaaa"));
+                    // Stop waiting and remove the stale request so it cannot leak.
+                    RemovePendingFile(fileName, promise);
+                    promise.TrySetCanceled();
+
+                    context.Response.StatusCode = StatusCodes.Status504GatewayTimeout;
+                    context.Response.ContentType = "text/plain";
+                    await context.Response.WriteAsync("Timed out waiting for file content.");
+                    return;
                 }
 
-                var myResult = await promise.Task;
+                string myResult;
+                try
+                {
+                    myResult = await promise.Task;
+                }
+                catch (OperationCanceledException)
+                {
+                    // Another request for the same file timed out and cancelled the shared wait.
+                    context.Response.StatusCode = StatusCodes.Status504GatewayTimeout;
+                    context.Response.ContentType = "text/plain";
+                    await context.Response.WriteAsync("Timed out waiting for file content.");
+                    return;
+                }
 
                 context.Response.ContentType = "text/html";
                 await context.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes(myResult));
@@ -179,20 +221,51 @@ namespace ArmaServerSide
 
         static async Task HandleWebSocketAsync(string connectionId, WebSocket webSocket, WebSocketConnectionManager connectionManager)
         {
-            var buffer = new byte[1024 * 4];
+            const int receiveBufferSize = 1024 * 4;
+            const int maxMessageSize = 30 * 1024 * 1024;
+            var buffer = new byte[receiveBufferSize];
 
             try
             {
                 // Send welcome message
-                await SendMessageAsync(webSocket, $"{{\"type\": \"welcome\", \"message\": \"Connection {connectionId} established!\"}}");
+                await connectionManager.SendMessageToConnectionAsync(connectionId, $"{{\"type\": \"welcome\", \"message\": \"Connection {connectionId} established!\"}}");
 
-                WebSocketReceiveResult result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
-
-                while (!result.CloseStatus.HasValue)
+                while (webSocket.State == WebSocketState.Open || webSocket.State == WebSocketState.CloseReceived)
                 {
+                    using var messageStream = new MemoryStream();
+                    WebSocketReceiveResult result;
+
+                    // A message can span multiple frames, so keep receiving until EndOfMessage.
+                    do
+                    {
+                        result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
+
+                        if (result.MessageType == WebSocketMessageType.Close)
+                        {
+                            break;
+                        }
+
+                        if (messageStream.Length + result.Count > maxMessageSize)
+                        {
+                            await webSocket.CloseAsync(WebSocketCloseStatus.MessageTooBig, "Message too large", CancellationToken.None);
+                            await connectionManager.RemoveConnectionAsync(connectionId);
+                            return;
+                        }
+
+                        messageStream.Write(buffer, 0, result.Count);
+                    }
+                    while (!result.EndOfMessage);
+
+                    if (result.MessageType == WebSocketMessageType.Close)
+                    {
+                        await connectionManager.RemoveConnectionAsync(connectionId);
+                        await webSocket.CloseAsync(result.CloseStatus ?? WebSocketCloseStatus.NormalClosure, result.CloseStatusDescription, CancellationToken.None);
+                        return;
+                    }
+
                     if (result.MessageType == WebSocketMessageType.Text)
                     {
-                        var messageJson = Encoding.UTF8.GetString(buffer, 0, result.Count);
+                        var messageJson = Encoding.UTF8.GetString(messageStream.GetBuffer(), 0, (int)messageStream.Length);
                         //#TODO validate its valid json?
 
                         //#TODO separately implement file read requests here, and we can send response in binary
@@ -204,12 +277,9 @@ namespace ArmaServerSide
                         DllEntry.callback("ArmaWebHost", "Request", System.Text.Encoding.UTF8.GetBytes(messageJson));
                         // Arma will reply by calling WebServer.SendTo with the connectionId
                     }
-
-                    result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
                 }
 
                 await connectionManager.RemoveConnectionAsync(connectionId);
-                await webSocket.CloseAsync(result.CloseStatus.Value, result.CloseStatusDescription, CancellationToken.None);
             }
             catch (Exception ex)
             {
@@ -218,26 +288,42 @@ namespace ArmaServerSide
             }
         }
 
-        static async Task SendMessageAsync(WebSocket webSocket, string message)
+        Dictionary<string, string> _fileCache = new();
+        ConcurrentDictionary<string, TaskCompletionSource<string>> _filesWaiting = new();
+
+        private TaskCompletionSource<string> GetOrCreatePendingFile(string fileName, out bool created)
         {
-            if (webSocket.State == WebSocketState.Open)
+            while (true)
             {
-                var bytes = Encoding.UTF8.GetBytes(message);
-                await webSocket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
+                if (_filesWaiting.TryGetValue(fileName, out var existing))
+                {
+                    created = false;
+                    return existing;
+                }
+
+                var promise = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+                if (_filesWaiting.TryAdd(fileName, promise))
+                {
+                    created = true;
+                    return promise;
+                }
             }
         }
 
-        Dictionary<string, string> _fileCache = new();
-        Dictionary<string, TaskCompletionSource<string>> _filesWaiting = new();
+        private void RemovePendingFile(string fileName, TaskCompletionSource<string> promise)
+        {
+            // Only remove the entry if it still belongs to this request.
+            ((ICollection<KeyValuePair<string, TaskCompletionSource<string>>>)_filesWaiting)
+                .Remove(new KeyValuePair<string, TaskCompletionSource<string>>(fileName, promise));
+        }
 
         internal void HandleFileContent(string fileName, string content)
         {
             // The game sent us content for a file
 
-            if (_filesWaiting.TryGetValue(fileName, out var compSource))
+            if (_filesWaiting.TryRemove(fileName, out var compSource))
             {
-                compSource.SetResult(content);
-                _filesWaiting.Remove(fileName);
+                compSource.TrySetResult(content);
             }
 
             //#TODO cache it, files don't change. _fileCache. Also needs to be threadsafe And if not in cache, need to reuse the existing promise
@@ -247,7 +333,7 @@ namespace ArmaServerSide
         {
             // Send content to specific websocket client
             var websocketManager = app.Services.GetService<WebSocketConnectionManager>()!;
-            websocketManager.SendMessageToConnectionAsync(target, content);
+            _ = websocketManager.SendMessageToConnectionAsync(target, content);
         }
     }
 }
