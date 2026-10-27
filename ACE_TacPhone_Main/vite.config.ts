@@ -12,51 +12,70 @@ import * as ReactCompilerRuntime from 'react/compiler-runtime';
 
 
 // https://vite.dev/config/
-export default defineConfig({
-    plugins: [
-        react(),
-        dts({ include: ['src'], insertTypesEntry: true, tsconfigPath: "./tsconfig.app.json",  }),
-        babel({ presets: [reactCompilerPreset()] }),
-        viteSingleFile(),
+export default defineConfig(({ mode }) => {
+    // `vite build` (production) and `npm run build` (release) ship optimized code.
+    // Use `npm run build:debug` when you need unminified code and source maps.
+    const isRelease = mode !== 'debug';
 
-        {
-            name: 'dynamic-importmap-injector',
-            // This hook modifies the index.html file right before it is served to the browser
-            transformIndexHtml(html) {
-                // 1. Gather all the keys from your local node_modules installation of React
-                const skippedKeys = new Set(['__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED', '__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE', '__COMPILER_RUNTIME', 'default', 'module.exports']);
+    return {
+        plugins: [
+            react(),
+            dts({ include: ['src'], insertTypesEntry: true, tsconfigPath: "./tsconfig.app.json",  }),
+            babel({ presets: [reactCompilerPreset()] }),
+            viteSingleFile(),
 
-                const generateExports = (x: any, locName: string) => {
-                    return `export default ${locName}; `
-                    +
-                    Object.keys(x || {})
-                    .filter(key => !skippedKeys.has(key))
-                    .map(key => `export const ${key} = ${locName}.${key};`)
-                    .join(' ');
-                }
+            {
+                name: 'dynamic-importmap-injector',
+                // This hook modifies the index.html file right before it is served to the browser
+                transformIndexHtml(html) {
+                    // 1. Gather all the keys from your local node_modules installation of React
+                    const skippedKeys = new Set(['__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED', '__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE', '__COMPILER_RUNTIME', 'default', 'module.exports']);
 
-                // 2. Build the stringified import map matching your pattern
-                const importMap = {
-                    imports: {
-                        "react": `data:text/javascript,${generateExports(React, "window.React")}`,
-                        "react-dom": `data:text/javascript,${generateExports(ReactDOM, "window.ReactDOM")}`,
-                        "react/jsx-runtime": `data:text/javascript,${generateExports(ReactJSXRuntime, "window.ReactJSXRuntime")}`,
-                        "react/compiler-runtime": `data:text/javascript,${generateExports(ReactCompilerRuntime, "window.ReactCompilerRuntime")}`
+                    const generateExports = (x: any, locName: string) => {
+                        return `export default ${locName}; `
+                        +
+                        Object.keys(x || {})
+                        .filter(key => !skippedKeys.has(key))
+                        .map(key => `export const ${key} = ${locName}.${key};`)
+                        .join(' ');
                     }
-                };
 
-                const importMapHtml = `<script type="importmap">${JSON.stringify(importMap)}</script>`;
+                    // 2. Build the stringified import map matching your pattern
+                    const importMap = {
+                        imports: {
+                            "react": `data:text/javascript,${generateExports(React, "window.React")}`,
+                            "react-dom": `data:text/javascript,${generateExports(ReactDOM, "window.ReactDOM")}`,
+                            "react/jsx-runtime": `data:text/javascript,${generateExports(ReactJSXRuntime, "window.ReactJSXRuntime")}`,
+                            "react/compiler-runtime": `data:text/javascript,${generateExports(ReactCompilerRuntime, "window.ReactCompilerRuntime")}`
+                        }
+                    };
 
-                // 3. Inject it cleanly at the very top of the <head> tag
-                return html.replace('<head>', `<head>\n    ${importMapHtml}`);
+                    const importMapHtml = `<script type="importmap">${JSON.stringify(importMap)}</script>`;
+
+                    // 3. Inject it cleanly at the very top of the <head> tag
+                    return html.replace('<head>', `<head>\n    ${importMapHtml}`);
+                }
             }
-        }
 
-    ],
-    build: {
-        minify: false,
-        sourcemap: 'inline',
-    },
+        ],
+        build: {
+            minify: isRelease ? 'oxc' : false,
+            sourcemap: isRelease ? false : 'inline',
+            rollupOptions: isRelease ? {
+                treeshake: {
+                    // Keep console.warn/error for in-game diagnostics, drop noisy logging.
+                    manualPureFunctions: ['console.log', 'console.debug', 'console.info'],
+                },
+                output: {
+                    minify: {
+                        compress: true,
+                        mangle: true,
+                        codegen: true,
+                    },
+                },
+            } : undefined,
+        },
+    };
 })
 
 //#TODO https://github.com/originjs/vite-plugin-federation plugins so mods can provide components?

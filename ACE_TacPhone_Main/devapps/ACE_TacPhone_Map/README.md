@@ -57,11 +57,16 @@ Build the app from this folder:
 npm run build
 ```
 
-`tsc -b && vite build` emits:
+`tsc -b && vite build --mode release` emits:
 
 ```text
 dist/ace_tacphone_map.js
 ```
+
+`npm run build` is a release build: the JavaScript is minified, no source map is
+embedded, and `console.log` / `console.debug` / `console.info` calls are removed.
+Use `npm run build:debug` for an unminified build with an inline source map;
+`console.warn` and `console.error` calls are kept in both builds.
 
 For local in-game testing, copy it to the path registered by
 `ace_tacphone_file`:

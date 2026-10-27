@@ -63,6 +63,11 @@ The build produces a single self-contained `dist/index.html` (inline script and
 import map); that is the file loaded by `CT_WEBBROWSER`. `dist/` and the copied
 `data/index.html` are ignored by git.
 
+`npm run build` is a release build: the JavaScript is minified, no source map is
+embedded, and `console.log` / `console.debug` / `console.info` calls are removed.
+Use `npm run build:debug` for an unminified build with an inline source map;
+`console.warn` and `console.error` calls are kept in both builds.
+
 ## Developing apps
 
 An app is a JavaScript ES module that is loaded dynamically by the host. A mod
