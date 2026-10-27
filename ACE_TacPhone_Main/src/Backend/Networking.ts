@@ -124,26 +124,81 @@ async function decompressFromBase64(base64Input: string): Promise<string> {
   return new TextDecoder().decode(decompressedBuffer);
 }
 
+type PendingRequest = {
+    resolve: (_: object) => void;
+    reject: (reason?: unknown) => void;
+    timeout: ReturnType<typeof setTimeout>;
+};
+
 class NetworkingWebsocket implements Networking {
     requestCounter: number = 0;
     socket!: WebSocket;
+
+    private static readonly RequestTimeoutMs = 30_000;
 
     private readyPromise!: Promise<void>;
     private resolveReady: (() => void) | undefined;
     private rejectReady: ((reason?: unknown) => void) | undefined;
     private isReady = false;
 
-    // We cannot use A3API's pendingRequests implementation, so we ship our own
-    private pendingRequests: { [key: string]: Array<{resolve: (_:object)=>void, reject: (_:any)=>void}> } = {};
-    _response(key: string, content: object) {
-        if (!(key in this.pendingRequests)) return; // Request doesn't exist
+    // Requests made before the connection opens are queued instead of being sent on a CONNECTING socket.
+    private preOpenQueue: Array<{ key: string; data: object }> = [];
 
-        // Trigger all promises
-        this.pendingRequests[key].forEach((e: any) => e.resolve(content));
+    // We cannot use A3API's pendingRequests implementation, so we ship our own
+    private pendingRequests: { [key: string]: PendingRequest[] } = {};
+
+    private rejectRequest(key: string, reason: unknown): void {
+        const waiters = this.pendingRequests[key];
+        if (!waiters) return;
+
         delete this.pendingRequests[key];
+        this.preOpenQueue = this.preOpenQueue.filter(request => request.key !== key);
+
+        for (const waiter of waiters) {
+            clearTimeout(waiter.timeout);
+            waiter.reject(reason);
+        }
     }
 
-    _push(key: string, d: {resolve: (_:object)=>void, reject: (_:any)=>void}) : boolean
+    private rejectAllPendingRequests(reason: unknown): void {
+        for (const key of Object.keys(this.pendingRequests)) {
+            this.rejectRequest(key, reason);
+        }
+    }
+
+    private sendRequest(key: string, data: object): void {
+        try {
+            console.log("send", {k: key, d:data});
+            this.socket.send(JSON.stringify({k: key, d:data}));
+        } catch (error) {
+            console.error(error);
+            this.rejectRequest(key, error);
+        }
+    }
+
+    private flushPreOpenQueue(): void {
+        const queuedRequests = this.preOpenQueue;
+        this.preOpenQueue = [];
+
+        for (const request of queuedRequests) {
+            // A request may have timed out or been rejected while waiting for the connection.
+            if (!(request.key in this.pendingRequests)) continue;
+            this.sendRequest(request.key, request.data);
+        }
+    }
+
+    _response(key: string, content: object) {
+        const waiters = this.pendingRequests[key];
+        if (!waiters) return; // Request doesn't exist
+
+        delete this.pendingRequests[key];
+        for (const waiter of waiters) {
+            clearTimeout(waiter.timeout);
+            waiter.resolve(content);
+        }
+    }
+
+    _push(key: string, d: PendingRequest) : boolean
     {
         const waiterList = (this.pendingRequests[key] = this.pendingRequests[key] || []);
         waiterList.push(d);
@@ -177,6 +232,7 @@ class NetworkingWebsocket implements Networking {
             this.isReady = true;
             this.resolveReady?.();
             this.resolveReady = this.rejectReady = undefined;
+            this.flushPreOpenQueue();
         };
 
         this.socket.onmessage = (event) => {
@@ -202,6 +258,7 @@ class NetworkingWebsocket implements Networking {
             }
 
             this.isReady = false;
+            this.rejectAllPendingRequests(new Error(`TacPhone websocket closed (code=${event.code})`));
 
             if (this.rejectReady) {
                 this.rejectReady(new Error(`TacPhone websocket closed before connecting (code=${event.code})`));
@@ -211,6 +268,7 @@ class NetworkingWebsocket implements Networking {
 
         this.socket.onerror = (error) => {
             console.log(`[error] ${JSON.stringify(error)}`);
+            this.rejectAllPendingRequests(new Error("Could not communicate with the TacPhone websocket"));
 
             if (!this.isReady && this.rejectReady) {
                 this.rejectReady(new Error("Could not connect to the TacPhone websocket"));
@@ -237,21 +295,29 @@ class NetworkingWebsocket implements Networking {
         // Request will land in ExtensionCallback
 
         return new Promise((resolve, reject) => {
-            let reqKey = this.GenerateRequestID();
+            const reqKey = this.GenerateRequestID();
+            const timeout = setTimeout(() => {
+                this.rejectRequest(reqKey, new Error(`TacPhone websocket request "${reqKey}" timed out after ${NetworkingWebsocket.RequestTimeoutMs}ms`));
+            }, NetworkingWebsocket.RequestTimeoutMs);
 
             if (this._push(reqKey, 
                 {
                     resolve, // resultData is already an object
-                    reject 
+                    reject,
+                    timeout
                 }
                 ))
             {
-                try {
-                    console.log("send", {k: reqKey, d:data});
-                    this.socket.send(JSON.stringify({k: reqKey, d:data}));
-                } catch (error) {
-                    console.error(error);
-                }  
+                if (this.socket?.readyState === WebSocket.OPEN) {
+                    this.sendRequest(reqKey, data);
+                    return;
+                }
+
+                // The socket is still connecting (or reconnecting); send once it is open.
+                this.preOpenQueue.push({ key: reqKey, data });
+                this.WhenReady().catch(error => {
+                    this.rejectRequest(reqKey, error);
+                });
             }
         });
     }
@@ -270,28 +336,20 @@ class NetworkingWebsocket implements Networking {
         // currently only a in-game webbrowser can load textures, so we need to proxy the request into the game and back out
 
         // Ask the webhost (the connected Arma client), to send us the terrain back
-        return new Promise((resolve, _reject) => {
-            this.Request({a: "main", c: "RequestTexture", path: path, maxSize: maxSize}).then(async result => {
-                
+        return this.Request({a: "main", c: "RequestTexture", path: path, maxSize: maxSize})
+            .then(result => {
                 // MainApps/main.tsx OnMessageFromGame compressed it for us
-                var decompressed = await decompressFromBase64(result as unknown as string);
-                //#TODO handle failure when ingame phone isn't open
-                resolve(decompressed);
+                return decompressFromBase64(result as unknown as string);
             });
-        });
     }
 
     LoadGameTerrain(config: object): Promise<string> {
         // Ask the webhost (the connected Arma client), to send us the terrain back
-        return new Promise((resolve, _reject) => {
-            this.Request({a: "main", c: "RequestTerrainSVG", config: config}).then(async result => {
-                
+        return this.Request({a: "main", c: "RequestTerrainSVG", config: config})
+            .then(result => {
                 // MainApps/main.tsx OnMessageFromGame compressed it for us
-                var decompressed = await decompressFromBase64(result as unknown as string);
-                //#TODO handle failure when ingame phone isn't open
-                resolve(decompressed);
+                return decompressFromBase64(result as unknown as string);
             });
-        });
     }
 
     OnMessageFromGame(message: object): void {
