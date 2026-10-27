@@ -7,6 +7,7 @@ import { libInjectCss } from 'vite-plugin-lib-inject-css'
 //import { viteSingleFile } from "vite-plugin-singlefile"
 import { viteSingleFile } from "./build/singlefile.ts"
 import Inspect from 'vite-plugin-inspect'
+import { SHARED_MODULE_SPECIFIERS } from '../../shared-modules.js'
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
@@ -44,8 +45,9 @@ export default defineConfig(({ mode }) => {
       rollupOptions: {
 
           // Only the exact bare specifiers provided by ACE_TacPhone_Main's import map may stay external.
+          // The shared list also generates that import map, so the two cannot drift apart.
           // Everything else has to be bundled into the single output file.
-          external: ['react', 'react-dom', 'react/jsx-runtime', 'react/compiler-runtime'],
+          external: [...SHARED_MODULE_SPECIFIERS],
           ...(isRelease ? {
               treeshake: {
                   // Keep console.warn/error for in-game diagnostics, drop noisy logging.

@@ -120,23 +120,23 @@ it from a blob URL. The Map build therefore stays a single ESM entry file:
 - React is external and resolves through the host import map.
 - No bundle-relative dynamic imports, `React.lazy` imports, or relative imports.
 - CSS is inlined by `build/singlefile.ts`; no sidecar CSS file is emitted.
-- Only `react`, `react-dom`, `react/jsx-runtime`, and
+- Only `react`, `react-dom`, `react-dom/client`, `react/jsx-runtime`, and
   `react/compiler-runtime` may remain bare external imports. The host import map
-  provides all four.
+  provides all five.
 
-`vite.config.ts` enforces these rules with:
+`vite.config.ts` takes the external list from the host's
+[`shared-modules.js`](../../shared-modules.js), which also generates the host
+import map:
 
 ```ts
-external: [
-    'react',
-    'react-dom',
-    'react/jsx-runtime',
-    'react/compiler-runtime',
-],
+external: [...SHARED_MODULE_SPECIFIERS],
 output: {
     codeSplitting: false,
 }
 ```
+
+The build runs `scripts/check-shared-imports.mjs` afterwards and fails if the
+bundle contains a bare import that the host does not provide.
 
 This is a packaging choice for the Map app, not a hard limitation of the host.
 Extra JavaScript or CSS files can be shipped separately and loaded on demand

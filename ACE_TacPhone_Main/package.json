@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build --mode release",
-    "build:debug": "tsc -b && vite build --mode debug",
+    "build": "tsc -b && vite build --mode release && node scripts/check-shared-imports.mjs",
+    "build:debug": "tsc -b && vite build --mode debug && node scripts/check-shared-imports.mjs",
+    "check:importmap": "node scripts/check-shared-imports.mjs",
     "lint": "oxlint",
     "preview": "vite preview"
   },

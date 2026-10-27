@@ -219,6 +219,7 @@ module specifiers:
   "imports": {
     "react": "data:text/javascript,export default window.React; ...",
     "react-dom": "data:text/javascript,export default window.ReactDOM; ...",
+    "react-dom/client": "data:text/javascript,export default window.ReactDOMClient; ...",
     "react/jsx-runtime": "data:text/javascript,export default window.ReactJSXRuntime; ...",
     "react/compiler-runtime": "data:text/javascript,export default window.ReactCompilerRuntime; ..."
   }
@@ -226,27 +227,34 @@ module specifiers:
 ```
 
 The generated modules re-export the values that `src/main.tsx` assigns to
-`window.React`, `window.ReactDOM`, `window.ReactJSXRuntime`, and
-`window.ReactCompilerRuntime`.
+`window.React`, `window.ReactDOM`, `window.ReactDOMClient`,
+`window.ReactJSXRuntime`, and `window.ReactCompilerRuntime`. The specifier and
+global names live in one list, [`shared-modules.js`](shared-modules.js), which
+drives the host import map, `src/main.tsx`, and the app build externals.
 
 Rules for app builds:
 
-- Keep `react`, `react-dom`, `react/jsx-runtime`, and `react/compiler-runtime`
-  external. Do not bundle a second copy of React; duplicate React copies break
-  hooks and context.
-- Only the exact specifiers above are mapped. Subpaths such as
-  `react-dom/client`, `react/jsx-dev-runtime`, and `react-dom/server` are not.
-  Bundle them in the app, or avoid them.
+- Keep `react`, `react-dom`, `react-dom/client`, `react/jsx-runtime`, and
+  `react/compiler-runtime` external. Do not bundle a second copy of React;
+  duplicate React copies break hooks and context.
+- Only the exact specifiers above are mapped. Other subpaths such as
+  `react/jsx-dev-runtime` and `react-dom/server` are not. Bundle them in the
+  app, or avoid them.
 - A production app bundle is imported from a blob URL but resolves bare imports
   through the host document's import map. Do not rewrite these specifiers to
   file paths.
 - If another shared dependency is needed, it must either be bundled or added to
-  the host import map in `vite.config.ts`; apps cannot add mappings themselves.
+  [`shared-modules.js`](shared-modules.js) and assigned in `src/main.tsx`; apps
+  cannot add mappings themselves.
 - React Compiler users: keep `react/compiler-runtime` external as well; the host
   maps it to the compiler runtime that belongs to the same React instance.
 
 In development Vite resolves the bare imports for you. The import map matters
 most for a prebuilt app bundle loaded with `import()` from a blob URL.
+
+`npm run check:importmap` verifies the built host import map and every
+`devapps/*/dist/*.js` bundle against `shared-modules.js`. The host and app build
+scripts run the same check automatically.
 
 ## Production packaging: one ESM entry file per app
 
@@ -279,6 +287,7 @@ build: {
         external: [
             'react',
             'react-dom',
+            'react-dom/client',
             'react/jsx-runtime',
             'react/compiler-runtime',
         ],

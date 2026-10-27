@@ -5,10 +5,21 @@ import { viteSingleFile } from "vite-plugin-singlefile"
 import dts from 'vite-plugin-dts'
 
 // These are added to global window, see main.tsx
-import React from 'react';
-import ReactDOM from 'react-dom/client';
+import * as React from 'react';
+import * as ReactDOM from 'react-dom';
+import * as ReactDOMClient from 'react-dom/client';
 import * as ReactJSXRuntime from 'react/jsx-runtime';
 import * as ReactCompilerRuntime from 'react/compiler-runtime';
+import { SHARED_MODULES } from './shared-modules.js';
+
+// TypeScript checks that this map covers every specifier in SHARED_MODULES.
+const sharedModuleNamespaces: Record<(typeof SHARED_MODULES)[number]['specifier'], object> = {
+    'react': React,
+    'react-dom': ReactDOM,
+    'react-dom/client': ReactDOMClient,
+    'react/jsx-runtime': ReactJSXRuntime,
+    'react/compiler-runtime': ReactCompilerRuntime,
+};
 
 
 // https://vite.dev/config/
@@ -40,15 +51,15 @@ export default defineConfig(({ mode }) => {
                         .join(' ');
                     }
 
-                    // 2. Build the stringified import map matching your pattern
-                    const importMap = {
-                        imports: {
-                            "react": `data:text/javascript,${generateExports(React, "window.React")}`,
-                            "react-dom": `data:text/javascript,${generateExports(ReactDOM, "window.ReactDOM")}`,
-                            "react/jsx-runtime": `data:text/javascript,${generateExports(ReactJSXRuntime, "window.ReactJSXRuntime")}`,
-                            "react/compiler-runtime": `data:text/javascript,${generateExports(ReactCompilerRuntime, "window.ReactCompilerRuntime")}`
-                        }
-                    };
+                    // 2. Build the import map from the shared module list.
+                    // The same list drives the app build externals, so the two cannot drift apart.
+                    const imports: Record<string, string> = {};
+                    for (const { specifier, global } of SHARED_MODULES) {
+                        const namespace = sharedModuleNamespaces[specifier];
+                        imports[specifier] = `data:text/javascript,${generateExports(namespace, `window.${global}`)}`;
+                    }
+
+                    const importMap = { imports };
 
                     const importMapHtml = `<script type="importmap">${JSON.stringify(importMap)}</script>`;
 
