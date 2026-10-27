@@ -86,8 +86,4 @@ export class A3API {
   }
 }
 
-declare global {
-    interface Window { A3API: A3API; }
-}
-
 window.A3API = new A3API;

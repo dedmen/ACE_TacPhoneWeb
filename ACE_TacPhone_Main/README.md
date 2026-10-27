@@ -129,6 +129,7 @@ The entry module must export:
 
 ```ts
 import React from 'react';
+import type { AppPanelInfo } from './TacPhoneMain';
 
 export function GetTacPhoneApps(): AppPanelInfo[] {
     return [{
@@ -144,8 +145,12 @@ export function OnMessageFromGame(message: object): void | Promise<void> {
 }
 ```
 
-`AppPanelInfo` is declared in [`src/TacPhoneMain.d.ts`](src/TacPhoneMain.d.ts);
-copy that declaration file into an app if it does not already have it.
+`AppPanelInfo` is part of the host API declarations. The host build generates
+`dist/TacPhoneMain.d.ts` from [`src/TacPhoneMain.ts`](src/TacPhoneMain.ts) and
+syncs it to every `devapps/*/src/TacPhoneMain.d.ts`. For an app outside this
+repository, copy the generated file into the app's `src` directory, or run
+`npm run sync:api-types -- <path-to-app-src>`. Do not edit the copied file by
+hand; change the host API source instead.
 
 | Panel field | Contract |
 | --- | --- |
@@ -205,7 +210,15 @@ The host exposes these before loading apps:
 | `window.TacPhoneUtils.CommandRegistry` | Message router helper shown above. |
 | `window.A3API` | The engine-provided browser API. Prefer `window.Networking` so the same app works in external-browser mode. |
 
-Tooling types for these are also in `src/TacPhoneMain.d.ts`.
+Tooling types for these are generated into `dist/TacPhoneMain.d.ts` and synced
+into the development apps by the host build.
+
+The public API source is [`src/TacPhoneMain.ts`](src/TacPhoneMain.ts). Add
+app-facing classes, types, and `window` globals there; the build bundles them
+with the host declarations and updates the app copies. Never edit a synced
+`TacPhoneMain.d.ts` directly. Import these declarations with `import type`;
+at runtime the host API is accessed through `window`. The bundle also types the
+shared module globals (`window.React`, `window.ReactDOM`, and so on).
 
 ## Import-map constraints
 

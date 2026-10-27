@@ -1,10 +1,18 @@
 import "./A3API";
 
-interface Networking {
+export interface Networking {
  WhenReady(): Promise<void>;
  Request(params:object): Promise<object>;
+ /** Loads a text file from the game filesystem. */
  LoadGameFileText(path: string): Promise<string>;
+ /** Loads a texture from the game filesystem and returns it as a data URL. */
  LoadGameFileTexture(path: string, maxSize: number): Promise<string>;
+ /**
+  * Loads and preprocesses file from game filesystem.
+  *
+  * @param config - JSON object of bool true/false entries: { drawTreeObjects, layerTerrain, layerCountlines, layerAir, layerTownNames, layerMountains, layerGrid, layerForest, layerRock, layerRoads, layerObjects, simpleRoads }
+  * @returns The terrain as SVG image
+  */
  LoadGameTerrain(config: object): Promise<string>;
 
  OnMessageFromGame(message: object): void;
@@ -379,8 +387,4 @@ export function IsLocalDev()
 
 
 // Its a global, accessible to everyone
-declare global {
-    interface Window { Networking: Networking; }
-}
-
 window.Networking = window.Networking || (IsArma() ? new NetworkingA3() : new NetworkingWebsocket());

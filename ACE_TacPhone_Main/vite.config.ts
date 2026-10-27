@@ -31,7 +31,13 @@ export default defineConfig(({ mode }) => {
     return {
         plugins: [
             react(),
-            dts({ include: ['src'], insertTypesEntry: true, tsconfigPath: "./tsconfig.app.json",  }),
+            // Emit per-file declarations; scripts/bundle-api-types.mjs rolls the
+            // public API entry (src/TacPhoneMain.ts) into dist/TacPhoneMain.d.ts.
+            dts({
+                include: ['src'],
+                entryRoot: 'src',
+                tsconfigPath: './tsconfig.app.json',
+            }),
             babel({ presets: [reactCompilerPreset()] }),
             viteSingleFile(),
 

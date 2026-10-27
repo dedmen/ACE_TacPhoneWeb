@@ -83,6 +83,8 @@ generated files are git-ignored.
 `src/main.tsx` exports:
 
 ```ts
+import type { AppPanelInfo } from './TacPhoneMain';
+
 export function GetTacPhoneApps(): AppPanelInfo[]
 export function OnMessageFromGame(message: object): void | Promise<void>
 ```
@@ -94,8 +96,8 @@ The current panels are:
 
 A panel has a globally unique `id`, an `appComponent` created with no props,
 `GetDefaultTitle()`, and `GetTacPhoneIcon()`. See the
-[host app contract](../../README.md#app-contract) and
-`src/TacPhoneMain.d.ts` for the full definitions.
+[host app contract](../../README.md#app-contract) and the generated
+`src/TacPhoneMain.d.ts` (written by the host build) for the full definitions.
 
 Game requests use:
 

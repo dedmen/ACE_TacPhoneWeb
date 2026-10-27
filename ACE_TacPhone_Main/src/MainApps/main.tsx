@@ -1,3 +1,4 @@
+import type { AppPanelInfo } from "../Backend/Types";
 
 // These are apps included in TacPhone, even if no other apps are loaded. Core functionality like Notifications and Settings
 

@@ -1,5 +1,6 @@
 
 import React from "react";
+import type { AppPanelInfo } from '../Backend/Types';
 import styles from './AppChooserPanel.module.css'
 import { AppErrorBoundary } from './AppErrorBoundary';
 

@@ -66,7 +66,4 @@ export class CommandRegistry {
 
 // The apps don't have access to our code itself, we need to store the prototype globally so they can access it
 
-declare global {
-    interface Window { TacPhoneUtils: { CommandRegistry: typeof CommandRegistry }; }
-}
 window.TacPhoneUtils = {...window.TacPhoneUtils, CommandRegistry};

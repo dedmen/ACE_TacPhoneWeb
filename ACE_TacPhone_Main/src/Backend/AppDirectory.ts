@@ -1,11 +1,5 @@
 import { IsLocalDev } from "./Networking";
-
-type AppInfo = {
-    devfile: string;
-    file: string;
-    module: AppModule;
-    panels: Array<AppPanelInfo>;
-};
+import type { AppInfo, AppModule, AppPanelInfo } from "./Types";
 
 type AppInfoSource = Pick<AppInfo, "devfile" | "file">;
 
@@ -13,7 +7,7 @@ function errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
 }
 
-class AppDirectory
+export class AppDirectory
 {
     knownApps: Map<string, AppInfo>;
     knownPanels: Map<string, AppPanelInfo>;
@@ -209,7 +203,4 @@ class AppDirectory
 }
 
 
-declare global {
-    interface Window { AppDirectory: AppDirectory; }
-}
 window.AppDirectory = new AppDirectory;
