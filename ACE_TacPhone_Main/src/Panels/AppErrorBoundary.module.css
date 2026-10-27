@@ -1,0 +1,40 @@
+.ErrorPanel {
+    box-sizing: border-box;
+    height: 100%;
+    padding: 20px;
+    background-color: #2a1111;
+    color: #ffd7d7;
+
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    align-items: flex-start;
+}
+
+.ErrorTitle {
+    font-size: large;
+    font-weight: bold;
+    color: #ff9f9f;
+}
+
+.ErrorMessage {
+    max-width: 100%;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: monospace;
+    font-size: 12px;
+}
+
+.RetryButton {
+    padding: 6px 14px;
+    border: 1px solid #ff9f9f;
+    border-radius: 6px;
+    background-color: transparent;
+    color: #ffd7d7;
+    cursor: pointer;
+}
+
+.RetryButton:hover {
+    background-color: #4a1d1d;
+}

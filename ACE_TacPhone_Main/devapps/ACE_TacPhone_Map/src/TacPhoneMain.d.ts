@@ -10,11 +10,12 @@ interface AppPanelInfo {
 
 interface AppModule {
     GetTacPhoneApps(): Array<AppPanelInfo>;
-    OnMessageFromGame(message: object): void;
+    OnMessageFromGame?(message: object): void | Promise<void>;
 }
 
 // Networking
 interface Networking {
+    WhenReady(): Promise<void>;
     Request(params: object): Promise<object>;
     LoadGameFileText(path: string): Promise<string>;
     LoadGameFileTexture(path: string, maxSize: number): Promise<string>;
@@ -83,8 +84,13 @@ type AppInfo = {
 declare class AppDirectory {
     knownApps: Map<string, AppInfo>;
     knownPanels: Map<string, AppPanelInfo>;
+    failedApps: Map<string, string>;
     constructor();
     private fetchExternalModule;
+    private getModule;
+    private parseAppData;
+    private parseAppInfo;
+    private validatePanels;
     LoadAvailableApps(): Promise<void>;
 }
 declare global {

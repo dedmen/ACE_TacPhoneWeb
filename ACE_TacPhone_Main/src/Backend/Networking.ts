@@ -1,12 +1,40 @@
 import "./A3API";
 
 interface Networking {
+ WhenReady(): Promise<void>;
  Request(params:object): Promise<object>;
  LoadGameFileText(path: string): Promise<string>;
  LoadGameFileTexture(path: string, maxSize: number): Promise<string>;
  LoadGameTerrain(config: object): Promise<string>;
 
  OnMessageFromGame(message: object): void;
+}
+
+function forwardMessageToApp(message: object): void {
+    const { a } = message as { a?: unknown };
+
+    if (typeof a !== "string" || a.length === 0) {
+        console.warn("Message from game has no app target", message);
+        return;
+    }
+
+    const handler = window.AppDirectory?.knownApps.get(a)?.module?.OnMessageFromGame;
+    if (typeof handler !== "function") {
+        console.warn(`No loaded TacPhone app can handle a message for "${a}"`, message);
+        return;
+    }
+
+    try {
+        const result = (handler as (message: object) => unknown)(message);
+
+        if (result !== null && result !== undefined && typeof (result as { then?: unknown }).then === "function") {
+            Promise.resolve(result).catch(error => {
+                console.error(`TacPhone app "${a}" failed to handle a message:`, error);
+            });
+        }
+    } catch (error) {
+        console.error(`TacPhone app "${a}" failed to handle a message:`, error);
+    }
 }
 
 
@@ -16,6 +44,11 @@ class NetworkingA3 implements Networking {
     constructor() {
         console.log("NetworkStartup A3");
     };
+
+    WhenReady(): Promise<void> {
+        // A3API is injected synchronously by the game, so there is nothing to wait for.
+        return Promise.resolve();
+    }
 
     GenerateRequestID(): string {
         return `nr${this.requestCounter++}`;
@@ -56,11 +89,8 @@ class NetworkingA3 implements Networking {
     OnMessageFromGame(message: object): void {
         // The game sent us a message, probably a notification about something
         // Forward it to the App its destined for
-
         console.log("Message from game", message);
-
-        const { a } = message as { a: string };
-        window.AppDirectory.knownApps.get(a)?.module.OnMessageFromGame(message);
+        forwardMessageToApp(message);
     }
 
 };
@@ -96,7 +126,12 @@ async function decompressFromBase64(base64Input: string): Promise<string> {
 
 class NetworkingWebsocket implements Networking {
     requestCounter: number = 0;
-    socket: WebSocket;
+    socket!: WebSocket;
+
+    private readyPromise!: Promise<void>;
+    private resolveReady: (() => void) | undefined;
+    private rejectReady: ((reason?: unknown) => void) | undefined;
+    private isReady = false;
 
     // We cannot use A3API's pendingRequests implementation, so we ship our own
     private pendingRequests: { [key: string]: Array<{resolve: (_:object)=>void, reject: (_:any)=>void}> } = {};
@@ -118,6 +153,18 @@ class NetworkingWebsocket implements Networking {
 
     constructor() {
         console.log("NetworkStartup WebSocket");
+        this.connect();
+    };
+
+    private connect(): void {
+        this.isReady = false;
+        this.readyPromise = new Promise<void>((resolve, reject) => {
+            this.resolveReady = resolve;
+            this.rejectReady = reject;
+        });
+
+        // Callers that don't need networking may never await this promise; don't report it as unhandled.
+        this.readyPromise.catch(() => {});
 
         // Establish websocket connection to our server
 
@@ -127,6 +174,9 @@ class NetworkingWebsocket implements Networking {
         this.socket = new WebSocket(wsURL);
         this.socket.onopen = () => {
             console.log("[open] Connection established");
+            this.isReady = true;
+            this.resolveReady?.();
+            this.resolveReady = this.rejectReady = undefined;
         };
 
         this.socket.onmessage = (event) => {
@@ -142,7 +192,7 @@ class NetworkingWebsocket implements Networking {
             this._response(jsonData.k, jsonData.d);
         };
 
-        this.socket.onclose = function(event) {
+        this.socket.onclose = (event) => {
             if (event.wasClean) {
                 console.log(`[close] Connection closed cleanly, code=${event.code} reason=${event.reason}`);
             } else {
@@ -150,12 +200,32 @@ class NetworkingWebsocket implements Networking {
                 // event.code is usually 1006 in this case
                 console.log('[close] Connection died');
             }
+
+            this.isReady = false;
+
+            if (this.rejectReady) {
+                this.rejectReady(new Error(`TacPhone websocket closed before connecting (code=${event.code})`));
+                this.resolveReady = this.rejectReady = undefined;
+            }
         };
 
-        this.socket.onerror = function(error) {
+        this.socket.onerror = (error) => {
             console.log(`[error] ${JSON.stringify(error)}`);
+
+            if (!this.isReady && this.rejectReady) {
+                this.rejectReady(new Error("Could not connect to the TacPhone websocket"));
+                this.resolveReady = this.rejectReady = undefined;
+            }
         };
     };
+
+    WhenReady(): Promise<void> {
+        // Retry the connection if the previous attempt failed or the connection has since closed.
+        if (!this.isReady && this.resolveReady === undefined)
+            this.connect();
+
+        return this.readyPromise;
+    }
 
     GenerateRequestID(): string {
         return `nr${this.requestCounter++}`;
@@ -227,11 +297,8 @@ class NetworkingWebsocket implements Networking {
     OnMessageFromGame(message: object): void {
         // The game sent us a message, probably a notification about something
         // Forward it to the App its destined for
-
         console.log("Message from game", message);
-
-        const { a } = message as { a: string };
-        window.AppDirectory.knownApps.get(a)?.module.OnMessageFromGame(message);
+        forwardMessageToApp(message);
     }
 
 };
