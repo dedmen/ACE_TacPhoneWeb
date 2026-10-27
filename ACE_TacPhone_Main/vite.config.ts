@@ -23,7 +23,7 @@ export default defineConfig({
             // This hook modifies the index.html file right before it is served to the browser
             transformIndexHtml(html) {
                 // 1. Gather all the keys from your local node_modules installation of React
-                const skippedKeys = new Set(['__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED', '__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE', '__COMPILER_RUNTIME']);
+                const skippedKeys = new Set(['__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED', '__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE', '__COMPILER_RUNTIME', 'default', 'module.exports']);
 
                 const generateExports = (x: any, locName: string) => {
                     return `export default ${locName}; `
@@ -38,7 +38,7 @@ export default defineConfig({
                 const importMap = {
                     imports: {
                         "react": `data:text/javascript,${generateExports(React, "window.React")}`,
-                        "react-dom": `data:text/javascript,${generateExports(ReactDOM, " window.ReactDOM")}`,
+                        "react-dom": `data:text/javascript,${generateExports(ReactDOM, "window.ReactDOM")}`,
                         "react/jsx-runtime": `data:text/javascript,${generateExports(ReactJSXRuntime, "window.ReactJSXRuntime")}`
                     }
                 };
