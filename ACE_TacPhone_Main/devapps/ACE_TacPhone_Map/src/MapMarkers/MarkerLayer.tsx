@@ -2,7 +2,8 @@ import VectorLayer from 'ol/layer/Vector';
 import VectorSource from 'ol/source/Vector';
 import Feature, { type FeatureLike } from 'ol/Feature';
 import Point from 'ol/geom/Point';
-import { Style, Icon, Text, Fill } from 'ol/style';
+import LineString from 'ol/geom/LineString';
+import { Style, Icon, Text, Fill, Stroke } from 'ol/style';
 import { mapCommandRegistry } from '../CommandRegistry';
 
 
@@ -43,7 +44,7 @@ export class MarkerLayerManager {
     public layer: VectorLayer<VectorSource>;
     private source: VectorSource;
     // Registry to easily find features by ID without looping through the entire layer
-    private markerRegistry: Map<string, Feature<Point>> = new Map();
+    private markerRegistry: Map<string, Feature<Point | LineString>> = new Map();
 
     //#TODO store these globally, and only load them once, in case we have multiple maps
     // In general if we have multiple maps, there should probably just be one MarkerLayerManager
@@ -128,6 +129,38 @@ export class MarkerLayerManager {
         // Everything we can dynamically solve here, is slower (updated every render, instead of once at marker creation), but we don't fill the style cache with lots of crap
 
         const baseStyle = feature.get('baseStyle') as Style;
+        if (!baseStyle) {
+            return baseStyle;
+        }
+
+        const geometry = feature.getGeometry();
+        if (geometry instanceof LineString) {
+            const alpha = feature.get('alpha') as number;
+            if (alpha !== undefined && alpha !== null && alpha !== 1) {
+                const stroke = baseStyle.getStroke();
+                if (stroke) {
+                    const color = stroke.getColor();
+
+                    // this is quite annoying, unlike icons/images, stroke has no opacity, it needs to be in the color#
+                    // We initially set it as #hex
+
+                    if (typeof color === 'string') {
+                        if (color.startsWith('#') && color.length === 9) {
+                            const r = parseInt(color.slice(1,3), 16);
+                            const g = parseInt(color.slice(3,5), 16);
+                            const b = parseInt(color.slice(5,7), 16);
+                            stroke.setColor(`rgba(${r}, ${g}, ${b}, ${alpha})`);
+                        } else if (color.startsWith('rgba')) {
+                            // replace alpha
+                            stroke.setColor(color.replace(/rgba\(([^,]+),([^,]+),([^,]+),([^)]+)\)/, `rgba($1,$2,$3,${alpha})`));
+                        }
+                    }
+                }
+            }
+            return baseStyle;
+        }
+
+        // Everything we can dynamically solve here, is slower (updated every render, instead of once at marker creation), but we don't fill the style cache with lots of crap
 
         const rotationInRadians = (feature.get('dir') || 0) * (Math.PI / 180); 
         const alpha = feature.get('alpha') as number; 
@@ -144,15 +177,22 @@ export class MarkerLayerManager {
 
         //var textSize = 32 * zoom;
 
-        var text = new Text({
-            text: feature.get('label'), // Will be updated per feature
-            font: `normal bold condensed 24px "Roboto", sans-serif`,
-            fill: new Fill({ color: (baseStyle.getImage() as Icon).getColor() }),
-            offsetX: 32*size[1], //#TODO offset depends on icon size, text is right side of icon
-            scale: zoom,
-            declutterMode: "declutter",
-            textAlign: "left",
-        });
+        var labelText = feature.get('label');
+
+        if (labelText != '')
+        {
+            var text = new Text({
+                text: feature.get('label'), // Will be updated per feature
+                font: `normal bold condensed 24px "Roboto", sans-serif`,
+                fill: new Fill({ color: (baseStyle.getImage() as Icon)?.getColor() || '#ffffff' }),
+                offsetX: size ? 32*size[1] : 32, //#TODO offset depends on icon size, text is right side of icon
+                scale: zoom,
+                declutterMode: "declutter",
+                textAlign: "left",
+            });
+
+            baseStyle.setText(text);
+        }
 
         if (shadow)
         {
@@ -163,7 +203,7 @@ export class MarkerLayerManager {
         baseStyle.getImage()?.setRotation(rotationInRadians);
         baseStyle.getImage()?.setOpacity(alpha);
         baseStyle.getImage()?.setScale(size);
-        baseStyle.setText(text);
+
 
         if (shadow)
         {
@@ -186,6 +226,22 @@ export class MarkerLayerManager {
 
         if (this.markerStyleCache.has(cacheKey))
             return this.markerStyleCache.get(cacheKey)!;
+
+        if (shape === 'POLYLINE' || shape === 'polyline') {
+            var colorResolved = this.markerColors.get(color);
+            var lineColor = colorResolved ? colorResolved.color : '#000000';
+            var strokeWidth = 2;
+
+            var resStyle = new Style({
+                stroke: new Stroke({
+                    color: lineColor,
+                    width: strokeWidth,
+                }),
+            });
+
+            this.markerStyleCache.set(cacheKey, resStyle);
+            return resStyle;
+        }
 
         var markerIcon = new Icon({
                 // Placeholder spinner image
@@ -255,17 +311,85 @@ export class MarkerLayerManager {
      */
     public handleUpsert(data: MarkerUpdate): void {
 
-        const [name, type, color, dir, pos, text, shape, alpha, brush, size, _channel, _polyline] = data;
+        const [name, type, color, dir, pos, text, shape, alpha, brush, size, _channel, polyline] = data;
 
         var sizeSplit = size.split(",").map(x => Number(x));
+
+        // Parse polyline if present
+        if (polyline && polyline.length > 0) {
+            const coordinates: number[][] = [];
+            const parts = polyline.split(';');
+            for (let i = 0; i < parts.length; i += 2) {
+                if (parts[i] !== '' && parts[i + 1] !== '') {
+                    coordinates.push([Number(parts[i]), Number(parts[i + 1])]);
+                }
+            }
+
+            if (coordinates.length > 0) {
+                const existingFeature = this.markerRegistry.get(name);
+
+                if (existingFeature) {
+                    const geometry = existingFeature.getGeometry();
+                    if (geometry instanceof LineString) {
+                        geometry.setCoordinates(coordinates);
+                    } else {
+                        // Replace point with polyline
+                        this.source.removeFeature(existingFeature);
+                        this.markerRegistry.delete(name);
+                        const newFeature = new Feature({
+                            geometry: new LineString(coordinates),
+                            id: name,
+                            label: text,
+                        });
+                        newFeature.set("baseStyle", this.createFeatureStyle(type, shape, color, brush, size));
+                        newFeature.set("alpha", alpha);
+                        this.source.addFeature(newFeature);
+                        this.markerRegistry.set(name, newFeature);
+                        return;
+                    }
+
+                    existingFeature.set("baseStyle", this.createFeatureStyle(type, shape, color, brush, size));
+                    existingFeature.set("label", text);
+                    existingFeature.set("alpha", alpha);
+                } else {
+                    const newFeature = new Feature({
+                        geometry: new LineString(coordinates),
+                        id: name,
+                        label: text,
+                    });
+                    newFeature.set("baseStyle", this.createFeatureStyle(type, shape, color, brush, size));
+                    newFeature.set("alpha", alpha);
+                    this.source.addFeature(newFeature);
+                    this.markerRegistry.set(name, newFeature);
+                }
+                return;
+            }
+        }
 
         const existingFeature = this.markerRegistry.get(name);
 
         if (existingFeature) {
             // Update coordinates smoothly
             const geometry = existingFeature.getGeometry();
-            if (geometry) {
+            if (geometry instanceof Point) {
                 geometry.setCoordinates(pos);
+            } else if (geometry instanceof LineString) {
+                // Switching from polyline to point
+                this.source.removeFeature(existingFeature);
+                this.markerRegistry.delete(name);
+                const newFeature = new Feature({
+                    geometry: new Point(pos),
+                    id: name,
+                    label: text,
+                });
+                newFeature.set("dir", dir);
+                newFeature.set("alpha", alpha);
+                newFeature.set("size", sizeSplit);
+                newFeature.set("baseStyle", this.createFeatureStyle(type, shape, color, brush, size));
+                newFeature.set("shadow", this.markerTypes.get(type)!.shadow != 0);
+                this.source.addFeature(newFeature);
+                this.markerRegistry.set(name, newFeature);
+                return;
             }
 
             existingFeature.set("dir", dir);
