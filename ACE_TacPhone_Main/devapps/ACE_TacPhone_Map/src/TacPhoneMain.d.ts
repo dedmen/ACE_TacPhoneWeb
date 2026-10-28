@@ -8,46 +8,6 @@ import type * as ReactJSXRuntime from "react/jsx-runtime";
 import type * as ReactCompilerRuntime from "react/compiler-runtime";
 import { ComponentType } from 'react';
 
-export declare class A3API {
-    private pendingRequests;
-    _response(key: string, content: string): void;
-    _push(key: string, d: {
-        resolve: (_: string) => void;
-        reject: (_: any) => void;
-    }): boolean;
-    /**
-     * Loads file from game filesystem.
-     *
-     * @param filePath - Path in game filesystem, without leading backslash
-     * @param maxSize - maximum texture width (used to select Mip)
-     * @returns The file content as raw string
-     */
-    RequestTexture(texturePath: string, maxSize: number): Promise<string>;
-    /**
-     * Loads file from game filesystem.
-     *
-     * @param filePath - same as loadFile SQF command
-     * @returns The file content as raw string
-     */
-    RequestFile(filePath: string): Promise<string>;
-    /**
-     * Loads and preprocesses file from game filesystem.
-     *
-     * @param filePath - same as preprocessFile SQF command
-     * @returns The file content
-     */
-    RequestPreprocessedFile(filePath: string): Promise<string>;
-    SendAlert(content: string): void;
-    SendConfirm(content: string): Promise<string>;
-    /**
-     * Loads and preprocesses file from game filesystem.
-     *
-     * @param config - JSON object of bool true/false entries: { drawTreeObjects, layerTerrain, layerCountlines, layerAir, layerTownNames, layerMountains, layerGrid, layerForest, layerRock, layerRoads, layerObjects, simpleRoads }
-     * @returns The terrain as SVG image
-     */
-    RequestTerrainSVG(config: object): Promise<string>;
-}
-
 export declare class AppDirectory {
     knownApps: Map<string, AppInfo>;
     knownPanels: Map<string, AppPanelInfo>;
@@ -128,7 +88,6 @@ declare global {
         ReactJSXRuntime: typeof ReactJSXRuntime;
         ReactCompilerRuntime: typeof ReactCompilerRuntime;
         Networking: Networking;
-        A3API: A3API;
         AppDirectory: AppDirectory;
         TacPhoneUtils: {
             CommandRegistry: typeof CommandRegistry;

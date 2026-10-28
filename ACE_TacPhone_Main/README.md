@@ -208,7 +208,6 @@ The host exposes these before loading apps:
 | `window.Networking` | `WhenReady()`, `Request()`, `LoadGameFileText()`, `LoadGameFileTexture()`, `LoadGameTerrain()`. |
 | `window.AppDirectory` | Read-only view of `knownApps`, `knownPanels`, and `failedApps`. Do not modify it. |
 | `window.TacPhoneUtils.CommandRegistry` | Message router helper shown above. |
-| `window.A3API` | The engine-provided browser API. Prefer `window.Networking` so the same app works in external-browser mode. |
 
 Tooling types for these are generated into `dist/TacPhoneMain.d.ts` and synced
 into the development apps by the host build.

@@ -86,4 +86,12 @@ export class A3API {
   }
 }
 
+declare global {
+    interface Window {
+        // Internal engine shim. Apps should use window.Networking so they
+        // keep working in external-browser mode.
+        A3API: A3API;
+    }
+}
+
 window.A3API = new A3API;

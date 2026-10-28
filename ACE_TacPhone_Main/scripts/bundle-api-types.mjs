@@ -271,7 +271,6 @@ async function verifyDeclarations() {
     const windowProperties = new Set(windowType.getProperties().map(property => property.getName()))
     const expected = [
         'Networking',
-        'A3API',
         'AppDirectory',
         'TacPhoneUtils',
         ...SHARED_MODULES.map(({ global }) => global),
