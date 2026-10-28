@@ -54,12 +54,7 @@ needs a product decision before coding, **[wontfix]** deliberately left as is.
   produces invalid JSON, arrays/BOM break. Parse with `JsonNode`, require an
   object, add `s` as a property, reserialize; reply with a protocol error frame
   on bad input instead of dropping the connection.
-- [ ] **[bug]** Binary assets are advertised but corrupted. `getContentType`
-  claims `.png/.jpg/.gif/.webp/.ico/.woff/.woff2/.ttf/.wasm`
-  (`WebServer.cs:326-335`), but content travels `loadFile` -> UTF-8 string ->
-  `Marshal.PtrToStringUTF8` (`DllEntry.cs:78`), so NUL truncates and invalid
-  UTF-8 becomes replacement characters. Either restrict to text or add a
-  Base64/binary `FileContent` path (see `:398`).
+
 - [ ] **[bug]** One client's 2 s timeout cancels another's request.
   `WebServer.cs:189-221`: concurrent GETs share a `TaskCompletionSource`, and the
   first waiter calls `TrySetCanceled()` on it. Give each request its own timeout,

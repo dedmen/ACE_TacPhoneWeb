@@ -306,6 +306,8 @@ namespace ArmaServerSide
         /// Content type for app files. Modules must be served as JavaScript or the browser
         /// refuses to execute them, so this is not merely cosmetic.
         /// </summary>
+        /// <remarks>Only text-based formats are supported. Binary assets (images, fonts, WASM)
+        /// cannot be handled due to UTF-8 string conversion limitations in the C++ bridge.</remarks>
         private static string GetContentType(string fileName)
         {
             // The root is served as the app entry point (index.html).
@@ -324,15 +326,6 @@ namespace ArmaServerSide
                 ".json" => "application/json; charset=utf-8",
                 ".map" => "application/json; charset=utf-8",
                 ".svg" => "image/svg+xml",
-                ".png" => "image/png",
-                ".jpg" or ".jpeg" => "image/jpeg",
-                ".gif" => "image/gif",
-                ".webp" => "image/webp",
-                ".ico" => "image/x-icon",
-                ".woff" => "font/woff",
-                ".woff2" => "font/woff2",
-                ".ttf" => "font/ttf",
-                ".wasm" => "application/wasm",
                 _ => "application/octet-stream",
             };
         }
