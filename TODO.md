@@ -128,16 +128,6 @@ needs a product decision before coding, **[wontfix]** deliberately left as is.
 
 ## SQF <-> web protocol
 
-- [ ] **[bug]** The parse guard never fires. `if (isNil "_request")` tests the
-  variable, not the `fromJSON` result (`XEH_postInit.sqf:59-65`,
-  `fnc_loadPhoneBackground.sqf:31-35`). Both then call `_request get "c"` on nil.
-  Check `isNil {_request}` / `isEqualType ""` before use.
-- [ ] **[bug]** The in-game promise continuation is broken.
-  `fnc_loadPhoneBackground.sqf:56-63` uses `_control`, `_request`, and `_sender`
-  from the enclosing handler scope; those locals do not exist when the
-  continuation runs later (`_sender` is not defined at registration at all).
-  Result: no in-game promise (terrain, texture) ever resolves.
-  Use the `_thisArgs` pattern from `XEH_postInit.sqf:76-85`.
 - [ ] **[bug]** Terrain/texture round trip leaks requests.
   `fnc_processBrowserRequest.sqf`: `_success` from `sendCommandToPhone` is
   computed then ignored (`:62-64`, `:110-112`), `deleteAt` results are used
@@ -154,10 +144,6 @@ needs a product decision before coding, **[wontfix]** deliberately left as is.
   behind a debug flag and use `diag_log`/`str`.
 - [ ] **[bug]** The dev console opens on every mission start:
   `fnc_loadPhoneBackground.sqf:76-80` (`//#TODO development, remove this`).
-- [ ] **[cleanup]** `regexReplace ["\//g", "\\"]` (`XEH_postInit.sqf:42`) is
-  parseable as pattern `\/` + flag `g`, but it is unreadable and easy to break.
-  Replace with `splitString "/" joinString "\"` after verifying path handling
-  in-game.
 - [ ] **[decision]** Only `/` is remapped to the addon data folder
   (`XEH_postInit.sqf:33-36`); every other path resolves from the game root, so
   the catch-all is "read game files", not "serve app assets". Restrict or document.
@@ -173,28 +159,12 @@ needs a product decision before coding, **[wontfix]** deliberately left as is.
 
 ### Rendering correctness
 
-- [ ] **[bug]** `View` constraints are wrong and never updated. Hardcoded extent
-  `[0, 0, 30720, 30720]` and no `extent`/`minResolution`/`maxResolution`
-  (`Map.tsx:78-93`); `projection.setExtent` at `:448` does not update the view.
-  Symptoms: pan off the map, zoom far past the 0.2 m/px tiles, `fit` clipped on
-  small panels. OL 10.9 has no `View#setExtent`, so rebuild the view after the
-  terrain size is known and `map.setView(...)`.
-- [ ] **[bug]** Tile caches can reach hundreds of MiB: one `TileLayer` per SVG
-  layer, each with the default `cacheSize: 512` (`Map.tsx:481-522`). Set 32-64
-  and consider clearing caches for hidden layers.
-- [ ] **[bug]** Empty marker color resolves to white. `markerColors` is keyed by
-  class name but `typeResolved.color` is a hex string, so the lookup at
-  `MarkerLayer.tsx:347` never matches. Fall back to the type's own color.
 - [ ] **[bug]** Unvalidated marker `size`/`polyline` produce `NaN`
   (`MarkerLayer.tsx:390, 398-402`): empty size yields `[0]`, odd-length polylines
   pass the `parts[i + 1] !== ''` check with `undefined`.
-- [ ] **[bug]** `declutter` is never enabled (`MarkerLayer.tsx:96-100` vs `:264`),
-  so `Text.declutterMode` has no effect and labels overlap.
 - [ ] **[cleanup]** Per-frame style allocation and deep clones
   (`MarkerLayer.tsx:220-295`); the shadow `Style.clone()` also duplicates the
   label with no displacement. Precompute per type/state.
-- [ ] **[cleanup]** `MarkerLayer.tsx:10` TODO: `size` is `"12,123"` and needs to
-  be decomposed into two numbers instead of string splitting at the call site.
 - [ ] **[cleanup]** `MarkerLayer.tsx:74` TODO: marker types/colors are fetched per
   map instance; load once and share.
 - [ ] **[cleanup]** Icon offset and shadow displacement are hardcoded and wrong
@@ -227,24 +197,6 @@ needs a product decision before coding, **[wontfix]** deliberately left as is.
 - [ ] **[cleanup]** `LayerSwitcher.tsx:27-62` only tracks add/remove; visibility
   and title changes made elsewhere leave the checkboxes stale.
 
-### Single-file build
-
-- [ ] **[bug]** CSS data URL is injected into a single-quoted JS string without
-  escaping `'` (`build/singlefile.ts:44-50`); `encodeURIComponent` leaves `'`,
-  `!`, `(`, `)`, `*`, `~` alone. One apostrophe in a stylesheet is a blank panel
-  in-game. Use `JSON.stringify` or `%27`.
-- [ ] **[bug]** `vite.config.ts:29-33` returns `window.__toCdnUrl(...)`, which is
-  defined nowhere. Delete the block.
-- [ ] **[robustness]** Non-inlined assets only warn (`build/singlefile.ts:169-171`),
-  so a release build can ship a bundle that needs a side file the loader cannot
-  serve. Fail the release build when `files.other` is non-empty.
-- [ ] **[cleanup]** `build/singlefile.ts:40` TODO: alternatively embed assets as
-  data URLs.
-- [ ] **[cleanup]** `Inspect()` and `@vitejs/devtools` are in the production
-  config (`vite.config.ts:26`). Gate on `mode === 'development'` or drop.
-- [ ] **[cleanup]** `index.html:5` references `/favicon.svg`, which does not
-  exist; `src/tilerSample.html` is an unreferenced leftover.
-
 ### App surface
 
 - [ ] **[bug]** The placeholder panel ships: `ACE_TacPhone_Map_Placeholder`
@@ -261,8 +213,6 @@ needs a product decision before coding, **[wontfix]** deliberately left as is.
 - [ ] **[cleanup]** Broadcast log spam when no map panel is mounted:
   `routeMessage` warns for every `Marker.Upsert`/`Delete` (`MessageRouter.ts:51`)
   and `console.warn` survives the release strip. Log at debug level.
-- [ ] **[cleanup]** `Map.tsx:250-253` prevents `contextmenu` on the whole
-  viewport, blocking the browser menu where there is no custom action.
 - [ ] **[cleanup]** `Map.tsx:96` `forceUpdate` hack; a state bump or ref-driven
   redraw would be clearer.
 - [ ] **[cleanup]** `README.md:66` omits the emitted `.d.ts` from the build
@@ -299,8 +249,4 @@ needs a product decision before coding, **[wontfix]** deliberately left as is.
 
 ## Tooling and dependencies
 
-- [ ] **[bug]** `vite@8.1.5` is the direct high-severity advisory in both
-  packages (fixed in 8.1.6+, latest 8.3.5). Upgrade `ACE_TacPhone_Main` and
-  `ACE_TacPhone_Map`, rerun `npm audit`, both builds, and `check:importmap`.
-- [ ] **[cleanup]** `ACE_TacPhone_Main/ses_e814bb2dbffdoupz1tpykavxwl.json`
-  (~1.3 MB) is untracked session data; add to `.gitignore` or delete.
+- [ ] **[cleanup]** rerun `npm audit`, both builds, and `check:importmap`.
