@@ -80,6 +80,11 @@ export class A3API {
  */
   RequestTerrainSVG(config: object): Promise<string> {
     return new Promise((resolve, reject) => {
+      // The engine protocol replies to the fixed key `t:'k'`, so concurrent
+      // calls share the first response. That is safe only because the host
+      // currently requests the same terrain configuration every time, and
+      // changing that configuration is not intended. If configs ever diverge,
+      // this key must include the serialized config instead.
       if (this._push(`t:'k'`, { resolve, reject }))
         this.SendAlert(`__A3TerSVGReq;k;${btoa(JSON.stringify(config))}`);
     });

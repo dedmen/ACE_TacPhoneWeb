@@ -217,8 +217,7 @@ export class MarkerLayerManager {
         return texturePromise;
     }
 
-    private dynamicIconStyleFunction(feature: FeatureLike, resolution: number)
-    {
+    private dynamicIconStyleFunction = (feature: FeatureLike, resolution: number) => {
         // Each feature owns its base style. Anything that changes per update is
         // baked into that style in createFeatureStyle; only render-time values
         // are applied here.
@@ -293,7 +292,7 @@ export class MarkerLayerManager {
         }
 
         return baseStyle;
-    }
+    };
 
     private createFeatureStyle(type: string, shape: string, color: string, _brush: string, _size: string, alpha: number): Style {
 

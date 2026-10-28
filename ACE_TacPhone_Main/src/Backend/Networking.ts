@@ -26,14 +26,14 @@ function forwardMessageToApp(message: object): void {
         return;
     }
 
-    const handler = window.AppDirectory?.knownApps.get(a)?.module?.OnMessageFromGame;
-    if (typeof handler !== "function") {
+    const appModule = window.AppDirectory?.knownApps.get(a)?.module;
+    if (!appModule || typeof appModule.OnMessageFromGame !== "function") {
         console.warn(`No loaded TacPhone app can handle a message for "${a}"`, message);
         return;
     }
 
     try {
-        const result = (handler as (message: object) => unknown)(message);
+        const result = appModule.OnMessageFromGame(message);
 
         if (result !== null && result !== undefined && typeof (result as { then?: unknown }).then === "function") {
             Promise.resolve(result).catch(error => {
@@ -245,7 +245,13 @@ class NetworkingWebsocket implements Networking {
 
         this.socket.onmessage = (event) => {
             console.log(`[message] Data received from server: ${event.data}`);
-            let jsonData = JSON.parse(event.data);
+            let jsonData: any;
+            try {
+                jsonData = JSON.parse(event.data);
+            } catch (error) {
+                console.error("TacPhone websocket sent invalid JSON:", error, event.data);
+                return;
+            }
             console.log("recv", jsonData);
 
             if (jsonData.k == "command") {
@@ -333,6 +339,9 @@ class NetworkingWebsocket implements Networking {
     async LoadGameFileText(path: string): Promise<string> {
         let fetchURL = IsLocalDev() ? `https://localhost:8001/${path}` : path;
         var fetchRes = await fetch(fetchURL);
+        if (!fetchRes.ok) {
+            throw new Error(`Failed to load "${path}" from "${fetchURL}": HTTP ${fetchRes.status} ${fetchRes.statusText}`);
+        }
         return fetchRes.text();
     }
 
