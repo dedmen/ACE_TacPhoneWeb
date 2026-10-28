@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using System.Collections.Concurrent;
+using System.Net;
 using System.Net.WebSockets;
 using System.Text;
 
@@ -118,10 +119,13 @@ namespace ArmaServerSide
             builder.Services.AddSingleton<WebSocketConnectionManager>();
             builder.Services.AddCors(options =>
             {
-                options.AddPolicy("AllowAll",
+                // Cross-origin access is only needed by the local Vite dev server. The
+                // production web app is served by this host, so its requests are same-origin
+                // and do not need CORS at all.
+                options.AddPolicy("AllowWebApp",
                     policy =>
                     {
-                        policy.AllowAnyOrigin()
+                        policy.SetIsOriginAllowed(origin => IsLoopbackOrigin(origin))
                               .AllowAnyHeader()
                               .AllowAnyMethod();
                     });
@@ -136,17 +140,26 @@ namespace ArmaServerSide
                 app.UseDeveloperExceptionPage();
             }
 
-            app.UseCors("AllowAll");
+            app.UseCors("AllowWebApp");
             app.UseWebSockets();
 
             // WebSocket endpoint
             app.Map("/ws", async context =>
             {
+                // The page can be served from any LAN IP or hostname, so accept an Origin
+                // whose authority matches this request's Host. Browsers always send Origin;
+                // clients without one (curl, scripts) are not part of the app contract.
+                var origin = context.Request.Headers.Origin.ToString();
+                if (!IsAllowedOrigin(origin, context.Request))
+                {
+                    Console.WriteLine($"Rejected WebSocket origin '{origin}' for host '{context.Request.Host}'");
+                    context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                    return;
+                }
+
                 if (context.WebSockets.IsWebSocketRequest)
                 {
                     var connectionManager = context.RequestServices.GetService<WebSocketConnectionManager>()!;
-
-                    //#TODO check origin
 
                     var webSocket = await context.WebSockets.AcceptWebSocketAsync();
                     var connectionId = Guid.NewGuid().ToString();
@@ -160,14 +173,18 @@ namespace ArmaServerSide
                 }
             });
 
-            app.MapGet("/", async context =>
+            // Serve app files (index.html, bundled apps, icons, ...) from the game filesystem.
+            // A catch-all is required: the app bundle imports other files by path, and they
+            // must be resolvable from whatever origin the page was loaded from.
+            app.MapGet("/{**filePath}", async context =>
             {
                 // Ask Arma for the file
 
-                var fileName = context.Request.Path;
-
-                //if (fileName == "/")
-                //    fileName = "index.html";
+                var fileName = context.Request.Path.Value;
+                if (string.IsNullOrEmpty(fileName))
+                {
+                    fileName = "/";
+                }
 
                 var promise = GetOrCreatePendingFile(fileName, out var created);
                 if (created)
@@ -203,11 +220,121 @@ namespace ArmaServerSide
                     return;
                 }
 
-                context.Response.ContentType = "text/html";
+                // The game answers with an empty string when the file does not exist.
+                if (string.IsNullOrEmpty(myResult))
+                {
+                    context.Response.StatusCode = StatusCodes.Status404NotFound;
+                    context.Response.ContentType = "text/plain";
+                    await context.Response.WriteAsync($"File not found: {fileName}");
+                    return;
+                }
+
+                context.Response.ContentType = GetContentType(fileName);
                 await context.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes(myResult));
             });
 
             app.RunAsync();
+        }
+
+        /// <summary>
+        /// Origin validation for the WebSocket endpoint. The web app is served by this
+        /// server, so a legitimate Origin is <c>https://&lt;Host header&gt;</c> regardless
+        /// of which LAN address (IP or hostname) the client used to reach us. Loopback
+        /// origins are always allowed so the Vite dev server can connect.
+        /// </summary>
+        private static bool IsAllowedOrigin(string origin, HttpRequest request)
+        {
+            if (string.IsNullOrEmpty(origin) || string.Equals(origin, "null", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri))
+            {
+                return false;
+            }
+
+            if (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp)
+            {
+                return false;
+            }
+
+            if (IsLoopbackHost(uri.Host))
+            {
+                return true;
+            }
+
+            if (uri.Scheme != Uri.UriSchemeHttps)
+            {
+                return false;
+            }
+
+            // Compare host and port, treating a missing port as the scheme default.
+            if (!string.Equals(uri.Host, request.Host.Host, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            var originPort = uri.IsDefaultPort ? 443 : uri.Port;
+            var requestPort = request.Host.Port ?? (request.IsHttps ? 443 : 80);
+            return originPort == requestPort;
+        }
+
+        private static bool IsLoopbackOrigin(string origin)
+        {
+            return Uri.TryCreate(origin, UriKind.Absolute, out var uri)
+                && (uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp)
+                && IsLoopbackHost(uri.Host);
+        }
+
+        private static bool IsLoopbackHost(string host)
+        {
+            if (string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            // Uri.Host keeps IPv6 literals bracketed ([::1]), which IPAddress cannot parse.
+            var addressText = host.Length > 1 && host[0] == '[' && host[^1] == ']'
+                ? host[1..^1]
+                : host;
+
+            return IPAddress.TryParse(addressText, out var address) && IPAddress.IsLoopback(address);
+        }
+
+        /// <summary>
+        /// Content type for app files. Modules must be served as JavaScript or the browser
+        /// refuses to execute them, so this is not merely cosmetic.
+        /// </summary>
+        private static string GetContentType(string fileName)
+        {
+            // The root is served as the app entry point (index.html).
+            if (fileName.Length == 0 || fileName == "/")
+            {
+                return "text/html; charset=utf-8";
+            }
+
+            var extension = Path.GetExtension(fileName).ToLowerInvariant();
+
+            return extension switch
+            {
+                ".html" or ".htm" => "text/html; charset=utf-8",
+                ".js" or ".mjs" => "text/javascript; charset=utf-8",
+                ".css" => "text/css; charset=utf-8",
+                ".json" => "application/json; charset=utf-8",
+                ".map" => "application/json; charset=utf-8",
+                ".svg" => "image/svg+xml",
+                ".png" => "image/png",
+                ".jpg" or ".jpeg" => "image/jpeg",
+                ".gif" => "image/gif",
+                ".webp" => "image/webp",
+                ".ico" => "image/x-icon",
+                ".woff" => "font/woff",
+                ".woff2" => "font/woff2",
+                ".ttf" => "font/ttf",
+                ".wasm" => "application/wasm",
+                _ => "application/octet-stream",
+            };
         }
 
 

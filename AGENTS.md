@@ -55,6 +55,6 @@ dotnet publish ArmaServerSide.csproj -c Release -p:Platform=x64
 ```
 Output `bin\x64\Release\net10.0\win-x64\publish\arma_webhost_x64.dll`. `dotnet build` gives managed IL only; publish for native. `.slnx` fails in dotnet CLI (C++ vcxproj needs VS MSBuild); build csproj directly. Keep `featureflags.obj` linked (unescaped extension args). DLL is not packaged/committed.
 
-`WebServer.cs`: `GET /` asks game for file via `GetFile` (2s timeout); `/ws` forwards JSON to SQF and injects sender `s`. Update `src/Backend/Networking.ts` + `addons/tacphone/XEH_postInit.sqf` with protocol changes.
+`WebServer.cs`: `GET /{**path}` asks game for any app file via `GetFile` (2s timeout, content type by extension, 404 on empty); `/ws` validates `Origin` (same `Host` authority, or loopback for dev) then forwards JSON to SQF and injects sender `s`. CORS is loopback-only. Update `src/Backend/Networking.ts` + `addons/tacphone/XEH_postInit.sqf` with protocol changes.
 
 Docs: `ACE_TacPhone_Main/README.md`, `devapps/ACE_TacPhone_Map/README.md`.
