@@ -7,13 +7,17 @@ import { Style, Icon, Text, Fill, Stroke } from 'ol/style';
 import { mapCommandRegistry } from '../CommandRegistry';
 
 
-//#TODO size is "12,123", decompose it into two numbers
 // name, type, color, dir, pos, text, shape, alpha, brush, size, channel, polyline
 type MarkerUpdate = [string, string, string, number, [number, number, number], string, string, number, string, string, number, string];
 
 type PendingMarkerOperation =
     | { kind: 'upsert'; marker: MarkerUpdate }
     | { kind: 'delete'; name: string };
+
+const MAX_PENDING_MARKER_OPERATIONS = 512;
+const MARKER_REQUEST_TIMEOUT_MS = 10_000;
+const DEFAULT_MARKER_COLOR = '#ffffff';
+const DEFAULT_MARKER_SIZE: [number, number] = [1, 1];
 
 export interface MarkerType {
     className: string;
@@ -64,6 +68,114 @@ function applyAlphaToColor(color: string, alpha: number): string {
     return color;
 }
 
+function isValidMarkerScale(value: number): boolean {
+    return Number.isFinite(value) && value > 0;
+}
+
+function isFinitePosition(position: unknown): position is [number, number] {
+    return Array.isArray(position) && Number.isFinite(position[0]) && Number.isFinite(position[1]);
+}
+
+/**
+ * Marker sizes arrive either as a number or as a "width,height" string.
+ * Invalid input falls back to the game's default uniform scale (1).
+ */
+function parseMarkerSize(size: unknown): [number, number] {
+    if (typeof size === 'number') {
+        return isValidMarkerScale(size) ? [size, size] : DEFAULT_MARKER_SIZE;
+    }
+
+    if (typeof size !== 'string') {
+        return DEFAULT_MARKER_SIZE;
+    }
+
+    const parts = size.split(',');
+    if (parts.length === 1) {
+        const uniform = Number(parts[0]);
+        return parts[0].trim() !== '' && isValidMarkerScale(uniform)
+            ? [uniform, uniform]
+            : DEFAULT_MARKER_SIZE;
+    }
+
+    if (parts.length === 2) {
+        const width = Number(parts[0]);
+        const height = Number(parts[1]);
+        if (parts[0].trim() !== '' && parts[1].trim() !== '' && isValidMarkerScale(width) && isValidMarkerScale(height)) {
+            return [width, height];
+        }
+    }
+
+    return DEFAULT_MARKER_SIZE;
+}
+
+/**
+ * Parses "x1;y1;x2;y2;..." into coordinates. Returns null when any component
+ * is malformed or there is not an even number of them.
+ */
+function parsePolylineCoordinates(polyline: unknown): number[][] | null {
+    if (typeof polyline !== 'string' || polyline === '') {
+        return null;
+    }
+
+    const parts = polyline.split(';');
+    if (parts.length < 4 || parts.length % 2 !== 0) {
+        return null;
+    }
+
+    const coordinates: number[][] = [];
+    for (let i = 0; i < parts.length; i += 2) {
+        if (parts[i].trim() === '' || parts[i + 1].trim() === '') {
+            return null;
+        }
+
+        const x = Number(parts[i]);
+        const y = Number(parts[i + 1]);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            return null;
+        }
+
+        coordinates.push([x, y]);
+    }
+
+    return coordinates;
+}
+
+/**
+ * Settles with the request result, or null after a timeout/error. This keeps a
+ * hung game request from blocking marker loading forever.
+ */
+function requestWithTimeout<T>(request: Promise<T>, description: string): Promise<T | null> {
+    return new Promise<T | null>((resolve) => {
+        let settled = false;
+        let timer: number | null = null;
+
+        const settle = (value: T | null): void => {
+            if (settled) {
+                return;
+            }
+
+            settled = true;
+            if (timer !== null) {
+                window.clearTimeout(timer);
+            }
+            resolve(value);
+        };
+
+        timer = window.setTimeout(() => {
+            console.warn(`${description} timed out after ${MARKER_REQUEST_TIMEOUT_MS} ms`);
+            settle(null);
+        }, MARKER_REQUEST_TIMEOUT_MS);
+
+        request.then(
+            (value) => settle(value),
+            (error: unknown) => {
+                console.error(`${description} failed`, error);
+                settle(null);
+            },
+        );
+    });
+}
+
 
 export class MarkerLayerManager {
     public layer: VectorLayer<VectorSource>;
@@ -84,6 +196,8 @@ export class MarkerLayerManager {
 
     private initialMarkersLoaded = false;
     private pendingMarkerOperations: PendingMarkerOperation[] = [];
+    private pendingOverflowWarned = false;
+    private destroyed = false;
 
     private unregisterHooks: Array<() => void> = [];
 
@@ -96,6 +210,8 @@ export class MarkerLayerManager {
         this.layer = new VectorLayer({
             properties: { title },
             source: this.source,
+            // Text declutterMode only has an effect on a decluttering layer.
+            declutter: true,
             style: this.dynamicIconStyleFunction
         });
 
@@ -107,11 +223,45 @@ export class MarkerLayerManager {
             mapCommandRegistry.register('Marker.Delete', (payload) => this.handleDelete((payload as {marker: string}).marker as string))
         );
 
-        // Retrieve all type info
+        // Retrieve both snapshots in parallel. GetMarkerTypes used to gate
+        // GetAllMarkers, so a single hung request could block marker loading
+        // forever. requestWithTimeout() guarantees that both settle.
+        const markerConfigPromise = this.loadMarkerConfig();
+        const initialMarkersPromise = this.loadInitialMarkers();
 
-        window.Networking.Request({a: "ACE_TacPhone_Map", c: "GetMarkerTypes"}).then((markerInfo: object) => {
+        void Promise.all([markerConfigPromise, initialMarkersPromise]).then(([, markers]) => {
+            if (this.destroyed || !markers) {
+                return;
+            }
+
+            markers.forEach((marker) => {
+                try {
+                    this.applyUpsert(marker);
+                } catch (error) {
+                    console.error('Failed to apply a marker from the initial snapshot', error);
+                }
+            });
+        }).finally(() => {
+            if (this.destroyed) {
+                return;
+            }
+
+            // Even a failed/timed-out load must unblock the update queue.
+            this.initialMarkersLoaded = true;
+            this.flushPendingMarkerOperations();
+        });
+    }
+
+    private loadMarkerConfig(): Promise<void> {
+        return requestWithTimeout(
+            window.Networking.Request({a: "ACE_TacPhone_Map", c: "GetMarkerTypes"}),
+            'GetMarkerTypes',
+        ).then((markerInfo: object | null) => {
+            if (this.destroyed || !markerInfo) {
+                return;
+            }
+
             // Game sends them as arrays, because thats cheaper to serialize than hashmaps
-
             const {types, colors, brushes} = markerInfo as
             {
                 types: Array<[string, string, [number, number, number, number], number, string, number]>,
@@ -120,53 +270,63 @@ export class MarkerLayerManager {
             };
 
             // Convert them all to our structure types
-            types.forEach(type => {
-                const [className, name, color, size, icon, shadow] = type;
-                this.markerTypes.set(className, {className, name, color: colorToHex(color), size, shadow, icon});
-            });
+            if (Array.isArray(types)) {
+                types.forEach(type => {
+                    const [className, name, color, size, icon, shadow] = type;
+                    this.markerTypes.set(className, {className, name, color: colorToHex(color), size, shadow, icon});
+                });
+            }
 
-            colors.forEach(type => {
-                const [className, name, color] = type;
-                this.markerColors.set(className, {className, name, color: colorToHex(color)});
-            });
+            if (Array.isArray(colors)) {
+                colors.forEach(type => {
+                    const [className, name, color] = type;
+                    this.markerColors.set(className, {className, name, color: colorToHex(color)});
+                });
+            }
 
-            brushes.forEach(type => {
-                const [className, name, texture, drawBorder] = type;
-                this.markerBrushes.set(className, {className, name, texture, drawBorder});
-            });
+            if (Array.isArray(brushes)) {
+                brushes.forEach(type => {
+                    const [className, name, texture, drawBorder] = type;
+                    this.markerBrushes.set(className, {className, name, texture, drawBorder});
+                });
+            }
         }).catch((error: unknown) => {
             console.error('Failed to load marker types', error);
         }).finally(() => {
+            // Also resolves when the request timed out or this manager was destroyed.
             this.resolveMarkerConfigReady();
         });
+    }
 
-        // Marker updates can arrive while GetMarkerTypes is still in flight.
-        // Wait for the config, then apply the initial snapshot before replaying
-        // any updates that were queued in the meantime.
-        void this.whenMarkerConfigLoaded().then(() => {
-            return window.Networking.Request({a: "ACE_TacPhone_Map", c: "GetAllMarkers"});
-        }).then((markerInfo: object) => {
-            const {markers} = markerInfo as
-            {
-                markers: Array<MarkerUpdate>
-            };
+    private loadInitialMarkers(): Promise<MarkerUpdate[] | null> {
+        return requestWithTimeout(
+            window.Networking.Request({a: "ACE_TacPhone_Map", c: "GetAllMarkers"}),
+            'GetAllMarkers',
+        ).then((markerInfo: object | null) => {
+            if (this.destroyed || !markerInfo) {
+                return null;
+            }
 
-            markers.forEach(marker => {
-                this.applyUpsert(marker);
-            });
+            const {markers} = markerInfo as {markers?: unknown};
+            return Array.isArray(markers) ? markers as MarkerUpdate[] : [];
         }).catch((error: unknown) => {
             console.error('Failed to load markers', error);
-        }).finally(() => {
-            this.initialMarkersLoaded = true;
-            this.flushPendingMarkerOperations();
+            return null;
         });
-
     }
 
     public destroy(): void {
+        if (this.destroyed) {
+            return;
+        }
+
+        this.destroyed = true;
         // Unregisters cleanly from the global registry when called
         this.unregisterHooks.forEach((unregister) => unregister());
         this.unregisterHooks = [];
+        this.pendingMarkerOperations = [];
+        this.markerTextures.clear();
+        this.markerRegistry.clear();
         this.source.clear();
     }
 
@@ -189,6 +349,10 @@ export class MarkerLayerManager {
      * Loads (and caches) the icon texture of a marker type.
      */
     public loadMarkerIcon(iconPath: string): Promise<string> {
+        if (this.destroyed) {
+            return Promise.reject(new Error('Marker layer manager was destroyed'));
+        }
+
         if (!iconPath) {
             return Promise.reject(new Error('Marker type has no icon'));
         }
@@ -204,11 +368,16 @@ export class MarkerLayerManager {
         }
 
         const texturePromise = window.Networking.LoadGameFileTexture(iconPath, 64).then((iconData) => {
-            this.markerTextures.set(iconPath, iconData); // Replace promise with real data, so that others won't wait on it
-            this.source.changed(); // Notify the layer of the change, it needs to refresh the icon
+            // The manager may have been destroyed while the texture was loading.
+            if (!this.destroyed) {
+                this.markerTextures.set(iconPath, iconData); // Replace promise with real data, so that others won't wait on it
+                this.source.changed(); // Notify the layer of the change, it needs to refresh the icon
+            }
             return iconData;
         }).catch((error: unknown) => {
-            this.markerTextures.delete(iconPath);
+            if (!this.destroyed) {
+                this.markerTextures.delete(iconPath);
+            }
             throw error;
         });
 
@@ -338,15 +507,19 @@ export class MarkerLayerManager {
             markerIcon.setSrc(cachedTexture);
         } else {
             this.loadMarkerIcon(typeResolved.icon).then((iconData) => {
-                markerIcon.setSrc(iconData);
+                if (!this.destroyed) {
+                    markerIcon.setSrc(iconData);
+                }
             }).catch(() => {
                 // Keep the placeholder spinner if the icon could not be loaded
             });
         }
 
-        var colorResolved = this.markerColors.get(color == "" ? typeResolved.color : color);
+        // `color` is a CfgMarkerColors class name, or empty for the marker type's
+        // own color. markerColors is keyed by class name, not by a hex value.
+        var colorResolved = color !== '' ? this.markerColors.get(color) : undefined;
 
-        markerIcon.setColor(colorResolved ? colorResolved.color : '#ffffff');
+        markerIcon.setColor(colorResolved?.color || typeResolved.color || DEFAULT_MARKER_COLOR);
         return resStyle;
     }
 
@@ -361,22 +534,51 @@ export class MarkerLayerManager {
     private flushPendingMarkerOperations(): void {
         const pending = this.pendingMarkerOperations;
         this.pendingMarkerOperations = [];
+        this.pendingOverflowWarned = false;
 
         pending.forEach((operation) => {
-            if (operation.kind === 'upsert') {
-                this.applyUpsert(operation.marker);
-            } else {
-                this.deleteMarker(operation.name);
+            if (this.destroyed) {
+                return;
+            }
+
+            try {
+                if (operation.kind === 'upsert') {
+                    this.applyUpsert(operation.marker);
+                } else {
+                    this.deleteMarker(operation.name);
+                }
+            } catch (error) {
+                // One malformed update must not abort the rest of the queue.
+                console.error('Failed to apply a queued marker operation', error);
             }
         });
+    }
+
+    private queuePendingMarkerOperation(operation: PendingMarkerOperation): void {
+        if (this.pendingMarkerOperations.length >= MAX_PENDING_MARKER_OPERATIONS) {
+            // Drop the oldest update so the newest positions survive, but never
+            // grow the queue without bound while the initial snapshot is pending.
+            this.pendingMarkerOperations.shift();
+
+            if (!this.pendingOverflowWarned) {
+                this.pendingOverflowWarned = true;
+                console.warn(`More than ${MAX_PENDING_MARKER_OPERATIONS} marker updates were queued before the initial snapshot loaded; dropping the oldest updates.`);
+            }
+        }
+
+        this.pendingMarkerOperations.push(operation);
     }
 
     /**
      * Processes an incoming addition or position update
      */
     public handleUpsert(data: MarkerUpdate): void {
+        if (this.destroyed) {
+            return;
+        }
+
         if (!this.initialMarkersLoaded) {
-            this.pendingMarkerOperations.push({ kind: 'upsert', marker: data });
+            this.queuePendingMarkerOperation({ kind: 'upsert', marker: data });
             return;
         }
 
@@ -387,62 +589,59 @@ export class MarkerLayerManager {
         const [name, type, color, dir, pos, text, shape, alpha, brush, size, channel, polyline] = data;
         const registryKey = this.markerKey(name, channel);
 
-        var sizeSplit = size.split(",").map(x => Number(x));
+        var sizeSplit = parseMarkerSize(size);
         var featureStyle = this.createFeatureStyle(type, shape, color, brush, size, alpha);
         var shadow = this.getMarkerShadow(type);
 
-        // Parse polyline if present
-        if (polyline && polyline.length > 0) {
-            const coordinates: number[][] = [];
-            const parts = polyline.split(';');
-            for (let i = 0; i < parts.length; i += 2) {
-                if (parts[i] !== '' && parts[i + 1] !== '') {
-                    coordinates.push([Number(parts[i]), Number(parts[i + 1])]);
-                }
-            }
+        // Parse polyline if present. Malformed geometry is ignored instead of
+        // handing NaN coordinates to OpenLayers.
+        const coordinates = parsePolylineCoordinates(polyline);
+        if (coordinates) {
+            const existingFeature = this.markerRegistry.get(registryKey);
 
-            if (coordinates.length > 0) {
-                const existingFeature = this.markerRegistry.get(registryKey);
-
-                if (existingFeature) {
-                    const geometry = existingFeature.getGeometry();
-                    if (geometry instanceof LineString) {
-                        geometry.setCoordinates(coordinates);
-                    } else {
-                        // Replace point with polyline
-                        this.source.removeFeature(existingFeature);
-                        this.markerRegistry.delete(registryKey);
-                        const newFeature = new Feature({
-                            geometry: new LineString(coordinates),
-                            id: name,
-                            label: text,
-                        });
-                        newFeature.set("dir", dir);
-                        newFeature.set("alpha", alpha);
-                        newFeature.set("size", sizeSplit);
-                        newFeature.set("baseStyle", featureStyle);
-                        newFeature.set("shadow", shadow);
-                        this.source.addFeature(newFeature);
-                        this.markerRegistry.set(registryKey, newFeature);
-                        return;
-                    }
-
-                    existingFeature.set("baseStyle", featureStyle);
-                    existingFeature.set("label", text);
-                    existingFeature.set("alpha", alpha);
+            if (existingFeature) {
+                const geometry = existingFeature.getGeometry();
+                if (geometry instanceof LineString) {
+                    geometry.setCoordinates(coordinates);
                 } else {
+                    // Replace point with polyline
+                    this.source.removeFeature(existingFeature);
+                    this.markerRegistry.delete(registryKey);
                     const newFeature = new Feature({
                         geometry: new LineString(coordinates),
                         id: name,
                         label: text,
                     });
+                    newFeature.set("dir", dir);
                     newFeature.set("alpha", alpha);
+                    newFeature.set("size", sizeSplit);
                     newFeature.set("baseStyle", featureStyle);
+                    newFeature.set("shadow", shadow);
                     this.source.addFeature(newFeature);
                     this.markerRegistry.set(registryKey, newFeature);
+                    return;
                 }
-                return;
+
+                existingFeature.set("baseStyle", featureStyle);
+                existingFeature.set("label", text);
+                existingFeature.set("alpha", alpha);
+            } else {
+                const newFeature = new Feature({
+                    geometry: new LineString(coordinates),
+                    id: name,
+                    label: text,
+                });
+                newFeature.set("alpha", alpha);
+                newFeature.set("baseStyle", featureStyle);
+                this.source.addFeature(newFeature);
+                this.markerRegistry.set(registryKey, newFeature);
             }
+            return;
+        }
+
+        if (!isFinitePosition(pos)) {
+            console.warn(`Skipping marker "${name}" with an invalid position.`);
+            return;
         }
 
         const existingFeature = this.markerRegistry.get(registryKey);
@@ -521,8 +720,12 @@ export class MarkerLayerManager {
      * Deletes a marker when it leaves or disconnects
      */
     public handleDelete(id: string): void {
+        if (this.destroyed) {
+            return;
+        }
+
         if (!this.initialMarkersLoaded) {
-            this.pendingMarkerOperations.push({ kind: 'delete', name: id });
+            this.queuePendingMarkerOperation({ kind: 'delete', name: id });
             return;
         }
 
@@ -533,6 +736,10 @@ export class MarkerLayerManager {
      * Clear all markers at once
      */
     public clearAll(): void {
+        if (this.destroyed) {
+            return;
+        }
+
         this.source.clear();
         this.markerRegistry.clear();
     }

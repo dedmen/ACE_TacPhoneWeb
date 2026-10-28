@@ -4,6 +4,7 @@ import styles from './styles.module.scss'
 import "ol/ol.css";
 import Map from "ol/Map";
 import { View } from 'ol';
+import type { ViewOptions } from 'ol/View.js';
 import TileLayer from 'ol/layer/Tile';
 import DoubleClickZoom from 'ol/interaction/DoubleClickZoom';
 import type { MapBrowserEvent } from 'ol';
@@ -21,6 +22,12 @@ import { createMarker, type MarkerCreationData } from './MapMarkers/MarkerApi';
 
 const LONG_PRESS_DURATION_MS = 600;
 const LONG_PRESS_MOVE_TOLERANCE_PX = 10;
+
+const TERRAIN_TILE_SIZE = 256;
+const TERRAIN_MIN_RESOLUTION = 0.2;
+const TERRAIN_TILE_CACHE_SIZE = 48;
+// Placeholder size until the terrain SVG reports the real one.
+const INITIAL_TERRAIN_EXTENT: [number, number, number, number] = [0, 0, 30720, 30720];
 
 interface MarkerDialogState {
   isOpen: boolean;
@@ -42,6 +49,7 @@ class App extends React.Component<{},MapState> {
     private map: Map | null = null;
     private terrainLayers: TileLayer<ImageTileSource>[] = [];
     private terrainLoadToken = 0;
+    private terrainViewReady = false;
 
     private markerManager: MarkerLayerManager | null = null;
 
@@ -71,25 +79,85 @@ class App extends React.Component<{},MapState> {
         };
     }
 
+    private getPreservedViewState(
+        previousView: View | null,
+        extent: [number, number, number, number],
+        maxResolution: number,
+    ): { center: [number, number]; resolution: number } | null {
+        if (!previousView) {
+            return null;
+        }
+
+        const center = previousView.getCenter();
+        const resolution = previousView.getResolution();
+
+        if (
+            !center ||
+            !Number.isFinite(center[0]) ||
+            !Number.isFinite(center[1]) ||
+            typeof resolution !== 'number' ||
+            !Number.isFinite(resolution) ||
+            center[0] < extent[0] || center[0] > extent[2] ||
+            center[1] < extent[1] || center[1] > extent[3] ||
+            resolution < TERRAIN_MIN_RESOLUTION || resolution > maxResolution
+        ) {
+            return null;
+        }
+
+        return { center: [center[0], center[1]], resolution };
+    }
+
+    private createTerrainView(
+        projection: Projection,
+        extent: [number, number, number, number],
+        previousView: View | null,
+    ): { view: View; preserved: boolean } {
+        // At this resolution a single tile covers the whole terrain, so it is the
+        // farthest the view needs to zoom out. The extent constraint caps it further
+        // when the panel is larger than that tile.
+        const maxResolution = Math.max(
+            Math.max(extent[2] - extent[0], extent[3] - extent[1]) / TERRAIN_TILE_SIZE,
+            TERRAIN_MIN_RESOLUTION,
+        );
+
+        const options: ViewOptions = {
+            projection,
+            extent,
+            // Let fit() show the whole terrain on panels whose aspect ratio differs
+            // from the terrain instead of clipping one axis.
+            showFullExtent: true,
+            minResolution: TERRAIN_MIN_RESOLUTION,
+            maxResolution,
+            center: [
+                (extent[0] + extent[2]) / 2,
+                (extent[1] + extent[3]) / 2,
+            ],
+            resolution: maxResolution,
+        };
+
+        const preservedState = this.getPreservedViewState(previousView, extent, maxResolution);
+        if (preservedState) {
+            options.center = preservedState.center;
+            options.resolution = preservedState.resolution;
+        }
+
+        return { view: new View(options), preserved: preservedState !== null };
+    }
+
     componentDidMount() {
 
         if (!this.mapRef.current) return;
 
-        var extent = [0, 0, 30720, 30720]; //#TODO just only create the map after the image was loaded?
         var projection = new Projection({
             code: 'static-image',
             units: 'pixels',
-            extent: extent
+            extent: INITIAL_TERRAIN_EXTENT
         });
 
         const map = new Map({
             target: this.mapRef.current,
             layers: [],
-            view: new View({
-                projection: projection,
-                center: [0, 0],
-                zoom: 0,
-            }),
+            view: this.createTerrainView(projection, INITIAL_TERRAIN_EXTENT, null).view,
         });
         this.map = map;
         // The map instance is imperative, so re-render to hand it to the layer switcher.
@@ -115,7 +183,6 @@ class App extends React.Component<{},MapState> {
         viewport.addEventListener('pointermove', this.handleMapPointerMove);
         viewport.addEventListener('pointerup', this.handleMapPointerUp);
         viewport.addEventListener('pointercancel', this.handleMapPointerUp);
-        viewport.addEventListener('contextmenu', this.handleMapContextMenu);
 
         void window.Networking.LoadGameTerrain({ drawTreeObjects: false, layerMountains: true, simpleRoads: true })
             .then((svgString) => {
@@ -143,7 +210,6 @@ class App extends React.Component<{},MapState> {
             viewport.removeEventListener('pointermove', this.handleMapPointerMove);
             viewport.removeEventListener('pointerup', this.handleMapPointerUp);
             viewport.removeEventListener('pointercancel', this.handleMapPointerUp);
-            viewport.removeEventListener('contextmenu', this.handleMapContextMenu);
 
             // Detach the map from the DOM target
             map.setTarget(undefined);
@@ -245,11 +311,6 @@ class App extends React.Component<{},MapState> {
         if (this.longPressStart && event.pointerId === this.longPressStart.pointerId) {
             this.cancelLongPress();
         }
-    };
-
-    private handleMapContextMenu = (event: MouseEvent): void => {
-        // A long press can otherwise trigger the browser context menu on touch.
-        event.preventDefault();
     };
 
     private cancelLongPress(): void {
@@ -431,7 +492,7 @@ class App extends React.Component<{},MapState> {
         // Base measurements of your standalone SVG artwork blueprint
         const svgBaseWidth = svgData.width;
         const svgBaseHeight = svgData.height;
-        const tileSize = 256; // Standard map grid slice dimension
+        const tileSize = TERRAIN_TILE_SIZE; // Standard map grid slice dimension
 
         // 1. Establish the boundary coordinate limits matching the SVG native dimensions
         const extent: [number, number, number, number] = [0, 0, svgBaseWidth, svgBaseHeight];
@@ -519,6 +580,9 @@ class App extends React.Component<{},MapState> {
                 newLayers.push(new TileLayer({
                     properties: {title: loadedLayer.name},
                     source: svgTileSource,
+                    // A phone-sized viewport only needs a few tiles per layer. The
+                    // default (512) keeps hundreds of MiB of canvases per layer alive.
+                    cacheSize: TERRAIN_TILE_CACHE_SIZE,
                 }));
             }
         } catch (error) {
@@ -539,10 +603,20 @@ class App extends React.Component<{},MapState> {
         });
         this.terrainLayers = newLayers;
 
-        // Fit the whole map in view
-        map.getView().fit(extent, {
-            duration: 1000            // Optional: Smoothly animate the zoom/pan over 1 second
-        });
+        // 6. The view constraints depend on the real terrain size, so they can only
+        // be built now. Views have no setExtent(), hence the replacement view.
+        const previousView = this.terrainViewReady ? map.getView() : null;
+        const { view, preserved } = this.createTerrainView(projection, extent, previousView);
+        map.setView(view);
+        this.terrainViewReady = true;
+
+        // Keep the user's position on a reload; on the first load (or if the old
+        // position no longer fits) show the whole map.
+        if (!preserved) {
+            view.fit(extent, {
+                duration: 1000            // Optional: Smoothly animate the zoom/pan over 1 second
+            });
+        }
     }
 
     render() {
