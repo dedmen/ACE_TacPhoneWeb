@@ -31,15 +31,24 @@ export class AppDirectory
         // Note in the Arma paths, we always need a lookup table, mod's modules will not all be in ace folders.
 
         if (IsLocalDev()) {
-            // Try to find it in parent folder
+            // The host dev server maps /devapps/<app name>/ to the app folder.
+            // The folder can be next to this package, in devapps/, or anywhere
+            // listed in dev-apps.local.json / TACPHONE_DEV_APPS. See README.md.
+            const devfile = (appInfo.devfile || "src/main.tsx")
+                .replaceAll("\\", "/")
+                .replace(/^\/+/, "");
+            const devUrl = `/devapps/${encodeURIComponent(name)}/${devfile}`;
 
-            //#TODO we need to make mod development a bit easier, always copying or symlinking next to our folders is a bit annoying
-
-            //#TODO document this
-            // For development, the directory that contains the app (with its package.json), must be symlinked into "devapps" folder.
-
-            let lib = await import(/* @vite-ignore */ `/devapps/${name}/src/main.tsx`);
-            return lib;
+            try {
+                return await import(/* @vite-ignore */ devUrl);
+            } catch (error) {
+                throw new Error(
+                    `Failed to load development app "${name}" from "${devUrl}". `
+                    + "Check that the app folder is exposed by the host dev server "
+                    + "(see ACE_TacPhone_Main/README.md#developing-apps).",
+                    { cause: error },
+                );
+            }
         }
 
         // Either Arma or Web proxy, networking will handle whichever it is

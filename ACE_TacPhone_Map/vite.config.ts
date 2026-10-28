@@ -1,5 +1,5 @@
 import { resolve } from 'node:path'
-import { defineConfig } from 'vite'
+import { defineConfig, type PluginOption } from 'vite'
 import react, { reactCompilerPreset } from '@vitejs/plugin-react'
 import babel from '@rolldown/plugin-babel'
 import dts from 'vite-plugin-dts'
@@ -7,31 +7,30 @@ import { libInjectCss } from 'vite-plugin-lib-inject-css'
 //import { viteSingleFile } from "vite-plugin-singlefile"
 import { viteSingleFile } from "./build/singlefile.ts"
 import Inspect from 'vite-plugin-inspect'
-import { SHARED_MODULE_SPECIFIERS } from '../../shared-modules.js'
+import { SHARED_MODULE_SPECIFIERS } from '../ACE_TacPhone_Main/shared-modules.js'
 
 // https://vite.dev/config/
-export default defineConfig(({ mode }) => {
+export default defineConfig(({ mode, command }) => {
   // `vite build` (production) and `npm run build` (release) ship optimized code.
   // Use `npm run build:debug` when you need unminified code and source maps.
   const isRelease = mode !== 'debug';
 
+  const plugins: PluginOption[] = [
+    react(),
+    dts({ include: ['src'], bundleTypes: true, }),
+    libInjectCss(),
+    babel({ presets: [reactCompilerPreset()] }),
+    viteSingleFile({ failOnNotInlined: isRelease }),
+  ];
+
+  // Debugging aid for the dev server only; it must not run for builds.
+  if (command === 'serve') {
+    plugins.push(Inspect());
+  }
+
   return {
     devtools: false,
-    plugins: [
-      react(),
-      dts({ include: ['src'], bundleTypes: true, }),
-      libInjectCss(),
-      babel({ presets: [reactCompilerPreset()] }),
-      viteSingleFile(),
-      Inspect()
-    ],
-
-    experimental: {
-      renderBuiltUrl(filename) {
-          return { runtime: `window.__toCdnUrl(${JSON.stringify(filename)})` }
-      },
-    },
-
+    plugins,
 
     build: {
       minify: isRelease ? 'oxc' : false,

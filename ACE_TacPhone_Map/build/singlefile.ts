@@ -21,13 +21,18 @@ export type Config = {
 	//
 	// @default true
 	deleteInlinedFiles?: boolean
+	// Fail the build when an asset cannot be inlined. The production loader can
+	// only load the single entry file, so a side asset is unusable in game.
+	//
+	// @default false
+	failOnNotInlined?: boolean
 	// If you need to override anything specific in the recommended build config, pass a sparse
 	// object here. For example, use `{ base: "/" }` to override the default "./" base path for
 	// non-inlined public files.
 	overrideConfig?: Partial<UserConfig>
 }
 
-const defaultConfig = { useRecommendedBuildConfig: true, deleteInlinedFiles: true }
+const defaultConfig = { useRecommendedBuildConfig: true, deleteInlinedFiles: true, failOnNotInlined: false }
 
 function escapeRegExp(value: string): string {
 	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
@@ -46,8 +51,10 @@ export function replaceCss(jsContent: string, cssFilename: string, cssCode: stri
     // Doesn't work, mimetype missmatch
     //var repTarget = `import '${cssUrl}' with { type: "css" };`;
 
-    // Convert it into a stylesheet link we'll insert into head
-    var repTarget = `(()=> {const link = document.createElement('link'); link.rel = 'stylesheet'; link.href = '${cssUrl}'; document.head.appendChild(link);})();`;
+    // Convert it into a stylesheet link we'll insert into head. JSON.stringify
+    // quotes and escapes the URL; encodeURIComponent leaves ' alone, which would
+    // terminate the single-quoted JS string and break the whole bundle.
+    var repTarget = `(()=> {const link = document.createElement('link'); link.rel = 'stylesheet'; link.href = ${JSON.stringify(cssUrl)}; document.head.appendChild(link);})();`;
 
     // Match both static imports and dynamic imports, with single or double quotes and arbitrary whitespace.
     const importPattern = new RegExp(
@@ -77,6 +84,7 @@ export function viteSingleFile({
 	useRecommendedBuildConfig = true,
 	inlinePattern = [],
 	deleteInlinedFiles = true,
+	failOnNotInlined = false,
 	overrideConfig = {},
 }: Config = defaultConfig): PluginOption {
 	// Modifies the Vite build config to make this plugin work well.
@@ -110,7 +118,13 @@ export function viteSingleFile({
 
 
 		generateBundle(_options: unknown, bundle: Record<string, unknown>) {
-			const warnNotInlined = (filename: string) => this.info(`NOTE: asset not inlined: ${filename}`)
+			const warnNotInlined = (filename: string) => {
+				if (failOnNotInlined) {
+					this.error(`asset not inlined: ${filename}. The in-game loader can only load the single entry file.`)
+				} else {
+					this.warn(`NOTE: asset not inlined: ${filename}`)
+				}
+			}
 
 			const files = {
 				html: [] as string[],

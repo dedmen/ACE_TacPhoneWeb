@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "tacphone": {
+    "app": "ACE_TacPhone_Map"
+  },
   "main": "./dist/ace_tacphone_map.js",
   "types": "./dist/ace_tacphone_map.d.ts",
   "files": [
@@ -20,10 +23,10 @@
     }
   },
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build --mode release && node ../../scripts/check-shared-imports.mjs",
-    "build:debug": "tsc -b && vite build --mode debug && node ../../scripts/check-shared-imports.mjs",
-    "check:importmap": "node ../../scripts/check-shared-imports.mjs",
+    "dev": "npm --prefix ../ACE_TacPhone_Main run dev --",
+    "build": "tsc -b && vite build --mode release && node ../ACE_TacPhone_Main/scripts/check-shared-imports.mjs",
+    "build:debug": "tsc -b && vite build --mode debug && node ../ACE_TacPhone_Main/scripts/check-shared-imports.mjs",
+    "check:importmap": "node ../ACE_TacPhone_Main/scripts/check-shared-imports.mjs",
     "lint": "oxlint",
     "preview": "vite preview"
   },

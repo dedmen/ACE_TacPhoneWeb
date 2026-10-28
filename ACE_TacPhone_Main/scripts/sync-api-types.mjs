@@ -1,16 +1,20 @@
 #!/usr/bin/env node
 // Copy the generated dist/TacPhoneMain.d.ts into development apps.
 //
-// With no arguments, every devapps/<AppName>/src directory is updated.
-// Pass one or more target directories (or explicit .d.ts paths) to update apps
-// that live outside this repository:
+// With no arguments, every discovered development app's src directory is
+// updated. Discovery includes devapps/, sibling folders with a "tacphone.app"
+// package field, dev-apps.local.json, and TACPHONE_DEV_APPS.
+//
+// Pass one or more target directories (or explicit .d.ts paths) to update a
+// specific app:
 //
 //   node scripts/sync-api-types.mjs ..\..\my_app\src
 
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { discoverDevApps } from '../dev-apps.js'
 
 const mainDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const sourcePath = join(mainDir, 'dist', 'TacPhoneMain.d.ts')
@@ -21,14 +25,12 @@ function displayPath(path) {
 }
 
 async function findDevAppTargets() {
-    const devappsDir = join(mainDir, 'devapps')
-    if (!existsSync(devappsDir)) return []
+    const { apps, warnings } = await discoverDevApps(mainDir)
+    for (const warning of warnings) console.warn(`WARN ${warning}`)
 
     const targets = []
-    for (const entry of await readdir(devappsDir, { withFileTypes: true })) {
-        if (!entry.isDirectory()) continue
-
-        const srcDir = join(devappsDir, entry.name, 'src')
+    for (const app of apps) {
+        const srcDir = join(app.dir, 'src')
         if (existsSync(srcDir)) targets.push(join(srcDir, fileName))
     }
 
@@ -64,7 +66,7 @@ try {
     const targets = await resolveTargets(process.argv.slice(2))
 
     if (targets.length === 0) {
-        console.log('SKIP api types (no devapps/*/src directories found)')
+        console.log('SKIP api types (no development app src directories found)')
     } else {
         let updated = 0
         let upToDate = 0

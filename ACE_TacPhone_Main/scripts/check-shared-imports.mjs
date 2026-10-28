@@ -7,10 +7,10 @@ import {
     SHARED_MODULES,
     SHARED_MODULE_SPECIFIERS,
 } from '../shared-modules.js'
+import { discoverDevApps } from '../dev-apps.js'
 
 const mainDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const hostHtmlPath = join(mainDir, 'dist', 'index.html')
-const devappsDir = join(mainDir, 'devapps')
 
 function displayPath(path) {
     return relative(mainDir, path).replaceAll('\\', '/')
@@ -134,13 +134,12 @@ async function checkHostImportMap() {
 }
 
 async function findAppBundles() {
-    if (!existsSync(devappsDir)) return []
+    const { apps, warnings } = await discoverDevApps(mainDir)
+    for (const warning of warnings) console.warn(`WARN ${warning}`)
 
     const bundles = []
-    for (const entry of await readdir(devappsDir, { withFileTypes: true })) {
-        if (!entry.isDirectory()) continue
-
-        const distDir = join(devappsDir, entry.name, 'dist')
+    for (const app of apps) {
+        const distDir = join(app.dir, 'dist')
         if (!existsSync(distDir)) continue
 
         for (const file of await readdir(distDir)) {
@@ -183,7 +182,7 @@ try {
 
     const bundles = await findAppBundles()
     if (bundles.length === 0) {
-        console.log('SKIP app bundles (no devapps/*/dist/*.js files found)')
+        console.log('SKIP app bundles (no development app dist/*.js files found)')
     } else {
         for (const bundle of bundles) {
             const imports = await checkAppBundle(bundle)

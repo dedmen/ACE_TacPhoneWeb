@@ -36,7 +36,7 @@ in Arma: in development the page connects to `wss://localhost:8001/ws`, which
 is started by the `ArmaWebHost` extension. Without a running game and TacPhone
 the page will report a connection failure.
 
-A development app is loaded from `devapps` by app name. See
+A development app is discovered from its own folder by app name. See
 [Developing apps](#developing-apps).
 
 ### Debugging
@@ -71,14 +71,52 @@ Use `npm run build:debug` for an unminified build with an inline source map;
 ## Developing apps
 
 An app is a JavaScript ES module that is loaded dynamically by the host. A mod
-can provide one or more apps. During development an app must live at:
+can provide one or more apps. During development the host dev server can load an
+app from any folder on disk; the app does not have to be below the host web root.
+
+The recommended layout keeps each app repository next to the host:
 
 ```text
-ACE_TacPhone_Main/devapps/<AppName>/
+ACE_TacPhoneWeb/
+  ACE_TacPhone_Main/
+  ACE_TacPhone_Map/
+  ACE_TacPhone_AnotherApp/
 ```
 
-`<AppName>` must match the config class name exactly. The current development
-loader imports:
+The host discovers development apps from these places:
+
+1. `dev-apps.local.json` in `ACE_TacPhone_Main` (git-ignored), for apps anywhere:
+
+   ```json
+   { "apps": ["../ACE_TacPhone_Map", "D:/dev/ACE_TacPhone_AnotherApp"] }
+   ```
+
+   Relative paths are resolved from `ACE_TacPhone_Main`.
+2. The `TACPHONE_DEV_APPS` environment variable, using the platform path
+   separator (`;` on Windows). Useful for CI or a one-off location.
+3. Direct children of the legacy `ACE_TacPhone_Main/devapps/` folder.
+4. Sibling folders of `ACE_TacPhone_Main` whose `package.json` declares the app:
+
+   ```json
+   {
+     "tacphone": { "app": "ACE_TacPhone_MyApp" }
+   }
+   ```
+
+The declared app name must match the game-side `ace_tacphone_apps` config class
+exactly. It is also the routing key used by requests. A folder in `devapps` or a
+folder listed in the config/environment may omit the marker; its folder name is
+then used as the app name. Sibling folders require the marker so unrelated
+folders are never exposed by accident.
+
+The dev server exposes every discovered app under a stable URL:
+
+```text
+/devapps/<AppName>/
+```
+
+The loader imports the entry named by `ace_tacphone_devFile` in the app config,
+defaulting to `src/main.tsx`:
 
 ```text
 /devapps/<AppName>/src/main.tsx
@@ -88,11 +126,14 @@ Install the app's own dependencies in its directory (`npm install` inside the
 app folder), then start the host with `npm run dev`. Vite serves the app through
 the host dev server, so edits to the app hot-reload. Running the app's own Vite
 dev server is not enough: it does not provide the TacPhone globals, networking,
-or host import map.
+or host import map. Restart the host after changing `dev-apps.local.json` or the
+environment variable.
 
-Because the app folder has to be below the host web root, keep it there while
-developing, or copy/junction it into `devapps`. A plain symlink inside `devapps`
-has not worked reliably with Vite.
+Apps keep their own `node_modules`; the host deduplicates every package in
+[`shared-modules.js`](shared-modules.js) to its own copies. The host's
+`server.fs.allow` list is generated from the discovered app folders, so an app
+outside the host root can still be served.
+Requests to an undiscovered app return a 404 with a short explanation.
 
 ## App contract
 
@@ -116,7 +157,7 @@ class ace_tacphone_apps {
 | --- | --- | --- |
 | `scope` | Yes | Must be greater than `0`; use `2`. |
 | `ace_tacphone_file` | Yes, except `main` | Path to the production ES module entry in the game filesystem. It is read with `LoadGameFileText` and imported from a blob URL. |
-| `ace_tacphone_devFile` | Recommended | Entry point relative to the app folder. Keep it as `src\main.tsx`. The current dev loader uses the folder name and the fixed `src/main.tsx` path. |
+| `ace_tacphone_devFile` | Recommended | Entry point relative to the app folder, for example `src\main.tsx`. The development loader imports this path from `/devapps/<AppName>/`; if omitted it falls back to `src/main.tsx`. |
 | `ace_tacphone_requestProcessor` | For app requests | Name of the SQF function that handles requests sent with `a: "<AppName>"`. It receives the request hashmap and may return any JSON-serializable value or a promise. |
 | `icon` | No | Currently reserved; panel icons come from `GetTacPhoneIcon()`. |
 
@@ -147,10 +188,10 @@ export function OnMessageFromGame(message: object): void | Promise<void> {
 
 `AppPanelInfo` is part of the host API declarations. The host build generates
 `dist/TacPhoneMain.d.ts` from [`src/TacPhoneMain.ts`](src/TacPhoneMain.ts) and
-syncs it to every `devapps/*/src/TacPhoneMain.d.ts`. For an app outside this
-repository, copy the generated file into the app's `src` directory, or run
-`npm run sync:api-types -- <path-to-app-src>`. Do not edit the copied file by
-hand; change the host API source instead.
+syncs it to the `src` directory of every discovered development app. For an app
+that is not discovered yet, copy the generated file into the app's `src`
+directory, or run `npm run sync:api-types -- <path-to-app-src>`. Do not edit the
+copied file by hand; change the host API source instead.
 
 | Panel field | Contract |
 | --- | --- |
@@ -264,9 +305,9 @@ Rules for app builds:
 In development Vite resolves the bare imports for you. The import map matters
 most for a prebuilt app bundle loaded with `import()` from a blob URL.
 
-`npm run check:importmap` verifies the built host import map and every
-`devapps/*/dist/*.js` bundle against `shared-modules.js`. The host and app build
-scripts run the same check automatically.
+`npm run check:importmap` verifies the built host import map and every discovered
+development app's `dist/*.js` bundle against `shared-modules.js`. The host and
+app build scripts run the same check automatically.
 
 ## Production packaging: one ESM entry file per app
 
@@ -312,9 +353,9 @@ build: {
 ```
 
 Inline CSS and assets in the bundle. The Map app's custom
-[`build/singlefile.ts`](devapps/ACE_TacPhone_Map/build/singlefile.ts) inlines CSS
-as a `data:` URL; the host itself uses `vite-plugin-singlefile`. Keep assets as
-data URLs rather than separate files.
+[`build/singlefile.ts`](../ACE_TacPhone_Map/build/singlefile.ts) inlines CSS as a
+`data:` URL; the host itself uses `vite-plugin-singlefile`. Keep assets as data
+URLs rather than separate files.
 
 ### Loading additional files manually
 
@@ -432,5 +473,5 @@ Do not use a bundle-relative dynamic import in the production entry module; use
 
 ## Related documentation
 
-- [`devapps/ACE_TacPhone_Map/README.md`](devapps/ACE_TacPhone_Map/README.md) —
+- [`../ACE_TacPhone_Map/README.md`](../ACE_TacPhone_Map/README.md) —
   the reference app and its build.
