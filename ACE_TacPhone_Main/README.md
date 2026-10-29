@@ -732,6 +732,86 @@ through the game/WebHost filesystem, not only from the Vite output directory.
 Do not use a bundle-relative dynamic import in the production entry module; use
 `LoadGameFileText` for any file that is not part of the entry bundle.
 
+## Notifications
+
+Apps raise toast-style banners through `window.Notifications`. The host UI renders
+them with automatic fade-out removal (exit animation). Each notification has an
+id returned by `show()` which can be used to dismiss it explicitly.
+
+### API
+
+**Show a notification:**
+
+```ts
+const id = window.Notifications.show({
+    title: "My notification",
+    body: "This is the message text.",
+    app: "ACE_TacPhone_Map",          // optional; uses the app's default icon
+    icon: undefined,                  // optional explicit icon URL
+    duration: 15000,                  // milliseconds; 0 = permanent until dismissed
+    data: { key: "value" },           // arbitrary payload for handlers
+    action: (notification) => {       // tap handler: function (page-local only)
+        console.log("Tapped!", notification);
+        return new Promise(resolve => setTimeout(resolve, 1000));
+    },
+});
+```
+
+**Dismiss a notification:**
+
+```ts
+window.Notifications.dismiss(id);
+```
+
+### Options
+
+| Field | Required | Type | Default | Notes |
+| --- | --- | --- | --- | --- |
+| `title` | Yes | `string` | — | Short heading for the banner. |
+| `body` | No | `string` | — | Message text below the title. |
+| `app` | No | `string` | — | App name to resolve a default icon from. |
+| `icon` | No | `string` | Resolved from `app` | Explicit icon URL; overrides the app icon. |
+| `duration` | No | `number` | `15000` | Auto-dismiss after this many milliseconds. Use `0` for permanent (until dismissed). |
+| `data` | No | `unknown` | — | Arbitrary payload available in the tap handler. |
+| `action` | No | `NotificationTapHandler` | — | Function run when the notification is tapped; may be async. |
+
+### Tap action
+
+`action` is a single function. It does whatever the sender needs:
+
+```ts
+action: (notification: TacPhoneNotification) => void | Promise<void>
+```
+
+The function runs when the notification is tapped. It can open/focus panels with
+`window.PanelDirectory`, resolve another app's service with `window.AppApi`, or
+send data with `window.Networking`; the notification system does not prescribe any
+of that.
+
+```ts
+window.Notifications.show({
+    title: "New message",
+    body: "From Alice",
+    app: "Messenger",
+    data: { conversationId: 42 },
+    action: async (notification) => {
+        const { conversationId } = notification.data as { conversationId: number };
+        window.PanelDirectory.open("Messenger", {
+            placement: "tab",
+            config: { conversationId },
+        });
+    },
+});
+```
+
+### Limitations
+
+- Notification actions are page-local functions. Notifications are not sent from
+  the game, and the host does not forward them through `Networking`.
+- The notification stack is transient: there is no persistent history or center screen.
+- When more than [`MAX_NOTIFICATIONS`](src/Backend/Notifications.ts) (5) are shown,
+  the oldest are dropped silently without animation.
+
 ## Related documentation
 
 - [`../ACE_TacPhone_Map/README.md`](../ACE_TacPhone_Map/README.md) —

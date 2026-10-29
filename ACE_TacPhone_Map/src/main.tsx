@@ -2,6 +2,9 @@ import React from 'react';
 import App from './Map.tsx'
 import type { AppPanelInfo } from './TacPhoneMain';
 import { mapCommandRegistry } from './CommandRegistry.ts';
+// Registers the module-scope marker notification backup handler, so a marker
+// still notifies while no Map panel (and therefore no marker layer) is mounted.
+import './MapMarkers/MarkerNotifications.ts';
 
 
 class AppPlaceholder extends React.Component<{}, {loading: boolean}> {

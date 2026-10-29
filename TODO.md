@@ -219,6 +219,22 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
   outputs. Updated; the Map README now lists both `ace_tacphone_map.js` and
   `ace_tacphone_map.d.ts`.
 
+## Notifications
+
+### Remaining work
+
+- [ ] notification history / notification center screen is not implemented (transient
+  banners only);
+- [ ] the Map backup handler cannot perfectly distinguish a moved existing marker from
+  a new one before the first `GetAllMarkers` snapshot;
+- [ ] `isLocalPlayerMarker` in [`MarkerNotifications.ts`](ACE_TacPhone_Map/src/MapMarkers/MarkerNotifications.ts) is a placeholder (local `_USER_DEFINED` markers will be ignored later).
+
+### Implemented
+
+- Toast-style banners via `window.Notifications`.
+- Default lifetime 15 seconds, fade-out removal (`duration: 0` = permanent).
+- Map notification tap uses `policy: "ask"` target chooser and calls `MapApi.flyTo()`.
+
 ## Host (`ACE_TacPhone_Main`)
 
 - [ ] **[bug]** `NetworkingA3.Request` has no timeout (`Networking.ts:306-346`),

@@ -20,6 +20,7 @@ import type { AppDirectory } from "./Backend/AppDirectory";
 import type { AppApiRegistry } from "./Backend/AppApi";
 import type { Networking } from "./Backend/Networking";
 import type { CommandRegistry } from "./Backend/MessageRouter";
+import type { NotificationCenter } from "./Backend/Notifications";
 import type { PanelDirectory, PanelInstance } from "./Backend/PanelDirectory";
 
 export type { AppInfo, AppModule, AppPanelInfo } from "./Backend/Types";
@@ -33,6 +34,12 @@ export type {
     TargetPolicy,
 } from "./Backend/AppApi";
 export type {
+    NotificationAction,
+    NotificationOptions,
+    NotificationTapHandler,
+    TacPhoneNotification,
+} from "./Backend/Notifications";
+export type {
     OpenPanelOptions,
     OpenPanelResult,
     PanelInfo,
@@ -43,6 +50,7 @@ export type {
 export { AppDirectory } from "./Backend/AppDirectory";
 export { AppApiRegistry } from "./Backend/AppApi";
 export { CommandRegistry } from "./Backend/MessageRouter";
+export { NotificationCenter } from "./Backend/Notifications";
 export { PanelDirectory } from "./Backend/PanelDirectory";
 
 declare global {
@@ -62,6 +70,8 @@ declare global {
         PanelDirectory: PanelDirectory;
         // Inter-app services: register an app's API, resolve and call another app's.
         AppApi: AppApiRegistry;
+        // Host notification stack: show banners, subscribe to the current stack.
+        Notifications: NotificationCenter;
         TacPhoneUtils: {
             CommandRegistry: typeof CommandRegistry;
             // Live handle of the panel an app content is rendered in.

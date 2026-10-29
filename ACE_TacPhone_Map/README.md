@@ -149,6 +149,27 @@ keep its own copy.
 This is browser-side only; the game talks to the Map through the request
 processor and command registry described above, never through this API.
 
+## Marker notifications
+
+The Map app generates toast-style `window.Notifications` for marker updates:
+
+- **New markers**: The game sends `{ a: "ACE_TacPhone_Map", c: "Marker.Upsert",
+  marker: [...] }`. An open Map's `MarkerLayerManager` handles it through the
+  `Marker.Upsert` command and raises a "New map marker" notification. A closed Map
+  (no mounted instance) falls back to a module-scope handler that only raises the
+  notification.
+- **Duplicate names ignored**: The first `Marker.Upsert` for a marker name raises
+  the notification and records the name. Subsequent position updates for that name
+  do not notify again.
+- **Tap behavior**: Tapping a marker notification uses `window.AppApi.resolveAsync()`
+  with `policy: "ask"` to select between multiple Map panels that provide the `map`
+  service, then calls `MapApi.flyTo({ x, y })` on the chosen panel. The target chooser
+  presents all candidates (floating popups and docked tabs). Default host lifetime is
+  15 seconds; use `duration: 0` in your code for permanent notifications until dismissed.
+
+No notification-specific SQF code is needed; the game-side markers are handled by
+the request processor and command registry, while the host UI generates banners.
+
 ## Packaging constraints
 
 The production loader reads the entry file from the game filesystem and imports

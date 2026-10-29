@@ -1,4 +1,5 @@
 import "./A3API";
+import { SendMessageToApp } from "./AppMessaging";
 
 export interface Networking {
  WhenReady(): Promise<void>;
@@ -17,35 +18,6 @@ export interface Networking {
 
  OnMessageFromGame(message: object): void;
 }
-
-function forwardMessageToApp(message: object): void {
-    const { a } = message as { a?: unknown };
-
-    if (typeof a !== "string" || a.length === 0) {
-        console.warn("Message from game has no app target", message);
-        return;
-    }
-
-    const appModule = window.AppDirectory?.knownApps.get(a)?.module;
-    if (!appModule || typeof appModule.OnMessageFromGame !== "function") {
-        console.warn(`No loaded TacPhone app can handle a message for "${a}"`, message);
-        return;
-    }
-
-    try {
-        const result = appModule.OnMessageFromGame(message);
-
-        if (result !== null && result !== undefined && typeof (result as { then?: unknown }).then === "function") {
-            Promise.resolve(result).catch(error => {
-                console.error(`TacPhone app "${a}" failed to handle a message:`, error);
-            });
-        }
-    } catch (error) {
-        console.error(`TacPhone app "${a}" failed to handle a message:`, error);
-    }
-}
-
-
 
 class NetworkingA3 implements Networking {
     requestCounter: number = 0;
@@ -98,7 +70,7 @@ class NetworkingA3 implements Networking {
         // The game sent us a message, probably a notification about something
         // Forward it to the App its destined for
         console.log("Message from game", message);
-        forwardMessageToApp(message);
+        SendMessageToApp(message);
     }
 
 };
@@ -373,7 +345,7 @@ class NetworkingWebsocket implements Networking {
         // The game sent us a message, probably a notification about something
         // Forward it to the App its destined for
         console.log("Message from game", message);
-        forwardMessageToApp(message);
+        SendMessageToApp(message);
     }
 
 };

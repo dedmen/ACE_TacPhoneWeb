@@ -5,10 +5,11 @@ import Point from 'ol/geom/Point';
 import LineString from 'ol/geom/LineString';
 import { Style, Icon, Text, Fill, Stroke } from 'ol/style';
 import { mapCommandRegistry } from '../CommandRegistry';
+import { markKnownMarkerNames, notifyMarkerUpsert, registerMarkerLayer } from './MarkerNotifications';
 
 
 // name, type, color, dir, pos, text, shape, alpha, brush, size, channel, polyline
-type MarkerUpdate = [string, string, string, number, [number, number, number], string, string, number, string, string, number, string];
+export type MarkerUpdate = [string, string, string, number, [number, number, number], string, string, number, string, string, number, string];
 
 type PendingMarkerOperation =
     | { kind: 'upsert'; marker: MarkerUpdate }
@@ -201,10 +202,16 @@ export class MarkerLayerManager {
 
     private unregisterHooks: Array<() => void> = [];
 
+    // Keeps the module-scope marker notification backup handler quiet while this
+    // layer owns the marker features.
+    private releaseMarkerLayer: (() => void) | null = null;
+
     constructor(title: string = 'Live Markers') {
         this.markerConfigReady = new Promise<void>((resolve) => {
             this.resolveMarkerConfigReady = resolve;
         });
+
+        this.releaseMarkerLayer = registerMarkerLayer();
 
         this.source = new VectorSource();
         this.layer = new VectorLayer({
@@ -241,6 +248,11 @@ export class MarkerLayerManager {
                     console.error('Failed to apply a marker from the initial snapshot', error);
                 }
             });
+
+            // Everything in the snapshot already exists, so seeding the names
+            // keeps the initial load silent. Queued live updates are flushed
+            // afterwards by the finally block and may still notify.
+            markKnownMarkerNames(markers.map((marker) => marker[0]));
         }).finally(() => {
             if (this.destroyed) {
                 return;
@@ -328,6 +340,10 @@ export class MarkerLayerManager {
         this.markerTextures.clear();
         this.markerRegistry.clear();
         this.source.clear();
+
+        // The release function is idempotent, so the layer count cannot go below 0.
+        this.releaseMarkerLayer?.();
+        this.releaseMarkerLayer = null;
     }
 
     /**
@@ -544,6 +560,7 @@ export class MarkerLayerManager {
             try {
                 if (operation.kind === 'upsert') {
                     this.applyUpsert(operation.marker);
+                    notifyMarkerUpsert(operation.marker);
                 } else {
                     this.deleteMarker(operation.name);
                 }
@@ -583,6 +600,7 @@ export class MarkerLayerManager {
         }
 
         this.applyUpsert(data);
+        notifyMarkerUpsert(data);
     }
 
     private applyUpsert(data: MarkerUpdate): void {

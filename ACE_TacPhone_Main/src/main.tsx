@@ -27,6 +27,7 @@ for (const { global } of SHARED_MODULES) {
 }
 
 import './Backend/MessageRouter.ts'; // Must be in so it sets the globally accessible prototype
+import './Backend/Notifications.ts'; // Sets window.Notifications before any app can show one
 import './Backend/PanelDirectory.ts'; // Sets window.PanelDirectory before any panel mounts
 import './Backend/AppApi.ts'; // Sets window.AppApi before any app registers its API
 import './Panels/PanelContext.ts'; // Sets window.TacPhoneUtils.PanelContext/usePanel

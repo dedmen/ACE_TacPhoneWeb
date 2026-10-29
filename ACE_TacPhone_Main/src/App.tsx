@@ -161,8 +161,10 @@ class PlayerPosPanel extends React.Component<{},{
     }
 };
 */
+import type {NotificationTapHandler, TacPhoneNotification} from './Backend/Notifications'
 import {AppChooserPanel} from './Panels/AppChooserPanel'
 import {AppErrorBoundary} from './Panels/AppErrorBoundary'
+import {NotificationHost} from './Panels/NotificationHost'
 import {PanelBinding} from './Panels/PanelHost'
 import {TargetChooserDialog} from './Panels/TargetChooserDialog'
 
@@ -257,6 +259,33 @@ class App extends React.Component<{}, {loading: boolean, error: string | undefin
         }
     }
 
+    /**
+     * Runs a notification tap callback and logs whatever it throws or rejects:
+     * one broken action must not break the host UI.
+     */
+    private runTapHandler = (handler: NotificationTapHandler, notification: TacPhoneNotification): void => {
+        try {
+            const result: unknown = handler(notification);
+
+            if (result !== null && result !== undefined && typeof (result as { then?: unknown }).then === "function") {
+                Promise.resolve(result).catch(error => {
+                    console.error("TacPhone notification action failed:", error);
+                });
+            }
+        } catch (error) {
+            console.error("TacPhone notification action failed:", error);
+        }
+    }
+
+    /**
+     * Runs the tap action of a notification. NotificationHost dismisses the
+     * notification afterwards, so this only resolves the action.
+     */
+    private onNotificationActivate = (notification: TacPhoneNotification): void => {
+        if (typeof notification.action === "function")
+            this.runTapHandler(notification.action, notification);
+    }
+
     private loadApps = async () => {
         this.setState({ loading: true, error: undefined });
 
@@ -326,6 +355,8 @@ class App extends React.Component<{}, {loading: boolean, error: string | undefin
             </div>  
             {/* Installs window.AppApi's target chooser; overlays the whole phone. */}
             <TargetChooserDialog />
+            {/* Notification banners are a fixed overlay too, so they sit outside the layout. */}
+            <NotificationHost onActivate={this.onNotificationActivate} />
             </>
         )
     }

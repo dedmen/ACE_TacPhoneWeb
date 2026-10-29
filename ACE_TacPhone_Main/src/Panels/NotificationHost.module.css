@@ -1,0 +1,197 @@
+/* Notification stack (phone-style banners).
+   Fixed overlay mounted outside the layout by App.tsx: it never takes space from
+   the apps and never clips inside a tab. The container ignores pointer events so
+   it cannot eat clicks in the empty area below the last card; the cards opt back
+   in individually. */
+
+.Host {
+    position: fixed;
+    /* Safe areas keep the stack clear of notches, rounded corners and gesture bars. */
+    top: calc(8px + env(safe-area-inset-top, 0px));
+    right: calc(8px + env(safe-area-inset-right, 0px));
+    /* Below TargetChooserDialog (1000): a panel question must win over banners. */
+    z-index: 900;
+
+    width: min(360px, calc(100vw - 24px));
+    max-height: calc(100vh - 16px);
+    box-sizing: border-box;
+
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+
+    pointer-events: none;
+}
+
+.Card {
+    /* Drag offset, written inline by the component. Kept in a variable so the
+       closing state can nudge the card relative to where the finger left it. */
+    --notification-offset: 0px;
+
+    position: relative;
+    box-sizing: border-box;
+    width: 100%;
+    padding: 10px 12px;
+
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+
+    font: 15px/1.35 system-ui, "Segoe UI", Roboto, sans-serif;
+    text-align: left;
+    color: #f0f0f0;
+    background-color: rgba(24, 24, 28, 0.94);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 12px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+
+    cursor: pointer;
+    overflow: hidden;
+    /* Horizontal swipes belong to the card; vertical drags still scroll the app. */
+    touch-action: pan-y;
+    user-select: none;
+    -webkit-user-select: none;
+
+    pointer-events: auto;
+    transform: translateX(var(--notification-offset));
+    transition:
+        transform 180ms ease-out,
+        opacity 160ms ease-out;
+
+    animation: notification-in 200ms ease-out;
+}
+
+.Dragging {
+    /* Follow the finger exactly; only release-and-snap-back is animated. */
+    transition: none;
+    cursor: grabbing;
+}
+
+.Closing {
+    /* Exit: fade while sliding a little further out. `.Dragging` is declared
+       before this rule, so the transition comes back for the fade-out. */
+    opacity: 0;
+    pointer-events: none;
+    cursor: default;
+    transform: translateX(calc(var(--notification-offset) + 24px)) scale(0.98);
+}
+
+@keyframes notification-in {
+    from {
+        opacity: 0;
+        transform: translateX(16px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+/* Reduced-motion entry: no slide, no scale, just appears. */
+@keyframes notification-fade-in {
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
+}
+
+.Icon {
+    flex: 0 0 auto;
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    object-fit: cover;
+    background-color: rgba(255, 255, 255, 0.08);
+}
+
+.Content {
+    flex: 1 1 auto;
+    min-width: 0;
+
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.Title {
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 1.3;
+    color: #fff;
+    /* Long app text must wrap instead of widening the banner. */
+    overflow-wrap: anywhere;
+}
+
+.Body {
+    font-size: 13px;
+    line-height: 1.35;
+    color: #c8c8cc;
+    overflow-wrap: anywhere;
+
+    /* A banner is a preview: three lines, no more. */
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    overflow: hidden;
+}
+
+.Close {
+    flex: 0 0 auto;
+    /* Hidden by default: touch devices swipe instead, and a small button next to
+       a swipe area is only in the way. Enabled for precise pointers below. */
+    display: none;
+    align-items: center;
+    justify-content: center;
+
+    width: 28px;
+    height: 28px;
+    margin: -2px -4px -2px 0;
+    padding: 0;
+
+    font: inherit;
+    font-size: 18px;
+    line-height: 1;
+    color: #d8d8dc;
+    background-color: transparent;
+    border: 0;
+    border-radius: 50%;
+    cursor: pointer;
+}
+
+.Close:hover {
+    color: #fff;
+    background-color: rgba(255, 255, 255, 0.14);
+}
+
+.Close:focus-visible {
+    outline: 2px solid #7aa7ff;
+    outline-offset: 1px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+    .Close {
+        display: inline-flex;
+    }
+}
+
+/* Reduced motion: fade only, never slide or scale. */
+@media (prefers-reduced-motion: reduce) {
+    .Card {
+        animation: notification-fade-in 120ms linear;
+        transition: opacity 120ms linear;
+    }
+
+    .Dragging {
+        transition: none;
+    }
+
+    .Closing {
+        /* Still fade out, but in place: the swipe offset stays, nothing moves. */
+        transform: translateX(var(--notification-offset));
+        transition: opacity 120ms linear;
+    }
+}

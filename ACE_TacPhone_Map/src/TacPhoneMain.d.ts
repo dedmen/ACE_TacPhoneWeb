@@ -225,6 +225,69 @@ export declare interface Networking {
     OnMessageFromGame(message: object): void;
 }
 
+/** The tap action of a notification. */
+export declare type NotificationAction = NotificationTapHandler;
+
+/**
+ * In-memory notification stack.
+ *
+ * Snapshots are immutable: `getSnapshot()` returns the current array reference
+ * and every change replaces it, so React's `useSyncExternalStore` can compare
+ * references. Subscribers are notified after the array was replaced.
+ */
+export declare class NotificationCenter {
+    private notifications;
+    private listeners;
+    /** Auto-dismiss timer per notification id. */
+    private autoTimers;
+    /** Exit-animation removal timer per notification id. */
+    private removalTimers;
+    private nextId;
+    /** Current immutable snapshot; the reference changes on every change. */
+    getSnapshot(): readonly TacPhoneNotification[];
+    /** Subscribes to snapshot changes; returns the unsubscribe function. */
+    subscribe(listener: (notifications: readonly TacPhoneNotification[]) => void): () => void;
+    /** Shows a notification and returns its id. */
+    show(options: NotificationOptions_2): string;
+    /**
+     * Starts the exit animation of one notification and removes it afterwards.
+     * Idempotent: a second call while the notification is closing does nothing.
+     */
+    dismiss(id: string): void;
+    /** Removes every notification immediately, without the exit animation. */
+    clear(): void;
+    private remove;
+    /** Drops the oldest notifications above MAX_NOTIFICATIONS, without animating. */
+    private trimToLimit;
+    private scheduleAutoDismiss;
+    private clearAutoTimer;
+    private clearRemovalTimer;
+    /** Replaces the snapshot and notifies every subscriber. */
+    private setNotifications;
+    /** Default icon of an app: the first panel's GetTacPhoneIcon(). */
+    private defaultIcon;
+}
+
+/** Options accepted by NotificationCenter.show(). */
+declare interface NotificationOptions_2 {
+    title: string;
+    body?: string;
+    /** App name, used to resolve the default app icon. */
+    app?: string;
+    /** Explicit icon URL; overrides the app icon. */
+    icon?: string;
+    /** Milliseconds; 0 = permanent until dismissed. Default 15000. */
+    duration?: number;
+    /** Arbitrary payload available to the tap handler on the stored notification. */
+    data?: unknown;
+    /** Runs when the notification is tapped. */
+    action?: NotificationAction;
+}
+export { NotificationOptions_2 as NotificationOptions }
+
+/** Runs when a notification is tapped; may be async. */
+export declare type NotificationTapHandler = (notification: TacPhoneNotification) => void | Promise<void>;
+
 /** Options for PanelDirectory.open(). */
 export declare interface OpenPanelOptions {
     /** "float" (default) opens a floating popup, "tab" adds a docked tab. */
@@ -428,6 +491,14 @@ export declare interface PanelRect {
     height: number;
 }
 
+/** Stored notification; what subscribers render. */
+export declare interface TacPhoneNotification extends NotificationOptions_2 {
+    id: string;
+    createdAt: number;
+    /** True while the exit animation runs; the store removes it afterwards. */
+    closing?: boolean;
+}
+
 /**
  * Ask the user (or the host) which panel should receive the request. Return the
  * instanceId (or tabId) of one of the candidates, or undefined to cancel.
@@ -474,6 +545,7 @@ declare global {
         AppDirectory: AppDirectory;
         PanelDirectory: PanelDirectory;
         AppApi: AppApiRegistry;
+        Notifications: NotificationCenter;
         TacPhoneUtils: {
             CommandRegistry: typeof CommandRegistry;
             PanelContext: React.Context<PanelInstance | undefined>;

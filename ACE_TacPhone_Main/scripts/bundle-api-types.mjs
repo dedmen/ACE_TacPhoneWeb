@@ -283,6 +283,7 @@ async function verifyDeclarations() {
     const expected = [
         'Networking',
         'AppDirectory',
+        'Notifications',
         'TacPhoneUtils',
         ...SHARED_MODULES.map(({ global }) => global),
     ]
