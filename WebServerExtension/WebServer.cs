@@ -32,7 +32,7 @@ namespace ArmaServerSide
                 var webSocket = connection.WebSocket;
                 if (webSocket.State == WebSocketState.Open)
                 {
-                    await webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Connection closed", CancellationToken.None);
+                    await CloseSafelyAsync(webSocket, WebSocketCloseStatus.NormalClosure, "Connection closed");
                 }
 
                 Console.WriteLine($"Connection removed: {connectionId}. Total connections: {_connections.Count}");
@@ -40,6 +40,23 @@ namespace ArmaServerSide
                 // Notify remaining clients
                 //var notification = new { type = "user_left", connectionId = connectionId, totalConnections = _connections.Count };
                 //await BroadcastAsync(JsonSerializer.Serialize(notification));
+            }
+        }
+
+        /// <summary>
+        /// Closes a socket without ever hanging: a peer that stopped responding
+        /// cannot complete the close handshake, so abort after 2 s.
+        /// </summary>
+        internal static async Task CloseSafelyAsync(WebSocket socket, WebSocketCloseStatus status, string? description)
+        {
+            try
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                await socket.CloseAsync(status, description ?? string.Empty, cts.Token);
+            }
+            catch (Exception)
+            {
+                socket.Abort();
             }
         }
 
@@ -109,7 +126,11 @@ namespace ArmaServerSide
 
     internal class WebServer
     {
-        WebApplication app = null;
+        WebApplication app = null!;
+
+        // Set when the host starts shutting down; every WebSocket wait observes it.
+        readonly CancellationTokenSource _stopping = new();
+        volatile bool _stopped;
 
         public WebServer(int port)
         {
@@ -130,6 +151,12 @@ namespace ArmaServerSide
                               .AllowAnyMethod();
                     });
             });
+
+            // A dead WebSocket peer must not hold up a mission restart for the
+            // default 30 s shutdown timeout.
+            builder.Services.Configure<HostOptions>(
+                options => options.ShutdownTimeout = TimeSpan.FromSeconds(2));
+
             builder.WebHost.UseUrls($"https://[::]:{port}");
 
             app = builder.Build();
@@ -165,7 +192,7 @@ namespace ArmaServerSide
                     var connectionId = Guid.NewGuid().ToString();
 
                     await connectionManager.AddConnectionAsync(connectionId, webSocket);
-                    await HandleWebSocketAsync(connectionId, webSocket, connectionManager);
+                    await HandleWebSocketAsync(connectionId, webSocket, connectionManager, _stopping.Token);
                 }
                 else
                 {
@@ -233,7 +260,14 @@ namespace ArmaServerSide
                 await context.Response.Body.WriteAsync(System.Text.Encoding.UTF8.GetBytes(myResult));
             });
 
-            app.RunAsync();
+            // Listening is started explicitly by Start(), so the caller can report
+            // bind and certificate failures to the game instead of failing silently.
+        }
+
+        /// <summary>Starts listening. Throws when the port or the TLS certificate is unusable.</summary>
+        public void Start()
+        {
+            app.StartAsync().GetAwaiter().GetResult();
         }
 
         /// <summary>
@@ -333,13 +367,32 @@ namespace ArmaServerSide
 
         public void Stop()
         {
-            app.StopAsync().Wait(); //#TODO don't wait.. please.. Async properly
+            _stopped = true;
+
+            try { _stopping.Cancel(); }
+            catch (Exception) { /* already disposed */ }
+
+            try
+            {
+                // Bounded: StopAsync must not block the Arma main thread on a dead peer.
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+                app.StopAsync(cts.Token).GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                // Do not risk a blocking DisposeAsync after a failed stop.
+                Console.WriteLine($"WebServer stop failed: {ex.Message}");
+                return;
+            }
+
+            try { app.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+            catch (Exception ex) { Console.WriteLine($"WebServer dispose failed: {ex.Message}"); }
         }
 
 
 
 
-        static async Task HandleWebSocketAsync(string connectionId, WebSocket webSocket, WebSocketConnectionManager connectionManager)
+        static async Task HandleWebSocketAsync(string connectionId, WebSocket webSocket, WebSocketConnectionManager connectionManager, CancellationToken stopping)
         {
             const int receiveBufferSize = 1024 * 4;
             const int maxMessageSize = 30 * 1024 * 1024;
@@ -350,7 +403,7 @@ namespace ArmaServerSide
                 // Send welcome message
                 await connectionManager.SendMessageToConnectionAsync(connectionId, $"{{\"type\": \"welcome\", \"message\": \"Connection {connectionId} established!\"}}");
 
-                while (webSocket.State == WebSocketState.Open || webSocket.State == WebSocketState.CloseReceived)
+                while (!stopping.IsCancellationRequested && (webSocket.State == WebSocketState.Open || webSocket.State == WebSocketState.CloseReceived))
                 {
                     using var messageStream = new MemoryStream();
                     WebSocketReceiveResult result;
@@ -358,7 +411,7 @@ namespace ArmaServerSide
                     // A message can span multiple frames, so keep receiving until EndOfMessage.
                     do
                     {
-                        result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
+                        result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), stopping);
 
                         if (result.MessageType == WebSocketMessageType.Close)
                         {
@@ -367,7 +420,7 @@ namespace ArmaServerSide
 
                         if (messageStream.Length + result.Count > maxMessageSize)
                         {
-                            await webSocket.CloseAsync(WebSocketCloseStatus.MessageTooBig, "Message too large", CancellationToken.None);
+                            await WebSocketConnectionManager.CloseSafelyAsync(webSocket, WebSocketCloseStatus.MessageTooBig, "Message too large");
                             await connectionManager.RemoveConnectionAsync(connectionId);
                             return;
                         }
@@ -379,7 +432,7 @@ namespace ArmaServerSide
                     if (result.MessageType == WebSocketMessageType.Close)
                     {
                         await connectionManager.RemoveConnectionAsync(connectionId);
-                        await webSocket.CloseAsync(result.CloseStatus ?? WebSocketCloseStatus.NormalClosure, result.CloseStatusDescription, CancellationToken.None);
+                        await WebSocketConnectionManager.CloseSafelyAsync(webSocket, result.CloseStatus ?? WebSocketCloseStatus.NormalClosure, result.CloseStatusDescription);
                         return;
                     }
 
@@ -401,9 +454,17 @@ namespace ArmaServerSide
 
                 await connectionManager.RemoveConnectionAsync(connectionId);
             }
+            catch (OperationCanceledException)
+            {
+                // Host is shutting down (mission restart): drop the connection now
+                // instead of waiting for a peer that may never answer.
+                webSocket.Abort();
+                await connectionManager.RemoveConnectionAsync(connectionId);
+            }
             catch (Exception ex)
             {
                 Console.WriteLine($"Error handling WebSocket connection {connectionId}: {ex.Message}");
+                webSocket.Abort();
                 await connectionManager.RemoveConnectionAsync(connectionId);
             }
         }
@@ -440,10 +501,18 @@ namespace ArmaServerSide
         internal void HandleFileContent(string fileName, string content)
         {
             // The game sent us content for a file
+            if (_stopped) return;
 
-            if (_filesWaiting.TryRemove(fileName, out var compSource))
+            try
             {
-                compSource.TrySetResult(content);
+                if (_filesWaiting.TryRemove(fileName, out var compSource))
+                {
+                    compSource.TrySetResult(content);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"HandleFileContent failed: {ex.Message}");
             }
 
             //#TODO cache it, files don't change. _fileCache. Also needs to be threadsafe And if not in cache, need to reuse the existing promise
@@ -452,8 +521,17 @@ namespace ArmaServerSide
         internal void SendTo(string target, string content)
         {
             // Send content to specific websocket client
-            var websocketManager = app.Services.GetService<WebSocketConnectionManager>()!;
-            _ = websocketManager.SendMessageToConnectionAsync(target, content);
+            if (_stopped) return;
+
+            try
+            {
+                var websocketManager = app.Services.GetService<WebSocketConnectionManager>()!;
+                _ = websocketManager.SendMessageToConnectionAsync(target, content);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"SendTo failed: {ex.Message}");
+            }
         }
     }
 }

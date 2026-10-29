@@ -24,26 +24,29 @@ needs a product decision before coding, **[wontfix]** deliberately left as is.
 
 ### Critical: silent failure and process kill
 
-- [ ] **[bug]** Startup errors are swallowed. `WebServer.cs:236` discards the
+*Fixed 2026-10-29: guarded synchronous start, try/catch on every export, bounded
+shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`.*
+
+- [x] **[bug]** Startup errors are swallowed. `WebServer.cs:236` discards the
   `app.RunAsync()` task, `DllEntry.cs:88` returns `1` for every outcome, and
   `XEH_postInit.sqf:99-101` prints "Webhost started" regardless.
   Verified failures: port already bound (`IOException`) and missing HTTPS cert
   (`InvalidOperationException`). Replace with a guarded synchronous
   `StartAsync().GetAwaiter().GetResult()`, keep the task for post-start faults,
   and return the error to SQF.
-- [ ] **[bug]** No export has a try/catch (`DllEntry.cs:20-36, 42-89`). In
+- [x] **[bug]** No export has a try/catch (`DllEntry.cs:20-36, 42-89`). In
   NativeAOT an exception crossing a reverse P/Invoke terminates the Arma process.
   Wrap every export, return a status, never let a managed exception escape.
   Reachable paths: `Stop()`'s `.Wait()` wrapping `AggregateException`,
   `new WebServer(port)` failing, `SendTo` touching a stopped host.
-- [ ] **[bug]** Mission restart blocks the game thread up to 30 s.
+- [x] **[bug]** Mission restart blocks the game thread up to 30 s.
   `Stop()` is `app.StopAsync().Wait()` (`WebServer.cs:341-344`) while the WS loop
   waits on `ReceiveAsync(..., CancellationToken.None)` (`:368`). Measured
   31,008 ms with one non-responsive peer (suspended phone tab / dropped Wi-Fi).
   Configure `HostOptions.ShutdownTimeout` (1-2 s), pass a shutdown token into the
   WS loop, and `Abort()` the socket on timeout. Never block the Arma thread
   unbounded.
-- [ ] **[bug]** Close paths can hang and throw out of the handler.
+- [x] **[bug]** Close paths can hang and throw out of the handler.
   `CloseAsync(..., CancellationToken.None)` at `WebServer.cs:35, 377, 389`.
   Wrap in a short `CancellationTokenSource`, catch, `Abort()`.
 
@@ -65,7 +68,7 @@ needs a product decision before coding, **[wontfix]** deliberately left as is.
 - [ ] **[robustness]** 30 MB per-connection message limit with no auth or rate
   limit (`WebServer.cs:352`) is a LAN memory DoS. Lower the limit for control
   frames and reject early.
-- [ ] **[robustness]** `_webServer` is published after the server already
+- [x] **[robustness]** `_webServer` is published after the server already
   listens (`DllEntry.cs:60` vs `WebServer.cs:236`), so an early request can lose
   its `FileContent` and 504. Construct, assign, then start.
 - [ ] **[robustness]** `app` is never disposed and `SendTo` does not check state
@@ -114,7 +117,7 @@ needs a product decision before coding, **[wontfix]** deliberately left as is.
 - [ ] **[cleanup]** `IsTrimmable=false` is misleading under `PublishAot`; the two
   CS8625 nullable warnings (`WebServer.cs:112`, `DllEntry.cs:40`); unused
   `using Microsoft.AspNetCore.Mvc` and unused `BroadcastAsync`/`GetConnectionCount`.
-- [ ] **[cleanup]** Return codes are uninformative (`DllEntry.cs:88`:
+- [x] **[cleanup]** Return codes are uninformative (`DllEntry.cs:88`:
   unknown method, missing arg, failed start, success all return 1).
   `RvExtensionVersion` ignores `outputSize`; `RvExtension` writes nothing.
 - [ ] **[cleanup]** Diagnostics only go to `Console.WriteLine`, which is invisible
