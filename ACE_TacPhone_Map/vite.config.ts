@@ -2,7 +2,6 @@ import { resolve } from 'node:path'
 import { defineConfig, type PluginOption } from 'vite'
 import react, { reactCompilerPreset } from '@vitejs/plugin-react'
 import babel from '@rolldown/plugin-babel'
-import dts from 'vite-plugin-dts'
 import { libInjectCss } from 'vite-plugin-lib-inject-css'
 //import { viteSingleFile } from "vite-plugin-singlefile"
 import { viteSingleFile } from "./build/singlefile.ts"
@@ -17,7 +16,6 @@ export default defineConfig(({ mode, command }) => {
 
   const plugins: PluginOption[] = [
     react(),
-    dts({ include: ['src'], bundleTypes: true, }),
     libInjectCss(),
     babel({ presets: [reactCompilerPreset()] }),
     viteSingleFile({ failOnNotInlined: isRelease }),

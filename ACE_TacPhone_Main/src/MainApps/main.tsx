@@ -1,13 +1,114 @@
+import React from "react";
 import type { AppPanelInfo } from "../Backend/Types";
+import type { PanelInfo } from "../Backend/PanelDirectory";
 
 // These are apps included in TacPhone, even if no other apps are loaded. Core functionality like Notifications and Settings
 
 
 export function GetTacPhoneApps(): Array<AppPanelInfo> {
   return [
-
+    ...devApps,
   ]
-};    
+};
+
+// Dev host only: a read-only view of the open panels plus buttons to exercise
+// window.PanelDirectory (activate, open a docked tab, open a floating popup).
+// The import.meta.env.DEV check below makes the release build drop this panel.
+
+type PanelInspectorState = {
+  panels: PanelInfo[];
+  panelId: string;
+};
+
+const inspectorBoxStyle: React.CSSProperties = {
+  padding: 10,
+  height: "100%",
+  boxSizing: "border-box",
+  overflow: "auto",
+  backgroundColor: "#222",
+  color: "#eee",
+  fontFamily: "monospace",
+  fontSize: 12,
+};
+
+const inspectorRowStyle: React.CSSProperties = {
+  display: "flex",
+  flexWrap: "wrap",
+  alignItems: "center",
+  gap: 6,
+  marginBottom: 8,
+};
+
+class PanelInspectorPanelContent extends React.Component<{}, PanelInspectorState> {
+  state: PanelInspectorState = {
+    panels: window.PanelDirectory.list(),
+    panelId: "",
+  };
+
+  private refresh = (): void => {
+    this.setState({ panels: window.PanelDirectory.list() });
+  };
+
+  private activate = (panel: PanelInfo): void => {
+    // A background tab has no instance yet; activate() also accepts its tab id.
+    if (!window.PanelDirectory.activate(panel.instanceId ?? panel.tabId))
+      console.warn(`TacPhone panel inspector could not activate tab "${panel.tabId}".`);
+
+    this.refresh();
+  };
+
+  private open = (placement: "float" | "tab"): void => {
+    if (!this.state.panelId)
+      return;
+
+    const result = window.PanelDirectory.open(this.state.panelId, { placement });
+    if (!result)
+      console.warn(`TacPhone panel inspector could not open panel "${this.state.panelId}".`);
+
+    this.refresh();
+  };
+
+  render(): React.ReactNode {
+    const { panels, panelId } = this.state;
+    const knownPanels = [...window.AppDirectory.knownPanels.values()];
+
+    return (
+      <div style={inspectorBoxStyle}>
+        <div style={inspectorRowStyle}>
+          <strong>Panel inspector (dev)</strong>
+          <button type="button" onClick={this.refresh}>Refresh</button>
+          <select value={panelId} onChange={event => this.setState({ panelId: event.target.value })}>
+            <option value="">Select a panel</option>
+            {knownPanels.map(panel => (
+              <option key={panel.id} value={panel.id}>{panel.id}</option>
+            ))}
+          </select>
+          <button type="button" onClick={() => this.open("tab")} disabled={!panelId}>Open tab</button>
+          <button type="button" onClick={() => this.open("float")} disabled={!panelId}>Open popup</button>
+        </div>
+        <div style={inspectorRowStyle}>
+          {panels.map(panel => (
+            <button key={panel.tabId} type="button" onClick={() => this.activate(panel)}>
+              Activate {panel.instanceId ?? panel.tabId}
+            </button>
+          ))}
+        </div>
+        <pre style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+          {JSON.stringify(panels, null, 2)}
+        </pre>
+      </div>
+    );
+  }
+}
+
+const panelInspectorPanel: AppPanelInfo = {
+  id: "ACE_TacPhone_PanelInspector",
+  GetTacPhoneIcon: () => "",
+  GetDefaultTitle: () => "Panel Inspector",
+  appComponent: PanelInspectorPanelContent,
+};
+
+const devApps: Array<AppPanelInfo> = import.meta.env.DEV ? [panelInspectorPanel] : [];
 
 //#TODO but this somewhere else?
 // 1. Compress a string and turn it into Base64

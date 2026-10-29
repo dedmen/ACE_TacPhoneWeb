@@ -14,12 +14,15 @@ export class AppDirectory
     failedApps: Map<string, string>;
 
     private moduleCache: Map<string, Promise<AppModule>>;
+    /** Reverse of knownPanels: panel id -> name of the app that provides it. */
+    private panelOwners: Map<string, string>;
 
     constructor(){
         this.knownApps = new Map();
         this.knownPanels = new Map();
         this.failedApps = new Map();
         this.moduleCache = new Map();
+        this.panelOwners = new Map();
     }
 
     private async fetchExternalModule(name: string, appInfo: AppInfoSource): Promise<any> {
@@ -140,6 +143,7 @@ export class AppDirectory
         this.knownApps = new Map();
         this.knownPanels = new Map();
         this.failedApps = new Map();
+        this.panelOwners = new Map();
 
         // Load every app in parallel. One broken app must not prevent the rest from starting.
         const results = await Promise.allSettled(entries.map(async ([name, rawInfo]) => {
@@ -180,10 +184,19 @@ export class AppDirectory
                     console.warn(`TacPhone panel id "${panel.id}" from app "${name}" is already registered; overwriting it.`);
 
                 this.knownPanels.set(panel.id, panel);
+                this.panelOwners.set(panel.id, name);
             });
         });
 
         this.failedApps = failedApps;
+    }
+
+    /**
+     * Returns the name of the app that provides the given panel id, if any.
+     * Used by the panel directory to report which app runs in an open panel.
+     */
+    appNameForPanel(panelId: string): string | undefined {
+        return this.panelOwners.get(panelId);
     }
 
     // Returns a BLOB url containing the WebP icon image

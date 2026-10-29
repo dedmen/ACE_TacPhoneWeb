@@ -62,7 +62,7 @@ function createModelFromLayout(layout: IJsonModel | undefined): Model | undefine
 }
 
 const defaultLayout: IJsonModel = {
-    global: {tabEnablePopoutFloatIcon: true},
+    global: {tabEnablePopoutFloatIcon: true, tabEnablePopout: false},
     borders: [],
     layout: {
         type: "row",
@@ -163,6 +163,8 @@ class PlayerPosPanel extends React.Component<{},{
 */
 import {AppChooserPanel} from './Panels/AppChooserPanel'
 import {AppErrorBoundary} from './Panels/AppErrorBoundary'
+import {PanelBinding} from './Panels/PanelHost'
+import {TargetChooserDialog} from './Panels/TargetChooserDialog'
 
 
 class App extends React.Component<{}, {loading: boolean, error: string | undefined}> {
@@ -178,21 +180,30 @@ class App extends React.Component<{}, {loading: boolean, error: string | undefin
 
     factory = (node: TabNode) => {
         const component = node.getComponent()!;
+        // The tab component is the app panel id, except for the app chooser,
+        // which picks an app at runtime and reports it through setApp().
+        const panelId = component === "AppChooser" ? undefined : component;
 
+        let content: React.ReactNode;
         if (component === "AppChooser"){
-            return <AppChooserPanel />;
+            content = <AppChooserPanel />;
+        } else {
+            const panelInfo = window.AppDirectory.knownPanels.get(component);
+            content = panelInfo
+                ? (
+                    <AppErrorBoundary key={node.getId()} appName={panelInfo.id}>
+                        {React.createElement(panelInfo.appComponent, null)}
+                    </AppErrorBoundary>
+                )
+                : <div>Unknown panel?? {component}/{node.getName()}</div>;
         }
 
-        let knownPanels = window.AppDirectory.knownPanels;
-        let panelInfo = knownPanels.get(component);
-        if (panelInfo)
-            return (
-                <AppErrorBoundary key={node.getId()} appName={panelInfo.id}>
-                    {React.createElement(panelInfo.appComponent, null)}
-                </AppErrorBoundary>
-            );
-
-        return <div>Unknown panel?? {component}/{node.getName()}</div>;
+        // One panel instance per mounted tab; floating popups use the same factory.
+        return (
+            <PanelBinding key={node.getId()} tabId={node.getId()} panelId={panelId}>
+                {content}
+            </PanelBinding>
+        );
     }
 
     private loadLayoutFromGame = async (): Promise<Model | undefined> => {
@@ -257,8 +268,12 @@ class App extends React.Component<{}, {loading: boolean, error: string | undefin
                 window.AppDirectory.LoadAvailableApps()
             ]);
 
-            if (layout)
+            // The layout from the game replaces the model built in the
+            // constructor; the directory must follow it or it reports stale rects.
+            if (layout) {
                 this.model = layout;
+                window.PanelDirectory.attach(this.model);
+            }
 
             if (this.mounted)
                 this.setState({ loading: false, error: undefined });
@@ -272,11 +287,15 @@ class App extends React.Component<{}, {loading: boolean, error: string | undefin
 
     componentDidMount(): void {
         this.mounted = true;
+        // Attach before the layout renders so window.PanelDirectory is populated
+        // as soon as the loading screen disappears.
+        window.PanelDirectory.attach(this.model);
         void this.loadApps();
     }
 
     componentWillUnmount(): void {
         this.mounted = false;
+        window.PanelDirectory.detach();
     }
 
     render() {
@@ -302,8 +321,11 @@ class App extends React.Component<{}, {loading: boolean, error: string | undefin
                     onRenderTabSet={this.onRenderTabSet}
                     onModelChange={this.onLayoutChanged}
                     realtimeResize={true}
+                    supportsPopout={false}
                     />
             </div>  
+            {/* Installs window.AppApi's target chooser; overlays the whole phone. */}
+            <TargetChooserDialog />
             </>
         )
     }

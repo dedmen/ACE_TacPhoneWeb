@@ -27,6 +27,10 @@ for (const { global } of SHARED_MODULES) {
 }
 
 import './Backend/MessageRouter.ts'; // Must be in so it sets the globally accessible prototype
+import './Backend/PanelDirectory.ts'; // Sets window.PanelDirectory before any panel mounts
+import './Backend/AppApi.ts'; // Sets window.AppApi before any app registers its API
+import './Panels/PanelContext.ts'; // Sets window.TacPhoneUtils.PanelContext/usePanel
+import './Panels/PanelHost.tsx'; // Tab <-> PanelInstance binding
 
 ReactDOMClient.createRoot(document.getElementById('root')!).render(
 

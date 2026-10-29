@@ -17,14 +17,33 @@ import type * as ReactJSXRuntime from "react/jsx-runtime";
 import type * as ReactCompilerRuntime from "react/compiler-runtime";
 
 import type { AppDirectory } from "./Backend/AppDirectory";
+import type { AppApiRegistry } from "./Backend/AppApi";
 import type { Networking } from "./Backend/Networking";
 import type { CommandRegistry } from "./Backend/MessageRouter";
+import type { PanelDirectory, PanelInstance } from "./Backend/PanelDirectory";
 
 export type { AppInfo, AppModule, AppPanelInfo } from "./Backend/Types";
 export type { CommandHandler } from "./Backend/MessageRouter";
 export type { Networking } from "./Backend/Networking";
+export type {
+    AppApiRegistration,
+    AppServiceInfo,
+    TargetChooser,
+    TargetOptions,
+    TargetPolicy,
+} from "./Backend/AppApi";
+export type {
+    OpenPanelOptions,
+    OpenPanelResult,
+    PanelInfo,
+    PanelInstance,
+    PanelPlacement,
+    PanelRect,
+} from "./Backend/PanelDirectory";
 export { AppDirectory } from "./Backend/AppDirectory";
+export { AppApiRegistry } from "./Backend/AppApi";
 export { CommandRegistry } from "./Backend/MessageRouter";
+export { PanelDirectory } from "./Backend/PanelDirectory";
 
 declare global {
     interface Window {
@@ -39,8 +58,15 @@ declare global {
         // Host API.
         Networking: Networking;
         AppDirectory: AppDirectory;
+        // Open panels (tabs and floating popups): enumerate, activate, open.
+        PanelDirectory: PanelDirectory;
+        // Inter-app services: register an app's API, resolve and call another app's.
+        AppApi: AppApiRegistry;
         TacPhoneUtils: {
             CommandRegistry: typeof CommandRegistry;
+            // Live handle of the panel an app content is rendered in.
+            PanelContext: React.Context<PanelInstance | undefined>;
+            usePanel(): PanelInstance | undefined;
         };
     }
 }

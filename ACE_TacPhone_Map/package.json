@@ -24,8 +24,8 @@
   },
   "scripts": {
     "dev": "npm --prefix ../ACE_TacPhone_Main run dev --",
-    "build": "tsc -b && vite build --mode release && node ../ACE_TacPhone_Main/scripts/check-shared-imports.mjs",
-    "build:debug": "tsc -b && vite build --mode debug && node ../ACE_TacPhone_Main/scripts/check-shared-imports.mjs",
+    "build": "tsc -b && vite build --mode release && node ../ACE_TacPhone_Main/scripts/check-shared-imports.mjs && node ../ACE_TacPhone_Main/scripts/bundle-api-types.mjs --app . --entry src/MapApi.ts --output dist/ace_tacphone_map.d.ts --name ACE_TacPhone_Map",
+    "build:debug": "tsc -b && vite build --mode debug && node ../ACE_TacPhone_Main/scripts/check-shared-imports.mjs && node ../ACE_TacPhone_Main/scripts/bundle-api-types.mjs --app . --entry src/MapApi.ts --output dist/ace_tacphone_map.d.ts --name ACE_TacPhone_Map",
     "check:importmap": "node ../ACE_TacPhone_Main/scripts/check-shared-imports.mjs",
     "lint": "oxlint",
     "preview": "vite preview"

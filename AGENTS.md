@@ -41,11 +41,13 @@ Both copy destinations are git-ignored in ACE3. No tests. Release strips `consol
 - Never re-enable `StrictMode` in `src/main.tsx`: it double-creates app constructors/mounts.
 - Production app = one self-contained ESM imported from blob URL: no relative imports, dynamic chunk imports, `React.lazy` local chunks, CSS side files, or `new URL(..., import.meta.url)`. Inline CSS/assets (map: `build/singlefile.ts`).
 - `ACE_TacPhone_Main/shared-modules.js` is sole source for host import map, `window` globals, Vite dedupe, app build externals, checker. Shared only: `react`, `react-dom`, `react-dom/client`, `react/jsx-runtime`, `react/compiler-runtime`. Keep external; apps cannot add mappings; add to `shared-modules.js` + `src/main.tsx`. `npm run check:importmap` validates host + app bundles (also runs in builds).
+- Panel system mounts only the selected tab of a tabset, so background panels have no live instance or registered API; route with `AppApi.resolveAsync()` (it activates and waits). Floating popups are in-layout; native window popouts (`'window'` sub-layouts) need `window.open` and are unsupported in the in-game browser.
 
 ## API/contract
-- App-facing API: `src/TacPhoneMain.ts` (re-exports `Backend/Types.ts`, `Networking`, `AppDirectory`, `CommandRegistry`).
-- `npm run build` emits `dist/TacPhoneMain.d.ts` + syncs to every discovered app's `src/TacPhoneMain.d.ts`. Never edit synced copies. External app: host build, then `npm run sync:api-types -- <app-src>`.
+- App-facing API: `src/TacPhoneMain.ts` (re-exports `Backend/Types.ts`, `Networking`, `AppDirectory`, `CommandRegistry`, `PanelDirectory`, `AppApi`, and the panel/API types). Globals: `window.PanelDirectory`, `window.AppApi`, `window.TacPhoneUtils.PanelContext` / `usePanel()`.
+- `npm run build` emits `dist/TacPhoneMain.d.ts` + syncs to every discovered app's `src/TacPhoneMain.d.ts`. Never edit synced copies. External app: host build, then `npm run sync:api-types -- <app-src>`. The panel and inter-app API types sync the same way.
 - App exports `GetTacPhoneApps()` + optional `OnMessageFromGame()`. Panel `id` global + persisted in layouts; components get no props. One message handler/app: route `c` via `window.TacPhoneUtils.CommandRegistry`.
+- Inter-app: an app exposes a service with `window.AppApi.register(panel, { service, version, api })` from its panel lifecycle (panel handle from `usePanel()` / `PanelContext`; clean up on unmount), and other apps route with `resolveAsync()`; a missing app is opened as a floating popup by default (`placement` option / `PanelDirectory.open()`). APIs are page-local, never reachable from the game, and have no permission model: the whole UI and all apps are one trust domain, and everything stays inside the single page/tab (no native window popouts).
 - Requests: `window.Networking.Request({a:'<AppName>', c:'...'})` -> app's SQF `ace_tacphone_requestProcessor`; may return JSON or promise. `window.AppDirectory` read-only.
 - Register game side in `addons/tacphone/apps/*/ace_tacphone_apps.hpp` (or mission `description.ext`); config class = routing `a`, and dev discovery maps that name to an app folder.
 

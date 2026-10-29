@@ -1,6 +1,16 @@
 #!/usr/bin/env node
-// Bundle the emitted declaration files of src/TacPhoneMain.ts into a single
-// dist/TacPhoneMain.d.ts that apps can copy into their own project.
+// Bundle declaration files into one app-facing .d.ts.
+//
+// Two modes, both shared by the host and every TacPhone app:
+//
+//   node scripts/bundle-api-types.mjs
+//       Host mode: bundles src/TacPhoneMain.ts into dist/TacPhoneMain.d.ts.
+//
+//   node ../ACE_TacPhone_Main/scripts/bundle-api-types.mjs --app . \
+//       --entry src/MapApi.ts --output dist/ace_tacphone_map.d.ts --name ACE_TacPhone_Map
+//       App mode: emits and bundles the declarations of one app entry into a
+//       self-contained dist file. Apps must not ship their own copy of this
+//       script; they call this one from Main.
 //
 // Runs after `vite build` (the dts plugin emits the per-file declarations).
 //
@@ -9,8 +19,9 @@
 // src/TacPhoneMain.ts is preserved and appended again after bundling.
 
 import { existsSync } from 'node:fs'
-import { readFile, readdir, rm, writeFile } from 'node:fs/promises'
-import { dirname, join, relative, resolve } from 'node:path'
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { basename, dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Extractor, ExtractorConfig } from '@microsoft/api-extractor'
 import ts from 'typescript'
@@ -285,11 +296,180 @@ async function verifyDeclarations() {
     }
 }
 
+/** Reads --app/--entry/--output/--name from the command line. */
+function parseAppOptions(argv) {
+    const options = {}
+
+    for (let index = 0; index < argv.length; index++) {
+        const argument = argv[index]
+
+        if (argument === '--app') options.appDir = argv[++index]
+        else if (argument === '--entry') options.entry = argv[++index]
+        else if (argument === '--output') options.output = argv[++index]
+        else if (argument === '--name') options.name = argv[++index]
+    }
+
+    return options
+}
+
+/**
+ * App mode: emit declarations for one app entry and bundle them into a single
+ * self-contained file. The app only supplies its directory, entry, output and
+ * display name; all bundling logic lives here in Main.
+ */
+async function bundleAppDeclarations(options) {
+    const appDir = resolve(process.cwd(), options.appDir ?? '.')
+    const entry = resolve(appDir, options.entry ?? 'src/main.tsx')
+    const output = resolve(appDir, options.output ?? 'dist/api.d.ts')
+    const tsconfigPath = join(appDir, 'tsconfig.app.json')
+
+    if (!existsSync(entry))
+        throw new Error(`${entry} does not exist. Pass --entry <app-relative file>.`)
+
+    if (!existsSync(tsconfigPath))
+        throw new Error(`${tsconfigPath} does not exist. App mode expects a tsconfig.app.json.`)
+
+    const packagePath = join(appDir, 'package.json')
+    const packageJson = existsSync(packagePath)
+        ? JSON.parse(await readFile(packagePath, 'utf8'))
+        : {}
+    const displayName = options.name ?? packageJson.name ?? basename(appDir)
+
+    const configFile = ts.readConfigFile(tsconfigPath, fileName => ts.sys.readFile(fileName))
+    if (configFile.error)
+        throw new Error(`Could not read ${tsconfigPath}: ${ts.flattenDiagnosticMessageText(configFile.error.messageText, '\n')}`)
+
+    const parsed = ts.parseJsonConfigFileContent(configFile.config, ts.sys, appDir)
+    const tempDir = await mkdtemp(join(tmpdir(), 'tacphone-api-'))
+
+    try {
+        const compilerOptions = {
+            ...parsed.options,
+            noEmit: false,
+            declaration: true,
+            emitDeclarationOnly: true,
+            declarationMap: false,
+            composite: false,
+            incremental: false,
+            rootDir: appDir,
+            outDir: tempDir,
+            sourceMap: false,
+        }
+
+        const program = ts.createProgram([entry], compilerOptions)
+        const emit = program.emit(undefined, undefined, undefined, true)
+        if (emit.emitSkipped)
+            throw new Error(`TypeScript did not emit declarations for ${entry}.`)
+
+        const entryRelative = relative(appDir, entry).replaceAll('\\', '/').replace(/\.(tsx?|mts|cts)$/, '.d.ts')
+        const entrySource = relative(appDir, entry).replaceAll('\\', '/')
+        const entryDeclarations = join(tempDir, entryRelative)
+        if (!existsSync(entryDeclarations))
+            throw new Error(`Expected ${entryDeclarations} to be emitted.`)
+
+        const configObject = {
+            projectFolder: appDir,
+            mainEntryPointFilePath: entryDeclarations,
+            compiler: {
+                tsconfigFilePath: tsconfigPath,
+            },
+            apiReport: {
+                enabled: false,
+            },
+            docModel: {
+                enabled: false,
+            },
+            dtsRollup: {
+                enabled: true,
+                publicTrimmedFilePath: output,
+            },
+            tsdocMetadata: {
+                enabled: false,
+            },
+            messages: {
+                compilerMessageReporting: {
+                    default: { logLevel: 'none' },
+                },
+                extractorMessageReporting: {
+                    default: { logLevel: 'none' },
+                },
+                tsdocMessageReporting: {
+                    default: { logLevel: 'none' },
+                },
+            },
+        }
+
+        const config = ExtractorConfig.prepare({
+            configObject,
+            configObjectFullPath: join(tempDir, 'api-extractor.json'),
+            packageJsonFullPath: packagePath,
+        })
+
+        const result = Extractor.invoke(config, {
+            localBuild: false,
+            showVerboseMessages: false,
+            showDiagnostics: false,
+        })
+
+        if (!result.succeeded)
+            throw new Error(`API Extractor failed to bundle the ${displayName} declarations.`)
+
+        const bundled = (await readFile(output, 'utf8'))
+            .replace(/\r?\n?export \{\s*\}\s*$/, '')
+            .trimEnd()
+
+        if (/^\s*(?:import|export)\s[^;]*from\s+['"]/m.test(bundled))
+            throw new Error(`${relative(appDir, output)} is not self-contained; it still imports another module.`)
+
+        const banner = `// Generated by ACE_TacPhone_Main for ${displayName}. Do not edit this file by hand.
+// Edit ${entrySource} in ${basename(appDir)} instead.
+`
+
+        const content = `${banner}${bundled}\n`
+        await writeFile(output, content)
+
+        const verifyProgram = ts.createProgram([output], {
+            target: ts.ScriptTarget.ES2023,
+            module: ts.ModuleKind.ESNext,
+            moduleResolution: ts.ModuleResolutionKind.Bundler,
+            skipLibCheck: false,
+            noEmit: true,
+        })
+        const sourceFile = verifyProgram.getSourceFile(output)
+        if (!sourceFile)
+            throw new Error(`TypeScript could not load ${relative(appDir, output)}.`)
+
+        const diagnostics = [
+            ...verifyProgram.getSyntacticDiagnostics(sourceFile),
+            ...verifyProgram.getSemanticDiagnostics(sourceFile),
+        ].filter(diagnostic => diagnostic.file?.fileName === sourceFile.fileName)
+
+        if (diagnostics.length > 0) {
+            const formatted = ts.formatDiagnosticsWithColorAndContext(diagnostics, {
+                getCanonicalFileName: fileName => fileName,
+                getCurrentDirectory: () => appDir,
+                getNewLine: () => '\n',
+            })
+            throw new Error(`${relative(appDir, output)} has type errors:\n${formatted}`)
+        }
+
+        console.log(`OK  ${relative(appDir, output).replaceAll('\\', '/')} (bundled app API declarations for ${displayName})`)
+    } finally {
+        await rm(tempDir, { recursive: true, force: true })
+    }
+}
+
 try {
-    await bundleDeclarations()
-    await removeStaleDeclarations(distDir)
-    await verifyDeclarations()
-    console.log(`OK  ${displayPath(apiFile)} (bundled host API declarations)`)
+    const appOptions = parseAppOptions(process.argv.slice(2))
+
+    if (appOptions.appDir) {
+        await bundleAppDeclarations(appOptions)
+    } else {
+        await bundleDeclarations()
+        await removeStaleDeclarations(distDir)
+        await verifyDeclarations()
+        console.log(`OK  ${displayPath(apiFile)} (bundled host API declarations)`)
+    }
 } catch (error) {
     console.error(`FAIL ${error.message}`)
     process.exitCode = 1

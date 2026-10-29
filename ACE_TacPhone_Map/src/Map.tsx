@@ -2,6 +2,7 @@ import React, { createRef, type RefObject } from 'react'
 import styles from './styles.module.scss'
 
 import "ol/ol.css";
+import type { PanelInstance } from './TacPhoneMain';
 import Map from "ol/Map";
 import { View } from 'ol';
 import type { ViewOptions } from 'ol/View.js';
@@ -19,6 +20,12 @@ import { LayerSwitcher } from './LayerSwitcher';
 import { MarkerLayerManager, type MarkerColor, type MarkerType } from './MapMarkers/MarkerLayer';
 import { MarkerCreateDialog } from './MapMarkers/MarkerCreateDialog';
 import { createMarker, type MarkerCreationData } from './MapMarkers/MarkerApi';
+import {
+    MAP_SERVICE,
+    MAP_SERVICE_VERSION,
+    type MapApi,
+    type MapFlyToOptions,
+} from './MapApi';
 
 const LONG_PRESS_DURATION_MS = 600;
 const LONG_PRESS_MOVE_TOLERANCE_PX = 10;
@@ -52,6 +59,14 @@ class App extends React.Component<{},MapState> {
     private terrainViewReady = false;
 
     private markerManager: MarkerLayerManager | null = null;
+
+    /** Static context type for class components. */
+    static contextType = window.TacPhoneUtils.PanelContext;
+    /** Panel instance from React context, or undefined before mount/context. */
+    declare context: PanelInstance | undefined;
+
+    /** Unregister function for the Map API. */
+    private unregisterMapApi: (() => void) | undefined;
 
     private longPressTimer: number | null = null;
     private longPressStart: { x: number; y: number; pointerId: number; coordinate: [number, number] } | null = null;
@@ -193,9 +208,122 @@ class App extends React.Component<{},MapState> {
                 console.error('Failed to load map terrain', error);
                 this.showTerrainError(error);
             });
+
+        /**
+         * Build and register the MapApi when the map instance exists.
+         * Registration happens here; flyTo requests before registration will be handled
+         * by applyNewTerrainSVG when terrainViewReady becomes true.
+         */
+        this.buildAndRegisterMapApi();
+    }
+
+    private buildAndRegisterMapApi(): void {
+        if (this.map === null || !this.context) {
+            return;
+        }
+
+        /**
+         * The MapApi public interface for other apps:
+         * - flyTo(options): move the map view
+         * - getView(): get current view state
+         * - isReady(): check if API is available
+         */
+        const api: MapApi = {
+            flyTo: (options: MapFlyToOptions) => {
+                // Validate before doing anything, including storing a pending target.
+                if (
+                    typeof options.x !== 'number' ||
+                    typeof options.y !== 'number' ||
+                    !Number.isFinite(options.x) ||
+                    !Number.isFinite(options.y)
+                ) {
+                    console.warn('MapApi.flyTo: invalid x/y coordinates');
+                    return;
+                }
+
+                // The terrain view is replaced once the SVG arrives, so a request
+                // that arrives before then is applied by applyPendingFlyTo().
+                if (!this.map || !this.terrainViewReady) {
+                    this.pendingFlyTo = options;
+                    return;
+                }
+
+                const view = this.map.getView();
+                const projection = view.getProjection();
+
+                const center = [options.x, options.y];
+
+                // Clamp the center to the current view projection extent when one exists
+                const extent = projection.getExtent();
+                if (extent) {
+                    center[0] = Math.max(extent[0], Math.min(options.x, extent[2]));
+                    center[1] = Math.max(extent[1], Math.min(options.y, extent[3]));
+                }
+
+                // Only apply resolution when it is a finite positive number
+                const resolution = options.resolution !== undefined && Number.isFinite(options.resolution) && options.resolution > 0 ? options.resolution : undefined;
+
+                if (options.animate !== false) {
+                    const animation: { center: number[]; resolution?: number; duration: number } = { center, duration: 300 };
+                    if (resolution !== undefined)
+                        animation.resolution = resolution;
+                    view.animate(animation);
+                } else {
+                    view.setCenter(center);
+                    if (resolution !== undefined) {
+                        view.setResolution(resolution);
+                    }
+                }
+            },
+            getView: () => {
+                if (!this.terrainViewReady || this.map === null) {
+                    return undefined;
+                }
+
+                const view = this.map.getView();
+                const center = view.getCenter();
+                const resolution = view.getResolution();
+
+                if (
+                    !center ||
+                    !Number.isFinite(center[0]) ||
+                    !Number.isFinite(center[1]) ||
+                    typeof resolution !== 'number' ||
+                    !Number.isFinite(resolution)
+                ) {
+                    return undefined;
+                }
+
+                return { x: center[0], y: center[1], resolution };
+            },
+            isReady: () => {
+                return this.terrainViewReady && this.map !== null;
+            },
+        };
+
+        const registration = window.AppApi.register(this.context, {
+            service: MAP_SERVICE,
+            version: MAP_SERVICE_VERSION,
+            api,
+        });
+
+        this.unregisterMapApi = registration;
     }
 
     componentWillUnmount(): void {
+        /**
+         * Unregister the MapApi BEFORE map teardown, so that window.AppApi.list()
+         * and other lookups see the cleanup immediately. The pendingFlyTo is now
+         * stale (map is null), so we clear it as well.
+         */
+        if (this.unregisterMapApi) {
+            this.unregisterMapApi();
+            this.unregisterMapApi = undefined;
+        }
+
+        /** Clear pending fly-to on unmount. */
+        this.pendingFlyTo = null;
+
         this.cancelLongPress();
         this.terrainLoadToken += 1;
 
@@ -616,6 +744,69 @@ class App extends React.Component<{},MapState> {
             view.fit(extent, {
                 duration: 1000            // Optional: Smoothly animate the zoom/pan over 1 second
             });
+        }
+
+        // A flyTo() that arrived before the terrain view existed must win over the
+        // initial fit, so it is applied last.
+        if (this.pendingFlyTo) {
+            this.applyPendingFlyTo();
+        }
+    }
+
+    private pendingFlyTo: MapFlyToOptions | null = null;
+
+    /**
+     * Apply a pending fly-to request from before the terrain was ready.
+     */
+    private applyPendingFlyTo(): void {
+        const pending = this.pendingFlyTo;
+        if (!pending) {
+            return;
+        }
+
+        this.pendingFlyTo = null;
+
+        const view = this.map?.getView();
+        if (!view) {
+            console.warn('MapApi: applyPendingFlyTo() called but the map is not ready');
+            return;
+        }
+
+        const projection = view.getProjection();
+
+        // Validate x/y are finite numbers
+        if (
+            typeof pending.x !== 'number' ||
+            typeof pending.y !== 'number' ||
+            !Number.isFinite(pending.x) ||
+            !Number.isFinite(pending.y)
+        ) {
+            console.warn('MapApi: pending fly-to has invalid x/y');
+            return;
+        }
+
+        const center = [pending.x, pending.y];
+
+        // Clamp the center to the current view projection extent when one exists
+        const extent = projection.getExtent();
+        if (extent) {
+            center[0] = Math.max(extent[0], Math.min(pending.x, extent[2]));
+            center[1] = Math.max(extent[1], Math.min(pending.y, extent[3]));
+        }
+
+        // Only apply resolution when it is a finite positive number
+        const resolution = pending.resolution !== undefined && Number.isFinite(pending.resolution) && pending.resolution > 0 ? pending.resolution : undefined;
+
+        if (pending.animate !== false) {
+            const animation: { center: number[]; resolution?: number; duration: number } = { center, duration: 300 };
+            if (resolution !== undefined)
+                animation.resolution = resolution;
+            view.animate(animation);
+        } else {
+            view.setCenter(center);
+            if (resolution !== undefined) {
+                view.setResolution(resolution);
+            }
         }
     }
 

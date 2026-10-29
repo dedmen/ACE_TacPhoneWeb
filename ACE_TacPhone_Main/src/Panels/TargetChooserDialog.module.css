@@ -1,0 +1,138 @@
+/* Modal panel picker for the AppApi "ask" policy. Sizes are chosen for the
+   in-game phone: full-row buttons and large touch targets. */
+
+.Backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+
+    padding: 16px;
+    box-sizing: border-box;
+    background-color: rgba(0, 0, 0, 0.6);
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.Dialog {
+    width: min(520px, 100%);
+    max-height: 100%;
+    padding: 16px;
+    box-sizing: border-box;
+
+    background-color: #2b2b2b;
+    color: #eee;
+    border: 1px solid #555;
+    border-radius: 8px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    text-align: left;
+
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.Heading {
+    margin: 0;
+    font-size: 20px;
+    font-weight: 600;
+    line-height: 120%;
+    color: #fff;
+    /* A long caller reason must not widen the dialog. */
+    overflow-wrap: anywhere;
+}
+
+.Subtitle {
+    margin-top: -8px;
+    font-size: 13px;
+    color: #aaa;
+}
+
+.List {
+    /* The list is the only scrollable part, so Cancel stays reachable. */
+    overflow-y: auto;
+    min-height: 0;
+
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.Row {
+    min-height: 56px;
+    padding: 10px 12px;
+    box-sizing: border-box;
+
+    font: inherit;
+    text-align: left;
+    color: #eee;
+    background-color: #3a3a3a;
+    border: 1px solid #555;
+    border-radius: 6px;
+    cursor: pointer;
+
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 8px;
+}
+
+.Row:hover {
+    background-color: #454545;
+    border-color: #7aa7ff;
+}
+
+.RowTitle {
+    flex: 1 1 auto;
+    min-width: 0;
+
+    font-size: 16px;
+    font-weight: 600;
+    color: #fff;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.Badge {
+    flex: 0 0 auto;
+    padding: 2px 8px;
+
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    color: #ffd48a;
+    background-color: #4a3a17;
+    border: 1px solid #7a5c1f;
+    border-radius: 10px;
+}
+
+.RowMeta {
+    flex: 1 1 100%;
+
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 12px;
+    color: #b6b6b6;
+    overflow-wrap: anywhere;
+}
+
+.Cancel {
+    flex: 0 0 auto;
+    min-height: 48px;
+    padding: 10px 16px;
+
+    font: inherit;
+    font-weight: 600;
+    color: #eee;
+    background-color: #3a3a3a;
+    border: 1px solid #555;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.Cancel:hover {
+    background-color: #454545;
+    border-color: #888;
+}

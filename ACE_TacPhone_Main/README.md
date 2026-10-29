@@ -248,6 +248,10 @@ The host exposes these before loading apps:
 | `window.Networking` | `WhenReady()`, `Request()`, `LoadGameFileText()`, `LoadGameFileTexture()`, `LoadGameTerrain()`. |
 | `window.AppDirectory` | Read-only view of `knownApps`, `knownPanels`, and `failedApps`. Do not modify it. |
 | `window.TacPhoneUtils.CommandRegistry` | Message router helper shown above. |
+| `window.PanelDirectory` | Enumerate, focus, activate, and open panels. See [Inter-app API](#inter-app-api). |
+| `window.AppApi` | Register an app's API and resolve or call another app's. See [Inter-app API](#inter-app-api). |
+| `window.TacPhoneUtils.PanelContext` | React context with the live `PanelInstance` of the panel an app is rendered in. |
+| `window.TacPhoneUtils.usePanel()` | Hook form of `PanelContext` for function components. |
 
 Tooling types for these are generated into `dist/TacPhoneMain.d.ts` and synced
 into the development apps by the host build.
@@ -258,6 +262,264 @@ with the host declarations and updates the app copies. Never edit a synced
 `TacPhoneMain.d.ts` directly. Import these declarations with `import type`;
 at runtime the host API is accessed through `window`. The bundle also types the
 shared module globals (`window.React`, `window.ReactDOM`, and so on).
+
+## Inter-app API
+
+Apps can expose a versioned runtime API to other apps through `window.AppApi`,
+and can enumerate, activate, and open panels through `window.PanelDirectory`.
+Both are page-local: they never pass through `window.Networking` or SQF, the game
+cannot call them, and there is no permission model. The whole web UI and every
+app loaded in it are one trust domain: any app can call any registered API, and
+apps are not isolated from each other.
+The public types are exported from [`src/TacPhoneMain.ts`](src/TacPhoneMain.ts)
+and arrive in an app with the generated `TacPhoneMain.d.ts` like the rest of the
+API.
+
+### Identity model
+
+| Concept | Type | Meaning | Persisted |
+| --- | --- | --- | --- |
+| Panel type | `panelId` (string) | `AppPanelInfo.id`, for example `ACE_TacPhone_Map`. | Yes, in saved layouts. |
+| Tab | `tabId` (string) | Id of the panel (flexlayout tab) node. Stable across layout save/load. | Yes, in saved layouts. |
+| Runtime instance | `instanceId` (string) | One mounted app content, for example `panel-7`. New on every mount. | No. |
+| Service | `service` (string) | App-chosen stable name an app registers, for example `map`. | No. |
+
+Switching the app inside the app chooser keeps the tab and its runtime instance,
+but replaces the app content, so the previous app's API registration goes away
+with it. The reported `panelId` follows `setApp()` and is also persisted in the
+tab config; on the next mount the chooser reads that value back and restores the
+app, so a saved layout opens the same app again. The live handle also exposes
+`getConfig()` for that persisted tab config. The panel system mounts only the
+selected tab of a tabset, so a panel that is open in the background has no
+`instanceId` and no registered API. Routing therefore activates a candidate and
+waits for its registration; see
+[Routing to a Map instance](#routing-to-a-map-instance).
+
+### `window.PanelDirectory`
+
+| Method | Returns | Notes |
+| --- | --- | --- |
+| `list()` | `PanelInfo[]` | Every open panel, including floating popups. |
+| `get(instanceId)` | `PanelInfo \| undefined` | Snapshot of one mounted instance. |
+| `find(panelId)` | `PanelInfo[]` | Every panel that runs the given app panel id. |
+| `focused()` | `PanelInfo \| undefined` | Last focused panel, following the user across the main layout and floats. |
+| `largest(panelId?)` | `PanelInfo \| undefined` | Biggest panel of the main layout, optionally restricted to one panel id. |
+| `activate(instanceId)` | `boolean` | Selects the tab, focuses its tabset, and brings a floating popup to the front. A tab id is accepted for a tab without an instance. |
+| `open(panelId, options?)` | `OpenPanelResult \| undefined` | Opens the app, by default as a floating popup. |
+| `onDidChange(listener)` | `() => void` | Calls `listener(panels)` on panel changes. The return value unsubscribes. |
+
+`focused()` uses the last tab the user focused in any layout and falls back to
+the active tabset of the main layout, then to any selected panel. `largest()`
+compares the tabset area in the main layout only; ties are broken by top-left
+reading order so the result is deterministic. `list()` is also populated for a
+tab whose app is not mounted, so filter on `mounted` (or `instanceId`) when you
+need a live instance.
+
+`PanelInfo` reports `tabId`, `tabSetId`, `layoutId`, `panelId`, `appName`,
+`title`, `instanceId`, `mounted`, `isSelected`, `isActive`, `isVisible`,
+`isFloating`, `isPoppedOut`, `rect`, and `area`. `instanceId` is present only
+while the tab content is mounted.
+
+`open(panelId, options)`:
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `placement` | `'float'` | `'float'` creates a floating popup; `'tab'` adds a docked tab. |
+| `select` | `true` | Select the new tab. |
+| `tabsetId` | Active tabset, then the first one | `'tab'` only: tabset that receives the tab. |
+| `rect` | Centered, 60% of the main layout | `'float'` only: `Partial<PanelRect>`; supplied fields override the default. |
+| `config` | `undefined` | Stored in the tab config and persisted with the layout. |
+
+A default floating popup covers 60% of the main layout, is at least 320x240,
+is clamped to the layout, and is cascaded by about 24 px for each following
+popup. Floats are persisted by the panel library under the model's `subLayouts`,
+so a popup opened for routing survives a layout save and restore. `open()`
+returns
+`{ tabId, layoutId, tabSetId }`, or `undefined` with a warning for an unknown
+panel id. Routing through `AppApi.resolveAsync()` is the supported way to open a
+missing app; call `open()` directly only for UI work.
+
+### `window.AppApi`
+
+| Method | Returns | Notes |
+| --- | --- | --- |
+| `register(instance, { service, version, api })` | `() => void` | Registers the API of the calling panel. The return value unregisters it. |
+| `list(service?)` | `AppServiceInfo[]` | Every registration, with a fresh `PanelInfo` of its panel. |
+| `resolve(target)` | `AppServiceInfo \| undefined` | Synchronous snapshot of the mounted panels only. |
+| `resolveAll(target)` | `AppServiceInfo[]` | All registrations that match, without policy or auto-open. |
+| `resolveAsync(target, reason?)` | `Promise<AppServiceInfo \| undefined>` | Routing entry point: activates, opens, and waits for a registration. |
+| `getApi<T>(service, options?)` | `T \| undefined` | Convenience wrapper around `resolve()`. |
+| `call<T>(service, method, ...args)` | `Promise<T>` | Routes with `resolveAsync()` and awaits the method. |
+| `setTargetChooser(chooser)` | `void` | Installs the handler for `policy: 'ask'`; pass `undefined` to remove it. |
+| `onDidChange(listener)` | `() => void` | Calls `listener(services)` on registration and panel changes. |
+
+`register()` is called from the app lifecycle with the panel instance from the
+context, and the returned function from the unmount path:
+
+```ts
+const panel = window.TacPhoneUtils.usePanel();
+
+React.useEffect(() => {
+    if (!panel)
+        return;
+
+    return window.AppApi.register(panel, {
+        service: 'myapp',
+        version: 1,
+        api: { doSomething: () => { /* ... */ } },
+    });
+}, [panel]);
+```
+
+Register one service per panel instance. Re-registering the same service on the
+same panel replaces the previous registration with a warning; a dispose function
+from an earlier mount is a no-op. `register()` throws for a missing instance, an
+empty service name, or a version that is not an integer `>= 1`.
+
+Versioning: a caller that passes `version` gets exactly that major version and a
+mismatch is skipped with a warning. Without `version`, the highest registered
+version wins. Registrations disappear as soon as their panel is gone, and a
+`PanelInfo` is a snapshot; re-resolve instead of caching `api` across panel
+closes.
+
+`TargetOptions` fields:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `service` | Required | Service to find. |
+| `policy` | `'auto'` | `'auto'`, `'focused'`, `'largest'`, `'first'`, or `'ask'`. |
+| `version` | Highest registered | Requested major version. |
+| `panelId` | Any | Restrict candidates to one app panel id. |
+| `instanceId` | None | Explicit target; wins over the policy. An instance id or a tab id. |
+| `openIfMissing` | `false` | Open the app when no panel provides it. Needs `panelId`. |
+| `placement` | `'float'` | Placement used with `openIfMissing`. |
+| `activate` | `true` | Activate the target panel before returning and waiting. |
+| `waitMs` | `3000` | Budget for a panel to mount and register; values above 30000 are capped. |
+
+`resolve()` only sees mounted panels, never waits, and never throws; `'ask'` is
+not possible synchronously and falls back to `'auto'` with one warning.
+`resolveAsync()` also considers background tabs, activates the chosen panel, and
+waits for its registration; it returns `undefined` with a warning on timeout or
+when nothing matches. `call()` is the exception: it throws when the service is
+unavailable, the method is missing, or the method itself fails.
+
+`TargetChooser` receives `{ service, candidates, reason? }` and returns an
+instance id, a tab id, or `undefined` to cancel. The host installs the modal
+picker once (see [Routing to a Map instance](#routing-to-a-map-instance)).
+
+### Using the panel context
+
+Apps still receive no props. The host passes the live `PanelInstance` through
+`window.TacPhoneUtils.PanelContext`:
+
+- Function components: `window.TacPhoneUtils.usePanel()`.
+- Class components: `static contextType = window.TacPhoneUtils.PanelContext;`
+  and `declare context: PanelInstance | undefined;`, then `this.context`.
+
+```tsx
+import type { PanelInstance } from './TacPhoneMain';
+
+export class MyPanel extends React.Component<{}, {}> {
+    static contextType = window.TacPhoneUtils.PanelContext;
+    declare context: PanelInstance | undefined;
+
+    private unregister: (() => void) | undefined;
+
+    componentDidMount(): void {
+        const panel = this.context;
+        if (panel)
+            this.unregister = window.AppApi.register(panel, {
+                service: 'myapp',
+                version: 1,
+                api: { doSomething: () => { /* ... */ } },
+            });
+    }
+
+    componentWillUnmount(): void {
+        this.unregister?.();
+    }
+}
+```
+
+The handle exposes `instanceId`, `tabId`, `getInfo()`, `activate()`, and
+`setApp(panelId)`. API registration goes through `window.AppApi`, not through the
+handle.
+
+### Routing to a Map instance
+
+`resolveAsync()` implements the whole route. A Messenger-style caller looks like
+this:
+
+```ts
+async function showOnMap(x: number, y: number): Promise<void> {
+    const target = await window.AppApi.resolveAsync({
+        service: 'map',
+        panelId: 'ACE_TacPhone_Map',
+        policy: 'ask',              // focused -> largest -> user choice
+        openIfMissing: true,        // no Map open -> host opens a floating popup
+        placement: 'float',         // explicit for readability; 'float' is the default
+        waitMs: 3000,
+    }, 'Show clicked coordinates');
+
+    if (!target)
+        return;                     // cancelled, timed out, or app unavailable
+    (target.api as MapApi).flyTo({ x, y });
+}
+```
+
+- No Map open: the host opens a floating popup, activates it, and waits for the
+  `map` service to register. Routing never docks an app into an existing tab
+  unless the caller passes `placement: 'tab'`.
+- Map open in a background tab: it is not mounted, so the host activates its tab
+  and waits for the registration.
+- Map open in several panels: the policy chooses; floats are candidates too and
+  the chosen popup is brought to the front.
+- `policy: 'ask'` calls the host's target chooser only when candidates exist; it
+  lists the candidates and lets the user pick one. Cancel, a backdrop click, and
+  Escape cancel the request. A newer request supersedes a pending one, so a
+  stalled caller never blocks the next route. Without an installed chooser,
+  `'ask'` behaves like `'auto'` (focused, then largest, then the only candidate).
+- When the opened app never registers within `waitMs`, the popup stays open so
+  the user can see and close it, and `resolveAsync()` returns `undefined`.
+
+### Map service reference
+
+The Map app (`ACE_TacPhone_Map`) registers the reference service from its panel
+lifecycle, so every mounted Map panel provides its own API:
+
+| Item | Value |
+| --- | --- |
+| Service | `map` |
+| Version | `1` |
+| `flyTo({ x, y, resolution?, animate? })` | Moves the view to the given center. Coordinates are map/world coordinates, not latitude/longitude. `resolution` keeps the current one when omitted; `animate: false` jumps instead of animating. |
+| `getView()` | `{ x, y, resolution }` of the current center, or `undefined` while the terrain view is not ready. |
+| `isReady()` | `true` when the map instance exists and the terrain view is ready. |
+
+The Map builds the API after its OpenLayers map exists and unregisters it before
+tearing the map down. A `flyTo()` that arrives before the terrain SVG has loaded
+is queued and applied after the initial fit, so a route into a freshly opened Map
+popup still lands on the requested position.
+
+The Map follows `resolveAsync({ service: 'map', ... })` by calling these methods
+on the resolved `api`. Its generated `dist/ace_tacphone_map.d.ts` exports the
+`MapApi`, `MapViewState`, `MapFlyToOptions`, `MAP_SERVICE`, and
+`MAP_SERVICE_VERSION` declarations, so another app can import the types from the
+Map package and cast the resolved API without depending on OpenLayers. That
+declaration is produced by the shared
+`scripts/bundle-api-types.mjs --app` script in this host package; apps do not
+ship their own bundler.
+
+### Limitations
+
+- Floating popups are listed, focusable, and activatable, but `largest()` ranks
+  only the main layout: areas of separate layouts are not comparable.
+- Everything stays inside the single page/tab. Native window popouts
+  (`isPoppedOut`) need `window.open` and a separate document, so they are not
+  supported; floating in-layout popups are the only popup placement.
+- Layout restore keeps a float's rectangle and tab component, but not instance
+  ids or registrations. Apps re-register when their panel mounts again.
+- There are no cross-app events or subscriptions yet; use method calls.
+- There is no permission model between apps.
 
 ## Import-map constraints
 

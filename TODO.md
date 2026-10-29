@@ -204,17 +204,20 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
   module scope. Host globals are always present when an app is loaded (apps are
   only loaded through the host; the standalone `preview` path is not supported),
   so no guard is needed.
-- [ ] **[bug]** `dist/ace_tacphone_map.d.ts` is `export { }` (12 bytes) although
-  `package.json` points `types`/`exports` at it. `vite-plugin-dts` with
-  `bundleTypes` is not emitting the `GetTacPhoneApps` signature. Fix or remove
-  the `types` entry.
+- [x] **[bug]** `dist/ace_tacphone_map.d.ts` is `export { }` (12 bytes) although
+  `package.json` points `types`/`exports` at it. Fixed: the Map build calls the
+  shared `ACE_TacPhone_Main/scripts/bundle-api-types.mjs --app ...` script, which
+  emits a self-contained declaration exporting `MapApi`, `MapViewState`,
+  `MapFlyToOptions`, `MAP_SERVICE`, and `MAP_SERVICE_VERSION`. Apps no longer
+  keep their own copy of that bundler.
 - [ ] **[cleanup]** Broadcast log spam when no map panel is mounted:
   `routeMessage` warns for every `Marker.Upsert`/`Delete` (`MessageRouter.ts:51`)
   and `console.warn` survives the release strip. Log at debug level.
 - [ ] **[cleanup]** `Map.tsx:96` `forceUpdate` hack; a state bump or ref-driven
   redraw would be clearer.
-- [ ] **[cleanup]** `README.md:66` omits the emitted `.d.ts` from the build
-  outputs.
+- [x] **[cleanup]** `README.md:66` omits the emitted `.d.ts` from the build
+  outputs. Updated; the Map README now lists both `ace_tacphone_map.js` and
+  `ace_tacphone_map.d.ts`.
 
 ## Host (`ACE_TacPhone_Main`)
 
@@ -234,8 +237,17 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
   explicitly.
 - [ ] **[cleanup]** `src/MainApps/main.tsx:12` TODO: move the compression helpers
   out of the app entry.
-- [ ] **[cleanup]** `AppChooserPanel.tsx:56` TODO: load panel state from the
-  model instead of ad-hoc state.
+- [x] **[cleanup]** `AppChooserPanel.tsx:56` TODO: load panel state from the
+  model instead of ad-hoc state. The selected app is read back from the tab config
+  in `componentDidMount()` via `PanelInstance.getConfig()`; the chooser element
+  itself is still local component state.
+- [x] **[decision]** Host UI for `AppApi.setTargetChooser(...)`. The
+  user-selection dialog (panel title, panel/app id, instance id or tab id,
+  floating badge, area) is implemented in `src/Panels/TargetChooserDialog.tsx`
+  and installed once by `ACE_TacPhone_Main/src/App.tsx`, so `policy: "ask"` is a
+  user choice instead of the focused -> largest -> only-candidate heuristic.
+  Cancel, a backdrop click, Escape, and a newer request superseding a pending one
+  all resolve `undefined`.
 - [ ] **[decision]** `App.tsx:316-317` TODO: keep the mobile screen awake and add
   a fullscreen mode (Settings), relevant for the external-browser path.
 - [ ] **[cleanup]** Remove the temporary `SaveLayout`/`GetLayout` placeholders
@@ -246,6 +258,33 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
   `dev-apps.js`, `vite.config.ts`, `AppDirectory.ts` and
   `scripts/sync-api-types.mjs` were updated. The `/devapps/<AppName>/` URL prefix
   is unchanged.
+
+## Inter-app API (panels and `AppApi`)
+
+- [x] **[decision]** Native window popouts (`PanelInfo.isPoppedOut`,
+  `'window'` sub-layouts) need `window.open` and a separate document, so they
+  cannot work in the in-game sandboxed browser. **Decision: not supported.**
+  Everything stays inside the single page/tab; floating in-layout popups are the
+  only popup placement. `isPoppedOut` stays as passive diagnostics for a
+  sub-layout the host never creates.
+- [ ] **[cleanup]** `PanelDirectory.largest()` ignores floating popups
+  (`PanelDirectory.ts`, `isFloating`/`isPoppedOut` are filtered out) because areas
+  from separate layouts are not comparable. Rank floats too, or expose a
+  per-layout comparison, so a large popup can win routing.
+- [x] **[cleanup]** Restore the app chooser selection on first mount from the
+  persisted layout. `AppChooserPanel.componentDidMount()` now reads
+  `PanelInstance.getConfig().panelId` and switches to that app when it is still
+  registered; `setPanelConfig()` keeps writing the value for the next reload.
+- [ ] **[decision]** Messenger app consuming the `map` service with
+  `policy: 'ask'` (the routing API and the target dialog exist; no Messenger app
+  does yet).
+- [ ] **[decision]** Cross-app events/subscriptions beyond method calls (for
+  example "markers changed" notifications).
+- [ ] **[cleanup]** `AppApi.waitFor(service, predicate)` lifecycle helper, so
+  consumers can await a registration instead of choosing a `waitMs` budget.
+- [x] **[decision]** Auth/permissions between apps. **Decision: no permission
+  model.** Page-local calls are deliberately unauthenticated; the whole web UI and
+  all its apps are one trust domain with no security boundaries between apps.
 
 ## Tooling and dependencies
 
