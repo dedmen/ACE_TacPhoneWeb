@@ -5,7 +5,8 @@
 //
 // - A mounted MarkerLayerManager owns the marker features and knows that an
 //   update created a marker (the initial `GetAllMarkers` snapshot seeds the
-//   known names), so it calls notifyMarkerUpsert() itself.
+//   known names), so it calls notifyMarkerUpsert() itself. It also knows the local
+//   player ID from SQF, so it filters out markers created by the same player.
 // - When no marker layer is mounted (Map panel closed), the module-scope backup
 //   handler below raises the notification. It only checks for an active layer
 //   and notifies; it never creates marker features or loads icons.
@@ -23,6 +24,18 @@ const knownMarkerNames = new Set<string>();
 
 /** Number of mounted MarkerLayerManager instances. */
 let activeMarkerLayers = 0;
+
+/**
+ * Returns true if the marker is created by the local player (when playerId is provided).
+ * Only the mounted MarkerLayerManager knows the local player ID via SQF API call.
+ * The module-scope backup handler calls this with no playerId, so it treats all markers
+ * as non-player markers and notifies them (intentional limitation; see TODO.md).
+ */
+function isLocalPlayerMarker(name: string, localPlayerId: string | undefined): boolean {
+    if (!localPlayerId) return false;
+    const match = /^_USER_DEFINED #([^/]+)(?:\/|$)/.exec(name);
+    return match?.[1] === localPlayerId;
+}
 
 /**
  * Registers a mounted marker layer, which suppresses the backup handler.
@@ -60,17 +73,6 @@ export function markKnownMarkerNames(names: Iterable<string>): void {
     }
 }
 
-/**
- * Markers created by the local player must not notify that same player.
- */
-function isLocalPlayerMarker(_name: string): boolean {
-    // #TODO Player-created markers are named `_USER_DEFINED #<playerId>/...`.
-    // Once the local player id is available through the host API, parse the id
-    // out of the name and compare it with the local one instead of returning
-    // false unconditionally.
-    return false;
-}
-
 /** Notification body: the marker text, else its type, else a generic label. */
 function markerLabel(type: unknown, text: unknown): string {
     if (typeof text === 'string' && text !== '') {
@@ -88,7 +90,7 @@ function markerLabel(type: unknown, text: unknown): string {
  * Shows a notification for a newly created marker. Repeated upserts of a marker
  * that is already known (position updates) are ignored.
  */
-export function notifyMarkerUpsert(marker: MarkerUpdate): void {
+export function notifyMarkerUpsert(marker: MarkerUpdate, localPlayerId?: string): void {
     if (!marker) {
         return;
     }
@@ -107,7 +109,7 @@ export function notifyMarkerUpsert(marker: MarkerUpdate): void {
     // The name is recorded even for own markers, so their updates stay quiet.
     knownMarkerNames.add(name);
 
-    if (isLocalPlayerMarker(name)) {
+    if (isLocalPlayerMarker(name, localPlayerId)) {
         return;
     }
 
@@ -155,6 +157,11 @@ export function notifyMarkerUpsert(marker: MarkerUpdate): void {
 // Backup path: runs when no marker layer is mounted, so a marker still notifies
 // with the Map panel closed. Registered at import time for that reason; it must
 // stay free of marker features, icon loading and marker type requests.
+// 
+// Limitation: this handler has no access to MarkerLayerManager's player ID, so it
+// calls notifyMarkerUpsert() without a localPlayerId argument. The isLocalPlayerMarker
+// check returns false for unknown playerId, meaning local markers are still notified.
+// This will be addressed once the Map panel is opened and the player ID can be loaded.
 mapCommandRegistry.register("Marker.Upsert", payload => {
     if (hasActiveMarkerLayer()) return;
 

@@ -227,13 +227,9 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
   banners only);
 - [ ] the Map backup handler cannot perfectly distinguish a moved existing marker from
   a new one before the first `GetAllMarkers` snapshot;
-- [ ] `isLocalPlayerMarker` in [`MarkerNotifications.ts`](ACE_TacPhone_Map/src/MapMarkers/MarkerNotifications.ts) is a placeholder (local `_USER_DEFINED` markers will be ignored later).
-
-### Implemented
-
-- Toast-style banners via `window.Notifications`.
-- Default lifetime 15 seconds, fade-out removal (`duration: 0` = permanent).
-- Map notification tap uses `policy: "ask"` target chooser and calls `MapApi.flyTo()`.
+- [ ] the lightweight backup handler has no local player ID while the Map is closed,
+  so it treats markers as non-player markers and can notify the local player's own
+  marker; obtaining the ID without a MarkerLayerManager is deferred.
 
 ## Host (`ACE_TacPhone_Main`)
 

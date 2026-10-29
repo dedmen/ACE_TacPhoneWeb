@@ -196,6 +196,8 @@ export class MarkerLayerManager {
     private resolveMarkerConfigReady!: () => void;
 
     private initialMarkersLoaded = false;
+    private playerId: string | undefined;
+
     private pendingMarkerOperations: PendingMarkerOperation[] = [];
     private pendingOverflowWarned = false;
     private destroyed = false;
@@ -230,14 +232,23 @@ export class MarkerLayerManager {
             mapCommandRegistry.register('Marker.Delete', (payload) => this.handleDelete((payload as {marker: string}).marker as string))
         );
 
-        // Retrieve both snapshots in parallel. GetMarkerTypes used to gate
+        // Retrieve all data in parallel. GetMarkerTypes used to gate
         // GetAllMarkers, so a single hung request could block marker loading
-        // forever. requestWithTimeout() guarantees that both settle.
+        // forever. requestWithTimeout() guarantees that all settle.
+        const playerIdPromise = this.loadPlayerId();
         const markerConfigPromise = this.loadMarkerConfig();
         const initialMarkersPromise = this.loadInitialMarkers();
 
-        void Promise.all([markerConfigPromise, initialMarkersPromise]).then(([, markers]) => {
-            if (this.destroyed || !markers) {
+        void Promise.all([playerIdPromise, markerConfigPromise, initialMarkersPromise]).then(([playerId, , markers]) => {
+            if (this.destroyed) {
+                return;
+            }
+
+            // Store the player ID for filtering local markers, even when the marker
+            // snapshot failed; queued live upserts are still flushed below.
+            this.playerId = playerId ?? undefined;
+
+            if (!markers) {
                 return;
             }
 
@@ -323,6 +334,24 @@ export class MarkerLayerManager {
             return Array.isArray(markers) ? markers as MarkerUpdate[] : [];
         }).catch((error: unknown) => {
             console.error('Failed to load markers', error);
+            return null;
+        });
+    }
+
+    private loadPlayerId(): Promise<string | null> {
+        return requestWithTimeout(
+            window.Networking.Request({a: "ACE_TacPhone_Map", c: "GetPlayerID"}),
+            'GetPlayerID',
+        ).then((playerId: unknown) => {
+            if (typeof playerId === 'string' && playerId !== '') {
+                return playerId;
+            }
+            if (typeof playerId === 'number' && Number.isFinite(playerId)) {
+                return String(playerId);
+            }
+            return null;
+        }).catch((error: unknown) => {
+            console.error('Failed to load player ID', error);
             return null;
         });
     }
@@ -560,7 +589,7 @@ export class MarkerLayerManager {
             try {
                 if (operation.kind === 'upsert') {
                     this.applyUpsert(operation.marker);
-                    notifyMarkerUpsert(operation.marker);
+                    notifyMarkerUpsert(operation.marker, this.playerId);
                 } else {
                     this.deleteMarker(operation.name);
                 }
@@ -600,7 +629,7 @@ export class MarkerLayerManager {
         }
 
         this.applyUpsert(data);
-        notifyMarkerUpsert(data);
+        notifyMarkerUpsert(data, this.playerId);
     }
 
     private applyUpsert(data: MarkerUpdate): void {
