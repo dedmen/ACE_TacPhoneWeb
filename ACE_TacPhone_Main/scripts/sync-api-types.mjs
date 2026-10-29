@@ -2,8 +2,8 @@
 // Copy the generated dist/TacPhoneMain.d.ts into development apps.
 //
 // With no arguments, every discovered development app's src directory is
-// updated. Discovery includes devapps/, sibling folders with a "tacphone.app"
-// package field, dev-apps.local.json, and TACPHONE_DEV_APPS.
+// updated. Discovery includes sibling folders with a "tacphone.app" package
+// field, dev-apps.local.json, and TACPHONE_DEV_APPS.
 //
 // Pass one or more target directories (or explicit .d.ts paths) to update a
 // specific app:

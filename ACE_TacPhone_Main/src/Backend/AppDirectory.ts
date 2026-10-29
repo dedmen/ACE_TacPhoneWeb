@@ -32,8 +32,8 @@ export class AppDirectory
 
         if (IsLocalDev()) {
             // The host dev server maps /devapps/<app name>/ to the app folder.
-            // The folder can be next to this package, in devapps/, or anywhere
-            // listed in dev-apps.local.json / TACPHONE_DEV_APPS. See README.md.
+            // The folder can be next to this package, or anywhere listed in
+            // dev-apps.local.json / TACPHONE_DEV_APPS. See README.md.
             const devfile = (appInfo.devfile || "src/main.tsx")
                 .replaceAll("\\", "/")
                 .replace(/^\/+/, "");

@@ -7,7 +7,7 @@ tasks/placeholders must be listed in `TODO.md`.
 
 ## Layout
 - `ACE_TacPhone_Main/` — host: React UI, networking, app loader, public API. Run host cmds here.
-- `ACE_TacPhone_Map/` — reference app, sibling of the host; separate deps. `ACE_TacPhone_Main/devapps/` remains supported for legacy/local apps.
+- `ACE_TacPhone_Map/` — reference app, sibling of the host; separate deps.
 - `WebServerExtension/` — .NET 10 NativeAOT `arma_webhost_x64`; external-browser dev only.
 - `WebHostExtension_FeatureFlagsExport/` — C shim for `RVExtensionFeatureFlags`; `WebServerExtension/featureflags.obj` is checked in and linked.
 
@@ -33,7 +33,7 @@ Both copy destinations are git-ignored in ACE3. No tests. Release strips `consol
 ## Dev
 - Use `http://localhost:<port>`, never `127.0.0.1`: `IsLocalDev()` matches exact `http://localhost` prefix.
 - Arma + TacPhone must run; extension serves `wss://localhost:8001/ws`; local ASP.NET TLS cert must be trusted.
-- App discovery: `dev-apps.local.json` (git-ignored, `{ "apps": [...] }`), `TACPHONE_DEV_APPS` path list, legacy `devapps/<folder>/`, or sibling folder with `"tacphone": { "app": "<AppName>" }` in `package.json`. Host serves all as `/devapps/<AppName>/`; loader uses `ace_tacphone_devFile` (default `src/main.tsx`). Name = config class = request `a`. Move/extend discovery in `dev-apps.js`; no junctions needed. Restart Vite after changing discovery config.
+- App discovery: `dev-apps.local.json` (git-ignored, `{ "apps": [...] }`), `TACPHONE_DEV_APPS` path list, or sibling folder with `"tacphone": { "app": "<AppName>" }` in `package.json`. Host serves all as `/devapps/<AppName>/`; loader uses `ace_tacphone_devFile` (default `src/main.tsx`). Name = config class = request `a`. Move/extend discovery in `dev-apps.js`; no junctions needed. Restart Vite after changing discovery config.
 - The Map's `npm run dev` forwards to the host's Vite server; apps have no standalone dev server.
 
 ## Runtime constraints

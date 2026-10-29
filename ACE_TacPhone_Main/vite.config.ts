@@ -86,7 +86,7 @@ function devAppsPlugin(devApps: DevApp[], warnings: string[]): Plugin {
                     res.end(
                         `TacPhone development app "${name}" is not registered.\n`
                         + 'Add its folder to dev-apps.local.json, TACPHONE_DEV_APPS, '
-                        + 'devapps/, or give its package.json a "tacphone.app" field.\n',
+                        + 'or give its package.json a "tacphone.app" field.\n',
                     );
                     return;
                 }

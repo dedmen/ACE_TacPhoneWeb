@@ -8,8 +8,7 @@ import { basename, delimiter, dirname, isAbsolute, join, resolve } from 'node:pa
  *
  * An app is discovered when its folder is:
  * - listed in `dev-apps.local.json` (paths relative to this folder, or absolute),
- * - listed in the `TACPHONE_DEV_APPS` environment variable (same path rules),
- * - a direct child of `devapps` (the legacy location), or
+ * - listed in the `TACPHONE_DEV_APPS` environment variable (same path rules), or
  * - a sibling folder of this package whose `package.json` contains:
  *
  *   ```json
@@ -19,7 +18,7 @@ import { basename, delimiter, dirname, isAbsolute, join, resolve } from 'node:pa
  * The declared app name must match the config class name (`ace_tacphone_apps`)
  * because it is also the routing key used by the game and the host.
  *
- * @typedef {'config' | 'env' | 'devapps' | 'sibling'} DevAppSource
+ * @typedef {'config' | 'env' | 'sibling'} DevAppSource
  * @typedef {{ name: string, dir: string, source: DevAppSource }} DevApp
  * @typedef {{ apps: DevApp[], warnings: string[] }} DevAppDiscovery
  */
@@ -178,16 +177,7 @@ export async function discoverDevApps(mainDir, options = {}) {
     for (const entry of (env[ENV_VAR_NAME] ?? '').split(delimiter))
         await addConfiguredPath(entry, 'env')
 
-    // 3. Legacy location. Keep working so existing checkouts do not need a rename.
-    const devappsDir = join(mainDir, 'devapps')
-    if (await isDirectory(devappsDir)) {
-        for (const entry of await readdir(devappsDir, { withFileTypes: true })) {
-            const dir = join(devappsDir, entry.name)
-            if (await isDirectory(dir)) await add(dir, 'devapps', false)
-        }
-    }
-
-    // 4. Sibling app repositories. A package marker is required so unrelated
+    // 3. Sibling app repositories. A package marker is required so unrelated
     //    folders next to the host are never exposed by accident.
     const parentDir = dirname(mainDir)
     for (const entry of await readdir(parentDir, { withFileTypes: true })) {

@@ -94,8 +94,7 @@ The host discovers development apps from these places:
    Relative paths are resolved from `ACE_TacPhone_Main`.
 2. The `TACPHONE_DEV_APPS` environment variable, using the platform path
    separator (`;` on Windows). Useful for CI or a one-off location.
-3. Direct children of the legacy `ACE_TacPhone_Main/devapps/` folder.
-4. Sibling folders of `ACE_TacPhone_Main` whose `package.json` declares the app:
+3. Sibling folders of `ACE_TacPhone_Main` whose `package.json` declares the app:
 
    ```json
    {
@@ -104,10 +103,10 @@ The host discovers development apps from these places:
    ```
 
 The declared app name must match the game-side `ace_tacphone_apps` config class
-exactly. It is also the routing key used by requests. A folder in `devapps` or a
-folder listed in the config/environment may omit the marker; its folder name is
-then used as the app name. Sibling folders require the marker so unrelated
-folders are never exposed by accident.
+exactly. It is also the routing key used by requests. A folder listed in the
+config/environment may omit the marker; its folder name is then used as the app
+name. Sibling folders require the marker so unrelated folders are never exposed
+by accident.
 
 The dev server exposes every discovered app under a stable URL:
 

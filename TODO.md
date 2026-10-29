@@ -237,10 +237,12 @@ needs a product decision before coding, **[wontfix]** deliberately left as is.
   a fullscreen mode (Settings), relevant for the external-browser path.
 - [ ] **[cleanup]** Remove the temporary `SaveLayout`/`GetLayout` placeholders
   once the game-side persistence exists (see the first section).
-- [ ] **[cleanup]** Remove all references to and handling of the legacy
-  `devapps/` folder. Use `dev-apps.local.json`, `TACPHONE_DEV_APPS`, or sibling
-  folders with the `"tacphone"` marker instead. Update discovery logic and
-  documentation (see [`ACE_TacPhone_Main/Readme.md`](ACE_TacPhone_Main/Readme.md)).
+- [x] Removed all references to and handling of the legacy `devapps/` folder.
+  Discovery now only uses `dev-apps.local.json`, `TACPHONE_DEV_APPS`, or sibling
+  folders with the `"tacphone"` marker; `AGENTS.md`, `ACE_TacPhone_Main/README.md`,
+  `dev-apps.js`, `vite.config.ts`, `AppDirectory.ts` and
+  `scripts/sync-api-types.mjs` were updated. The `/devapps/<AppName>/` URL prefix
+  is unchanged.
 
 ## Tooling and dependencies
 
