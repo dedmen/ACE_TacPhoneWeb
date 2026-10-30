@@ -3,7 +3,9 @@
   position: absolute;
   top: 15px;
   right: 15px;
-  z-index: 1000;
+  /* Above the polyline controls (z-index 1000): the dropdown must paint over the
+     polyline button/panel even though that component renders later in the DOM. */
+  z-index: 1100;
   display: flex;
   flex-direction: column;
   align-items: flex-end;

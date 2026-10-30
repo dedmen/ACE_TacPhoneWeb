@@ -222,6 +222,56 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
   outputs. Updated; the Map README now lists both `ace_tacphone_map.js` and
   `ace_tacphone_map.d.ts`.
 
+### Polyline drawing (remaining)
+
+- [ ] **[decision]** Chat channel selector for polyline markers. Only the
+  `CfgMarkerColors` line color is exposed; the channel is always sent as the
+  request default `0`. Other marker properties (label, brush, size, alpha) are
+  also absent from the polyline UI.
+- [ ] **[decision]** Polyline markers cannot be edited or deleted from the map:
+  the context menu, `Delete` key, and drag/edit paths only handle point markers,
+  so a polyline created in the UI is display-only from the Web UI (it can still
+  be changed or deleted in-game).
+- [ ] **[cleanup]** No live rubber-band preview in click-per-point mode from the
+  last vertex to the pointer or finger while placing vertices. Freehand mode
+  draws the line under the pointer while dragging, so this applies to the
+  checkbox-selected click-per-point input only.
+- [ ] **[cleanup]** No way to move an existing vertex after it is placed; only
+  `Undo` of the last vertex is available.
+- [ ] **[cleanup]** Freehand sampling distance (5 m) and Ramer–Douglas–Peucker
+  simplification tolerance (2 m) are hardcoded in the Map app; evaluate exposing
+  them as settings or extract them as named constants.
+- [ ] **[decision]** Switching between freehand and click-per-point input
+  mid-drawing keeps the existing vertices, so points drawn under both input
+  rules can end up in one line. Decide whether a mode switch should reset or
+  keep the current stroke.
+- [ ] **[cleanup]** No touch/pen pan gesture while freehand drawing: map panning
+  during drawing mode is bound to the right mouse button, so touch and pen users
+  have no way to move the map without ending the mode.
+- [ ] **[cleanup]** Measurement labels and the angle arcs are drawn from the raw
+  points with no collision avoidance, so distances, degree texts, the endpoint
+  height label (mountain symbol plus number) and the fixed 24 px vertex
+  semicircles overlap when vertices are close or the line folds back. The
+  `Total` label and the bearing label only have fixed offsets that keep them off
+  the endpoint/first-vertex height labels.
+- [ ] **[decision]** The angle annotation is purely glyph-based: the arc radius
+  (24 px) and the gap between the two semicircles are fixed in pixels regardless
+  of zoom, and the arc does not visualise the angle magnitude, only the degrees
+  text does. Decide whether the radius should follow the map resolution or the
+  angle, and whether the arcs are worth drawing at all.
+- [ ] **[decision]** Measurement units are fixed (meters, `km` with two decimals
+  from 1000 m, and integer degrees) with no configurable unit or precision.
+- [ ] **[decision]** The bearing label covers only the first segment: there are
+  no per-segment bearings and no reciprocal/back azimuth, and the 6400 mil circle
+  is hardcoded with no degree/mil toggle.
+- [ ] **[cleanup]** Vertex heights are requested one request per newly placed
+  vertex; only switching to click-per-point backfills existing vertices in a
+  batch. A failed request leaves that vertex without a height label, the segment
+  loses its `Δh`, and the failure is not retried.
+- [ ] **[decision]** Heights are displayed in whole meters ASL only: there is no
+  terrain profile or slope view, and the segment height difference is not fed into
+  any ballistic solution.
+
 ## Notifications
 
 ### Remaining work

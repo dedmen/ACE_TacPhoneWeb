@@ -121,9 +121,26 @@ await window.Networking.Request({
 
 The map's SQF processor handles `GetAllMarkers`, `CreateMarker` (creates a new
 marker, or updates an existing one when `marker.name` is supplied),
-`DeleteMarker`, and `GetMarkerTypes`. Messages from the game are routed through
-`mapCommandRegistry` (`src/CommandRegistry.ts`), which is an instance of the
-host's `window.TacPhoneUtils.CommandRegistry`.
+`DeleteMarker`, `GetMarkerTypes`, and `getTerrainHeight`. Messages from the game
+are routed through `mapCommandRegistry` (`src/CommandRegistry.ts`), which is an
+instance of the host's `window.TacPhoneUtils.CommandRegistry`.
+
+`getTerrainHeight` takes a list of 2D world/map positions and returns one height
+above sea level in meters per position, in the same order:
+
+```ts
+await window.Networking.Request({
+    a: 'ACE_TacPhone_Map',
+    c: 'getTerrainHeight',
+    positions: [[x, y], ...],
+});
+```
+
+The SQF side calls the engine's `getTerrainHeight` command per position, so a
+whole list travels in one request and callers batch instead of issuing a round
+trip per point. The web helper is `getTerrainHeights(positions)` in
+`src/MapMarkers/TerrainHeightApi.ts`, which validates both the input and the
+reply and rejects on invalid data.
 
 ### Marker interaction
 
@@ -146,6 +163,99 @@ be moved or deleted; all other markers are read-only.
   100 ms plus a final update on release. Editing sends only the changed
   `label`/`type`/`color` fields through the same `CreateMarker` update path.
   Deleting sends `DeleteMarker` with the marker name.
+
+### Polyline drawing
+
+A second floating button with a pencil icon sits directly below the layers
+button. Pressing it enables polyline drawing mode. The mode behaves the same for
+mouse, touch, and pen, and the default input mode is freehand:
+
+- Press and drag to draw. The left button draws while the mode is active, and
+  the default `DragPan` is disabled so the gesture draws a line instead of
+  moving the map. Holding the right mouse button and dragging still pans the
+  map: the Map app adds a second, right-button-only `DragPan` for drawing mode.
+- Vertices are sampled during the drag, but only once the pointer has moved at
+  least 5 m (map units) from the previous sample.
+- Releasing ends the stroke. Starting another drag appends to the same line, and
+  a quick tap still places a single vertex.
+- The drawn points are simplified with Ramer–Douglas–Peucker (2 m tolerance)
+  before the polyline is sent to the game. The preview keeps showing the raw
+  drawn points until `Done` is pressed.
+- Marker long-press, double-click, and drag gestures are suppressed while the
+  mode is active, so a marker never captures a vertex tap.
+
+While the mode is active a small persistent panel below the button shows the
+`CfgMarkerColors` swatches (the line color), the current point count, a
+`Click per point` checkbox, a `Right-drag to pan` hint, and the `Undo` /
+`Cancel` / `Done` actions. The checkbox switches to click-per-point input: a
+click/tap places a single vertex and dragging pans the map. Its state is kept in
+a module-scope variable in the Map app, so it survives closing and reopening the
+Map panel but is forgotten when the page reloads. In freehand mode the line
+follows the pointer while dragging; in click-per-point mode there is no rubber
+band and dragging still pans. `Undo` removes the last vertex, `Cancel` (or
+`Escape`) clears the preview and leaves the mode, and `Done` requires at least
+two vertices.
+
+Click-per-point input also draws a measurement overlay on the preview; freehand
+strokes show no labels. Every segment between consecutive vertices gets a
+distance label at its midpoint, offset just above the line (meters, switching to
+`km` with two decimals from 1000 m), and a `Total <distance>` label sits below
+the last vertex, leaving room for that vertex's height label above it. Every
+interior vertex (not the first or last) gets two integer-degree labels on
+opposite sides, showing the angles the incoming and outgoing segments form; each
+of the two angles is also outlined by its own thin semicircular arc around the
+vertex, drawn on that angle's side with a fixed 24 px radius and a small gap
+where the two semicircles meet, and its degree text sits at the middle of its
+arc, just outside it along the angle bisector. The pair always sums to 360°, so
+a straight line reads 180° on both sides. As soon as the second vertex exists, a
+bearing label is drawn behind the first vertex, offset away from the line,
+showing the compass direction to the second vertex as e.g. `042° / 0747 mil`
+(degrees zero-padded and normalized to 0-359 clockwise from map north, mils
+zero-padded on the 6400 mil circle); it follows the first segment as more
+vertices are added, and moves further up when it would land on that vertex's
+height label (first segment pointing down the screen).
+
+Each vertex also gets a height-above-sea-level label just above the point: a
+small two-peaks mountain symbol (drawn as pixel-sized geometry, like the angle
+arcs) followed by the height in whole meters, e.g. `123 m`. The symbol marks a
+terrain height and is never used for the height differences. Where both
+endpoints of a segment have a height, the segment's distance label gains the
+height difference, e.g. `342 m (Δh +12 m)`: the sign is always explicit and a
+value rounded to zero reads `±0 m`. Heights come from the game's
+`getTerrainHeight` through `src/MapMarkers/TerrainHeightApi.ts`, requested in
+click-per-point mode only, so freehand strokes are not annotated and request no
+heights. Switching to click-per-point backfills the heights of vertices that
+already exist, and a coordinate cache avoids repeat requests for the same point.
+
+The labels and arcs are preview-only, drawn in the preview layer: they are never
+part of the marker and never sent to the game, which still receives only the
+geometry and color.
+
+`Done` creates a `_USER_DEFINED` `POLYLINE` marker through the existing
+`CreateMarker` request:
+
+```ts
+{
+    shape: 'POLYLINE',
+    position: [x1, y1],
+    polyline: [x1, y1, x2, y2, ...], // flat array
+    color: '<CfgMarkerColors class>',
+}
+```
+
+The game generates the `_USER_DEFINED` marker name, as for icon markers.
+
+The mode then stays active with an empty canvas, so several lines can be drawn in
+a row. The preview is drawn in its own OpenLayers layer above the marker layer and
+is not listed in the layer switcher.
+
+Only color is configurable today: polyline markers have no label, type (beyond
+`POLYLINE`), shape, brush, size, or alpha in the UI, and the chat channel is not
+implemented yet so it stays at the request default `0`. No SQF change is needed:
+`fnc_createMarker.sqf` already handles `shape`/`polyline`, and
+`fnc_assembleMarkerInfo.sqf` reports polylines back through `Marker.Upsert`.
+Player-created polyline markers are currently display-only in the Web UI: unlike
+point markers they cannot yet be edited or deleted from the map.
 
 ### Map service (other TacPhone apps)
 

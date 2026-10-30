@@ -22,7 +22,10 @@ import { LayerSwitcher } from './LayerSwitcher';
 import { MarkerLayerManager, type MarkerColor, type MarkerType } from './MapMarkers/MarkerLayer';
 import { MarkerCreateDialog } from './MapMarkers/MarkerCreateDialog';
 import { MarkerContextMenu } from './MapMarkers/MarkerContextMenu';
-import { createMarker, type MarkerCreationData } from './MapMarkers/MarkerApi';
+import { createMarker, createPolylineMarker, type MarkerCreationData } from './MapMarkers/MarkerApi';
+import { PolylineDrawing, simplifyPolyline } from './MapMarkers/PolylineDrawing';
+import { PolylineDrawControls } from './MapMarkers/PolylineDrawControls';
+import { getTerrainHeights } from './MapMarkers/TerrainHeightApi';
 import {
     MAP_SERVICE,
     MAP_SERVICE_VERSION,
@@ -48,6 +51,33 @@ const TERRAIN_MIN_RESOLUTION = 0.2;
 const TERRAIN_TILE_CACHE_SIZE = 48;
 // Placeholder size until the terrain SVG reports the real one.
 const INITIAL_TERRAIN_EXTENT: [number, number, number, number] = [0, 0, 30720, 30720];
+
+// Freehand strokes only record a vertex after the pointer moved this far, in
+// map units (meters). Kept small enough to follow the hand, large enough that a
+// stroke does not flood the game with points.
+const POLYLINE_FREEHAND_MIN_DISTANCE_M = 5;
+// Ramer-Douglas-Peucker tolerance applied to the drawn line before sending it.
+const POLYLINE_SIMPLIFY_TOLERANCE_M = 2;
+
+/**
+ * Polyline input mode. Module scope keeps the checkbox choice for the current
+ * page session, across Map panel mounts; a page reload resets it to freehand.
+ */
+let polylineClickPerPointMode = false;
+
+/**
+ * Terrain heights for the current page session, keyed by whole-meter map
+ * coordinate. The terrain does not change while the page is open, so a point
+ * only has to be asked for once, even across undos and new drawings.
+ *
+ * `globalThis.Map` because `Map` in this module is the OpenLayers map class.
+ */
+const terrainHeightCache = new globalThis.Map<string, number>();
+
+/** Cache key for a map coordinate, rounded to whole meters. */
+function terrainHeightKey(x: number, y: number): string {
+    return `${Math.round(x)},${Math.round(y)}`;
+}
 
 interface MarkerDialogState {
   isOpen: boolean;
@@ -90,11 +120,22 @@ interface MarkerHoldState {
   pointerType: string;
 }
 
+interface PolylineDrawState {
+  isActive: boolean;
+  /** CfgMarkerColors class name of the line color; '' until the colors load. */
+  color: string;
+  /** Number of placed vertices, mirrored from PolylineDrawing for the UI. */
+  vertexCount: number;
+  /** Checkbox: a click/tap places one vertex instead of drawing freehand. */
+  clickPerPoint: boolean;
+}
+
 interface MapState {
   layerSwitcherIsOpen: boolean;
   markerDialog: MarkerDialogState;
   markerMenu: MarkerMenuState | null;
   terrainError: string | null;
+  polylineDraw: PolylineDrawState;
 }
 
 class App extends React.Component<{},MapState> {
@@ -134,6 +175,14 @@ class App extends React.Component<{},MapState> {
     /** Pointer capture taken by the marker move, if it could be set. */
     private markerPointerCapture: { viewport: HTMLElement; pointerId: number } | null = null;
 
+    private polylineDrawing: PolylineDrawing | null = null;
+    /** Press that may become a vertex when the pointer does not pan (click mode). */
+    private polylineTapStart: { pointerId: number; x: number; y: number } | null = null;
+    /** Pointer currently drawing a freehand stroke, or null. */
+    private polylineStrokePointerId: number | null = null;
+    /** Right-button pan, only handled while drawing mode is armed. */
+    private drawingDragPan: DragPan | null = null;
+
     private loadMarkerIcon = (iconPath: string): Promise<string> => {
         if (!this.markerManager) {
             return Promise.reject(new Error('Marker manager is not initialized'));
@@ -160,6 +209,12 @@ class App extends React.Component<{},MapState> {
             },
             markerMenu: null,
             terrainError: null,
+            polylineDraw: {
+                isActive: false,
+                color: '',
+                vertexCount: 0,
+                clickPerPoint: polylineClickPerPointMode,
+            },
         };
     }
 
@@ -284,6 +339,16 @@ class App extends React.Component<{},MapState> {
         this.markerManager = new MarkerLayerManager('Markers');
         this.markerManager.layer.setZIndex(1);
         map.addLayer(this.markerManager.layer);
+
+        // Preview layer for the polyline being drawn, stacked above the markers.
+        this.polylineDrawing = new PolylineDrawing();
+        this.polylineDrawing.layer.setZIndex(2);
+        map.addLayer(this.polylineDrawing.layer);
+
+        // Drawing owns the left button, so a dedicated DragPan that only takes
+        // the right mouse button keeps the map pannable while it is armed.
+        this.drawingDragPan = new DragPan({ condition: this.isDrawingPanEvent });
+        map.addInteraction(this.drawingDragPan);
 
         // Double-click (desktop) creates a marker. Remove the default double-click zoom
         // interaction so that creating a marker doesn't also zoom the map.
@@ -441,6 +506,8 @@ class App extends React.Component<{},MapState> {
         this.cancelLongPress();
         this.cancelMarkerHold();
         this.clearMarkerMenuTimer();
+        this.polylineTapStart = null;
+        this.polylineStrokePointerId = null;
         window.removeEventListener('keydown', this.handleWindowKeyDown);
 
         // Drop an in-progress marker move: flush the last position to the game
@@ -469,9 +536,22 @@ class App extends React.Component<{},MapState> {
             viewport.removeEventListener('pointerleave', this.handleViewportPointerLeave);
             viewport.removeEventListener('contextmenu', this.handleViewportContextMenu);
 
+            // The preview layer needs the map only while it is attached.
+            if (this.polylineDrawing) {
+                map.removeLayer(this.polylineDrawing.layer);
+            }
+
+            if (this.drawingDragPan) {
+                map.removeInteraction(this.drawingDragPan);
+                this.drawingDragPan = null;
+            }
+
             // Detach the map from the DOM target
             map.setTarget(undefined);
         }
+
+        this.polylineDrawing?.destroy();
+        this.polylineDrawing = null;
 
         // this.map is already null, so this only disposes the tile sources.
         this.disposeTerrainLayers();
@@ -482,12 +562,404 @@ class App extends React.Component<{},MapState> {
     }
 
     private toggleLayerSwitcherMenu = (): void => {
+        // The two panels share the same corner; never let them overlap.
+        const aboutToOpen = !this.state.layerSwitcherIsOpen;
+        if (aboutToOpen && this.state.polylineDraw.isActive) {
+            this.stopPolylineDrawing();
+        }
+
         this.setState((prevState) => ({ layerSwitcherIsOpen: !prevState.layerSwitcherIsOpen }));
     };
 
     private closeLayerSwitcherMenu = (): void => {
         this.setState({ layerSwitcherIsOpen: false });
     };
+
+    /** Resolves a CfgMarkerColors class name to the CSS color used for the preview. */
+    private getDrawingColorCss(colorClassName: string): string {
+        const colors = this.markerManager?.getMarkerColors() ?? [];
+        const match = colors.find((color) => color.className === colorClassName);
+        return match?.color ?? '#ffffff';
+    }
+
+    /**
+     * The marker config arrives asynchronously, so an armed drawing mode may
+     * start without colors. This fills in the first one once they are known.
+     */
+    private loadDrawingColorsIfNeeded(): void {
+        const manager = this.markerManager;
+        if (!manager) {
+            return;
+        }
+
+        void manager.whenMarkerConfigLoaded().then(() => {
+            if (!this.map || !this.state.polylineDraw.isActive) {
+                return;
+            }
+
+            const colors = manager.getMarkerColors();
+            const color = this.state.polylineDraw.color || colors[0]?.className || '';
+
+            this.setState((prevState) => ({
+                polylineDraw: { ...prevState.polylineDraw, color },
+            }));
+            this.polylineDrawing?.setColor(this.getDrawingColorCss(color));
+        });
+    }
+
+    private handlePolylineColorSelect = (colorClassName: string): void => {
+        this.setState((prevState) => ({
+            polylineDraw: { ...prevState.polylineDraw, color: colorClassName },
+        }));
+        this.polylineDrawing?.setColor(this.getDrawingColorCss(colorClassName));
+    };
+
+    private handlePolylineClickPerPointChange = (clickPerPoint: boolean): void => {
+        polylineClickPerPointMode = clickPerPoint;
+
+        // A mode switch ends the current gesture but keeps placed vertices.
+        this.finishPolylineStroke();
+        this.polylineTapStart = null;
+
+        this.setState((prevState) => ({
+            polylineDraw: { ...prevState.polylineDraw, clickPerPoint },
+        }));
+
+        this.polylineDrawing?.setMeasurementsEnabled(clickPerPoint);
+
+        // Vertices placed in freehand mode have no heights yet, and the
+        // measuring overlay needs one per point.
+        if (clickPerPoint) {
+            this.backfillPolylineHeights();
+        }
+
+        // Freehand owns the drag gesture and locks the map; click-per-point
+        // needs drag-to-pan again.
+        this.setDragPanActive(clickPerPoint);
+    };
+
+    private togglePolylineDrawing = (): void => {
+        if (this.state.polylineDraw.isActive) {
+            this.stopPolylineDrawing();
+            return;
+        }
+
+        const colors = this.markerManager?.getMarkerColors() ?? [];
+        const color = this.state.polylineDraw.color || colors[0]?.className || '';
+
+        // Drawing and the marker interaction panels are exclusive: they share
+        // the map surface and the same pointer gestures.
+        this.setState({
+            layerSwitcherIsOpen: false,
+            markerMenu: null,
+            polylineDraw: {
+                isActive: true,
+                color,
+                vertexCount: 0,
+                clickPerPoint: polylineClickPerPointMode,
+            },
+        });
+
+        this.polylineDrawing?.clear();
+        this.polylineDrawing?.setColor(this.getDrawingColorCss(color));
+        // Distances and angles are a click-per-point measuring aid; freehand
+        // strokes are too dense to annotate.
+        this.polylineDrawing?.setMeasurementsEnabled(polylineClickPerPointMode);
+        this.polylineTapStart = null;
+        this.polylineStrokePointerId = null;
+
+        this.cancelMarkerHold();
+        this.cancelLongPress();
+        this.clearMarkerMenuTimer();
+        // Drawing owns the pointer, so no marker is hovered any more. Without
+        // this, a stale hover would keep the Delete key armed.
+        this.hoveredMarkerName = null;
+
+        if (this.markerMoveState) {
+            this.markerManager?.endMarkerMove(this.markerMoveState.name);
+            this.markerMoveState = null;
+            this.releaseMarkerPointerCapture();
+        }
+
+        // Freehand drawing must not pan; click-per-point still relies on it.
+        this.setDragPanActive(polylineClickPerPointMode);
+        this.setMapCursor('crosshair');
+
+        if (colors.length === 0) {
+            this.loadDrawingColorsIfNeeded();
+        }
+    };
+
+    private stopPolylineDrawing = (): void => {
+        this.polylineTapStart = null;
+        this.polylineStrokePointerId = null;
+        this.polylineDrawing?.setMeasurementsEnabled(false);
+        this.polylineDrawing?.clear();
+        this.setState((prevState) => ({
+            polylineDraw: { ...prevState.polylineDraw, isActive: false, vertexCount: 0 },
+        }));
+        this.setDragPanActive(true);
+        this.resetMapCursor();
+    };
+
+    private handlePolylineUndo = (): void => {
+        this.finishPolylineStroke();
+        this.polylineDrawing?.undoLastPoint();
+        this.syncPolylineVertexCount();
+    };
+
+    private handlePolylineFinish = (): void => {
+        this.finishPolylineStroke();
+
+        const flat = this.polylineDrawing?.getFlatPolyline() ?? [];
+        if (flat.length < 4) {
+            return;
+        }
+
+        const drawn: Array<[number, number]> = [];
+        for (let index = 0; index + 1 < flat.length; index += 2) {
+            drawn.push([flat[index], flat[index + 1]]);
+        }
+
+        const points = simplifyPolyline(drawn, POLYLINE_SIMPLIFY_TOLERANCE_M);
+        if (points.length < 2) {
+            return;
+        }
+
+        // 'Default' is the game's CfgMarkerColors fallback, so a line can still
+        // be created when the color list had not loaded yet.
+        const color = this.state.polylineDraw.color || 'Default';
+
+        try {
+            // createPolylineMarker throws synchronously for invalid input, while
+            // the request itself fails asynchronously.
+            createPolylineMarker(points, color).catch((error: unknown) => {
+                console.error('Failed to create polyline marker', error);
+            });
+        } catch (error) {
+            console.error('Failed to create polyline marker', error);
+        }
+
+        // Keep the mode armed so several lines can be drawn in a row.
+        this.polylineDrawing?.clear();
+        this.polylineTapStart = null;
+        this.setState((prevState) => ({
+            polylineDraw: { ...prevState.polylineDraw, vertexCount: 0 },
+        }));
+    };
+
+    /** Mirrors the preview's vertex count into React state. */
+    private syncPolylineVertexCount(): void {
+        const vertexCount = this.polylineDrawing?.getPointCount() ?? 0;
+        this.setState((prevState) => ({
+            polylineDraw: { ...prevState.polylineDraw, vertexCount },
+        }));
+    }
+
+    /**
+     * Fetches terrain heights for the vertices at `indices` and applies them to
+     * the preview, using cached heights where possible. Only used by the
+     * click-per-point measuring overlay; freehand strokes request no heights.
+     */
+    private requestPolylineHeights(indices: readonly number[]): void {
+        const drawing = this.polylineDrawing;
+        if (!drawing || indices.length === 0) {
+            return;
+        }
+
+        const positions: Array<[number, number]> = [];
+        const requested: Array<{ index: number; point: [number, number] }> = [];
+
+        for (const index of indices) {
+            const point = drawing.getPoint(index);
+            if (!point) {
+                continue;
+            }
+
+            // A cached height can be applied right away, which also covers the
+            // backfill after a mode switch without a round trip.
+            const cached = terrainHeightCache.get(terrainHeightKey(point[0], point[1]));
+            if (cached !== undefined) {
+                drawing.setPointHeight(index, cached);
+                continue;
+            }
+
+            positions.push(point);
+            requested.push({ index, point });
+        }
+
+        if (positions.length === 0) {
+            return;
+        }
+
+        getTerrainHeights(positions)
+            .then((heights) => {
+                for (let i = 0; i < requested.length; i++) {
+                    const { index, point } = requested[i];
+                    const height = heights[i];
+                    terrainHeightCache.set(terrainHeightKey(point[0], point[1]), height);
+
+                    // The vertex may have been undone or replaced while the
+                    // request was in flight, so the index is only trusted while
+                    // it still holds the same coordinate.
+                    const current = this.polylineDrawing?.getPoint(index);
+                    if (current && current[0] === point[0] && current[1] === point[1]) {
+                        this.polylineDrawing?.setPointHeight(index, height);
+                    }
+                }
+            })
+            .catch((error: unknown) => {
+                console.warn('Failed to fetch terrain heights', error);
+            });
+    }
+
+    /** Requests heights for every vertex already placed, e.g. after a mode switch. */
+    private backfillPolylineHeights(): void {
+        const count = this.polylineDrawing?.getPointCount() ?? 0;
+        if (count === 0) {
+            return;
+        }
+
+        const indices: number[] = [];
+        for (let index = 0; index < count; index++) {
+            indices.push(index);
+        }
+
+        this.requestPolylineHeights(indices);
+    }
+
+    /**
+     * Adds a map coordinate to the preview when it is at least `minDistance`
+     * away from the previous vertex (`0` disables the distance check). Distance
+     * is in map units, which are meters on the terrain projection.
+     */
+    private appendPolylineCoordinate(coordinate: [number, number], minDistance: number): void {
+        const drawing = this.polylineDrawing;
+        if (!drawing) {
+            return;
+        }
+
+        if (minDistance > 0) {
+            const flat = drawing.getFlatPolyline();
+            if (flat.length >= 2) {
+                const dx = coordinate[0] - flat[flat.length - 2];
+                const dy = coordinate[1] - flat[flat.length - 1];
+                if (dx * dx + dy * dy < minDistance * minDistance) {
+                    return;
+                }
+            }
+        }
+
+        const nextIndex = drawing.getPointCount();
+        drawing.addPoint(coordinate);
+
+        // Heights are only annotated in the click-per-point measuring overlay,
+        // so a freehand stroke (which can add many points) asks for none.
+        if (this.state.polylineDraw.clickPerPoint && drawing.getPointCount() > nextIndex) {
+            this.requestPolylineHeights([nextIndex]);
+        }
+    }
+
+    private beginPolylineStroke(event: PointerEvent): void {
+        const map = this.map;
+        if (!map || this.polylineStrokePointerId !== null) {
+            return;
+        }
+
+        const coordinate = map.getEventCoordinate(event);
+        if (!coordinate) {
+            return;
+        }
+
+        this.polylineStrokePointerId = event.pointerId;
+        this.appendPolylineCoordinate(
+            [coordinate[0], coordinate[1]],
+            POLYLINE_FREEHAND_MIN_DISTANCE_M,
+        );
+
+        // Freehand drawing must never pan the map, even if the mode was toggled
+        // while a marker move was still winding down.
+        this.setDragPanActive(false);
+        this.setMapCursor('crosshair');
+    }
+
+    private extendPolylineStroke(event: PointerEvent): void {
+        if (this.polylineStrokePointerId === null || event.pointerId !== this.polylineStrokePointerId) {
+            return;
+        }
+
+        const map = this.map;
+        if (!map) {
+            return;
+        }
+
+        const coordinate = map.getEventCoordinate(event);
+        if (!coordinate) {
+            return;
+        }
+
+        this.appendPolylineCoordinate(
+            [coordinate[0], coordinate[1]],
+            POLYLINE_FREEHAND_MIN_DISTANCE_M,
+        );
+    }
+
+    /**
+     * Ends the stroke without dropping points. Keeps the count in React state
+     * up to date only here, so a long drag does not re-render the panel on
+     * every sampled vertex.
+     */
+    private finishPolylineStroke(event?: PointerEvent): void {
+        if (this.polylineStrokePointerId === null) {
+            return;
+        }
+
+        if (event && event.pointerId !== this.polylineStrokePointerId) {
+            return;
+        }
+
+        this.polylineStrokePointerId = null;
+        this.syncPolylineVertexCount();
+    }
+
+    /**
+     * Adds a vertex at the pointer position in click-per-point mode. A tap that
+     * lands on the last vertex is ignored: double-taps and finger jitter would
+     * otherwise create zero-length segments the game cannot draw.
+     */
+    private addPolylineVertex(event: PointerEvent): void {
+        const map = this.map;
+        const drawing = this.polylineDrawing;
+        if (!map || !drawing) {
+            return;
+        }
+
+        const coordinate = map.getEventCoordinate(event);
+        if (!coordinate) {
+            return;
+        }
+
+        const flat = drawing.getFlatPolyline();
+        if (flat.length >= 2) {
+            const lastPixel = map.getPixelFromCoordinate([
+                flat[flat.length - 2],
+                flat[flat.length - 1],
+            ]);
+            const pixel = map.getPixelFromCoordinate([coordinate[0], coordinate[1]]);
+
+            if (lastPixel && pixel) {
+                const dx = pixel[0] - lastPixel[0];
+                const dy = pixel[1] - lastPixel[1];
+                if (dx * dx + dy * dy <= 36) {
+                    return;
+                }
+            }
+        }
+
+        this.appendPolylineCoordinate([coordinate[0], coordinate[1]], 0);
+        this.syncPolylineVertexCount();
+        this.setMapCursor('crosshair');
+    }
 
     private showTerrainError(error: unknown): void {
         if (!this.map) {
@@ -500,6 +972,12 @@ class App extends React.Component<{},MapState> {
     }
 
     private handleMapDoubleClick = (event: MapBrowserEvent): void => {
+        // Two tap-ups already placed the points; the double-click emulation
+        // would only try to create a marker on top of the line.
+        if (this.state.polylineDraw.isActive) {
+            return;
+        }
+
         // OpenLayers also emulates double-click for touch double taps.
         // Touch markers open the context menu instead.
         const originalEvent = event.originalEvent as PointerEvent;
@@ -561,11 +1039,31 @@ class App extends React.Component<{},MapState> {
     /** Enables/disables map panning while a marker is dragged. */
     private setDragPanActive(active: boolean): void {
         this.map?.getInteractions().forEach((interaction) => {
-            if (interaction instanceof DragPan) {
+            // The right-button drawing pan decides on its own (see
+            // isDrawingPanEvent), so it is never toggled here.
+            if (interaction instanceof DragPan && interaction !== this.drawingDragPan) {
                 interaction.setActive(active);
             }
         });
     }
+
+    /**
+     * Condition of the right-button DragPan: a held right mouse button pans the
+     * map, but only while the drawing mode owns the other gestures.
+     */
+    private isDrawingPanEvent = (event: MapBrowserEvent): boolean => {
+        if (!this.state.polylineDraw.isActive) {
+            return false;
+        }
+
+        const originalEvent = event.originalEvent;
+        return (
+            originalEvent instanceof PointerEvent &&
+            originalEvent.pointerType === 'mouse' &&
+            originalEvent.isPrimary &&
+            originalEvent.button === 2
+        );
+    };
 
     private setMapCursor(cursor: string): void {
         const map = this.map;
@@ -602,9 +1100,18 @@ class App extends React.Component<{},MapState> {
     }
 
     private handleViewportPointerLeave = (): void => {
+        // A freehand stroke that leaves the map ends there: without pointer
+        // capture there is no pointerup for it any more.
+        if (this.state.polylineDraw.isActive) {
+            this.finishPolylineStroke();
+            this.polylineTapStart = null;
+            return;
+        }
+
         // With pointer capture the pointer keep sending events, so this only
         // fires for a pointer that really left the map.
         this.hoveredMarkerName = null;
+        this.polylineTapStart = null;
         this.cancelMarkerHold();
 
         if (!this.markerMoveState) {
@@ -613,6 +1120,13 @@ class App extends React.Component<{},MapState> {
     };
 
     private handleViewportContextMenu = (event: MouseEvent): void => {
+        // Drawing mode owns the pointer gestures; a right click or touch hold on
+        // empty map space must not open the native menu.
+        if (this.state.polylineDraw.isActive) {
+            event.preventDefault();
+            return;
+        }
+
         // The native menu would otherwise pop up on right click / touch hold and
         // steal the gesture, but it stays available on empty map space.
         if (this.markerMoveState || this.markerHoldStart) {
@@ -626,7 +1140,24 @@ class App extends React.Component<{},MapState> {
     };
 
     private handleWindowKeyDown = (event: KeyboardEvent): void => {
+        // Esc leaves the drawing mode; the Delete handling below only concerns
+        // markers.
+        if (event.key === 'Escape' && this.state.polylineDraw.isActive) {
+            if (App.isEditableElement(event.target) || App.isEditableElement(document.activeElement)) {
+                return;
+            }
+
+            event.preventDefault();
+            this.stopPolylineDrawing();
+            return;
+        }
+
         if (event.key !== 'Delete') {
+            return;
+        }
+
+        // Drawing suppresses marker interaction, so it must not delete either.
+        if (this.state.polylineDraw.isActive) {
             return;
         }
 
@@ -781,6 +1312,25 @@ class App extends React.Component<{},MapState> {
             return;
         }
 
+        // Drawing owns the pointer. Freehand starts a stroke right away;
+        // click-per-point only remembers the press until pointerup, so a drag
+        // can still pan.
+        if (this.state.polylineDraw.isActive) {
+            if (event.pointerType === 'mouse' && event.button !== 0) {
+                return;
+            }
+
+            this.cancelLongPress();
+
+            if (this.state.polylineDraw.clickPerPoint) {
+                this.polylineTapStart = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+            } else {
+                this.beginPolylineStroke(event);
+            }
+
+            return;
+        }
+
         if (event.pointerType === 'mouse') {
             // Only the primary button grabs markers; the right button is left to
             // the contextmenu handler.
@@ -842,6 +1392,26 @@ class App extends React.Component<{},MapState> {
     };
 
     private handleMapPointerMove = (event: PointerEvent): void => {
+        // No hover or marker drag while drawing. Freehand samples the stroke;
+        // click-per-point drops the pending vertex once the pointer pans.
+        if (this.state.polylineDraw.isActive) {
+            if (event.pointerType === 'mouse' && event.buttons !== 0) {
+                // A held right button pans the map (drawing DragPan), so it
+                // gets its own cursor; the left button keeps the crosshair.
+                this.setMapCursor(event.buttons === 2 ? 'grabbing' : 'crosshair');
+            }
+
+            if (this.state.polylineDraw.clickPerPoint) {
+                const start = this.polylineTapStart;
+                if (start && App.hasMovedBeyondTolerance(start.x, start.y, event)) {
+                    this.polylineTapStart = null;
+                }
+            } else {
+                this.extendPolylineStroke(event);
+            }
+            return;
+        }
+
         const move = this.markerMoveState;
         if (move && event.pointerId === move.pointerId) {
             this.updateMarkerMove(event, move);
@@ -895,6 +1465,32 @@ class App extends React.Component<{},MapState> {
     }
 
     private handleMapPointerUp = (event: PointerEvent): void => {
+        if (this.state.polylineDraw.isActive) {
+            if (event.pointerType === 'mouse' && event.button === 2) {
+                // End of a right-button pan; back to drawing.
+                this.setMapCursor('crosshair');
+            }
+
+            if (!this.state.polylineDraw.clickPerPoint) {
+                this.finishPolylineStroke(event);
+                return;
+            }
+
+            const start = this.polylineTapStart;
+            if (!start || start.pointerId !== event.pointerId) {
+                return;
+            }
+
+            this.polylineTapStart = null;
+
+            if (event.type === 'pointercancel' || App.hasMovedBeyondTolerance(start.x, start.y, event)) {
+                return;
+            }
+
+            this.addPolylineVertex(event);
+            return;
+        }
+
         const move = this.markerMoveState;
         if (move && event.pointerId === move.pointerId) {
             this.finishMarkerMove(event, move);
@@ -1424,6 +2020,20 @@ class App extends React.Component<{},MapState> {
                     isOpen={this.state.layerSwitcherIsOpen}
                     onToggle={this.toggleLayerSwitcherMenu}
                     onClose={this.closeLayerSwitcherMenu}
+                />
+
+                <PolylineDrawControls
+                    isActive={this.state.polylineDraw.isActive}
+                    vertexCount={this.state.polylineDraw.vertexCount}
+                    colors={this.markerManager?.getMarkerColors() ?? []}
+                    selectedColor={this.state.polylineDraw.color}
+                    clickPerPoint={this.state.polylineDraw.clickPerPoint}
+                    onToggle={this.togglePolylineDrawing}
+                    onSelectColor={this.handlePolylineColorSelect}
+                    onClickPerPointChange={this.handlePolylineClickPerPointChange}
+                    onUndo={this.handlePolylineUndo}
+                    onCancel={this.stopPolylineDrawing}
+                    onFinish={this.handlePolylineFinish}
                 />
 
                 {this.state.terrainError && (

@@ -73,10 +73,16 @@ export function markKnownMarkerNames(names: Iterable<string>): void {
     }
 }
 
-/** Notification body: the marker text, else its type, else a generic label. */
-function markerLabel(type: unknown, text: unknown): string {
+/** Notification body: the marker text, else what kind of marker it is. */
+function markerLabel(type: unknown, text: unknown, shape: unknown): string {
     if (typeof text === 'string' && text !== '') {
         return text;
+    }
+
+    // Polyline markers have no text; their icon type is meaningless (the game
+    // keeps its "mil_dot" default), so name the shape instead.
+    if (shape === 'POLYLINE') {
+        return 'Polyline';
     }
 
     if (typeof type === 'string' && type !== '') {
@@ -96,7 +102,7 @@ export function notifyMarkerUpsert(marker: MarkerUpdate, localPlayerId?: string)
     }
 
     // [name, type, color, dir, pos, text, shape, alpha, brush, size, channel, polyline]
-    const [name, type, , , position, text] = marker;
+    const [name, type, , , position, text, shape] = marker;
 
     if (typeof name !== 'string' || name === '') {
         return;
@@ -118,7 +124,7 @@ export function notifyMarkerUpsert(marker: MarkerUpdate, localPlayerId?: string)
     }
 
     const [x, y] = position;
-    const label = markerLabel(type, text);
+    const label = markerLabel(type, text, shape);
 
     window.Notifications.show({
         title: "New map marker",
