@@ -61,6 +61,13 @@ reference is [`ACE_TacPhone_Main/README.md`](../ACE_TacPhone_Main/README.md).
 - Only the selected tab of a tabset is mounted. A background tab has no
   `instanceId` and no registered app API; `interApp.resolveAsync()` activates it
   and waits for registration.
+- Unassigned tabs render `AppChooserPanel`: a phone-style icon grid of every
+  registered panel. Clients with a precise pointer (`(hover: hover) and
+  (pointer: fine)`, i.e. desktop browsers) also get a sticky search field that
+  filters by panel title, app name and panel id; touch clients get the grid
+  alone. Tiles use the resolved icon and fall back to a generated monogram, and
+  apps that failed to load are listed in a separate section. The grid refreshes
+  through `appDirectory.onDidChange` because icons resolve after the first paint.
 - The persisted app choice is the tab config `panelId`. `AppChooserPanel` reads
   it back on mount, and `PanelInstance.setApp()` writes it for the next reload.
   Panel `id`s are persisted in layouts; renaming one breaks saved layouts.

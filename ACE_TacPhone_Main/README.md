@@ -91,6 +91,22 @@ drags as page pans: the page moves a few pixels and the browser sends
 `pointercancel`, which interrupts pointer-driven apps such as the Map's freehand
 polyline drawing. Apps that need scrolling scroll inside their own panel.
 
+## App chooser
+
+Every unassigned tab shows the app chooser (`src/Panels/AppChooserPanel.tsx`):
+one tile per registered panel, with the resolved icon, the panel title and the
+owning app name. Panels without an icon get a generated monogram tile, and apps
+that failed to load are listed under "Could not load" instead of looking like
+broken apps. Selecting a tile switches the tab to that app and persists
+`panelId` in the tab config, so a saved layout reopens the same app.
+
+Clients with a precise pointer (`(hover: hover) and (pointer: fine)`, i.e.
+desktop browsers) also get a sticky search field above the grid. It filters on
+panel title, app name and panel id; Escape or the clear button empties it. Touch
+clients render the grid alone, matching a phone home screen. The grid follows
+`appDirectory.onDidChange`, so icons that resolve after the first paint appear
+without a reload.
+
 ## Developing apps
 
 An app is a JavaScript ES module that is loaded dynamically by the host. A mod
