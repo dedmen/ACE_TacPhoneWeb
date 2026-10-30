@@ -163,6 +163,11 @@ interactions are removed when the map is created. Two-finger touch gestures
 therefore only pan and zoom; `Shift`+`Alt`+drag does not rotate either. The
 terrain view is rebuilt when the terrain SVG arrives, and `createTerrainView()`
 reapplies the same option, so a reload cannot reintroduce rotation.
+When replacing terrain layers, the old layers are detached, their renderer and
+source are disposed, and the layer object itself is not disposed: OpenLayers
+nulls the layer in its cached layer state, which the map's last frame state still
+references until the next render, so `forEachFeatureAtPixel()` would throw on a
+pointer event in between.
 
 ### Marker interaction
 

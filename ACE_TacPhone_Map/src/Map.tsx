@@ -1841,17 +1841,24 @@ class App extends React.Component<AppProps,MapState> {
 
     private disposeTerrainLayers(): void {
         const map = this.map;
+        const layers = this.terrainLayers;
+        this.terrainLayers = [];
 
-        for (const layer of this.terrainLayers) {
+        for (const layer of layers) {
             map?.removeLayer(layer);
+
+            // Do not call layer.dispose() here. It nulls the layer stored in the
+            // shared layer state, but Map.frameState_ keeps referencing that state
+            // until the next render. A pointermove in between makes
+            // forEachFeatureAtPixel() hit `null.hasRenderer()` and throw.
+            // Clearing the renderer and source releases the same resources
+            // without invalidating the last frame state.
+            layer.clearRenderer();
 
             const source = layer.getSource();
             layer.setSource(null);
             source?.dispose();
-            layer.dispose();
         }
-
-        this.terrainLayers = [];
     }
 
     private async applyNewTerrainSVG(bytes: Uint8Array<ArrayBuffer>): Promise<void> {

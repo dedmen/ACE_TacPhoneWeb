@@ -173,3 +173,8 @@ hand-edit it or a synced copy. The copied JS is git-ignored.
   request queues must tolerate mount → unmount → mount.
 - A background Map panel is not mounted, so its marker state is not live; routing
   must activate it through `interApp.resolveAsync()`.
+- Never `layer.dispose()` a layer that was just removed from a live map. It nulls
+  the layer in the shared layer state, but `Map.frameState_` still references that
+  state until the next render, so a pointer event crashes
+  `forEachFeatureAtPixel()` on `null.hasRenderer()`. Clear the renderer and dispose
+  the source instead (see `disposeTerrainLayers()`).
