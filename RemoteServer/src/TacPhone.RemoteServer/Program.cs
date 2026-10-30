@@ -4,6 +4,7 @@ using TacPhone.RemoteServer.Configuration;
 using TacPhone.RemoteServer.Infrastructure;
 using TacPhone.RemoteServer.Realtime;
 using TacPhone.RemoteServer.Storage;
+using TacPhone.RemoteServer.Web;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -65,6 +66,17 @@ app.Logger.LogInformation(
     app.Services.GetRequiredService<ServerInfo>().Version,
     options.Describe());
 
+// Precompressed entry document. The variants are built once and regenerated
+// only when the source hash changes; they live in memory, so a read-only cache
+// directory (production /opt) still serves them.
+var databasePath = options.ResolveDatabasePath(app.Environment.ContentRootPath);
+var compressedCacheDir = options.ResolveCompressedStaticPath(
+    app.Environment.ContentRootPath, databasePath);
+var compressedIndex = await CompressedStaticIndex.PrepareAsync(
+    Path.Combine(app.Environment.ContentRootPath, "wwwroot", "index.html"),
+    compressedCacheDir,
+    app.Logger);
+
 // The real client IP is what the attach rate limiter must see.
 app.UseForwardedHeaders(BuildForwardedHeadersOptions(options, app.Logger));
 
@@ -86,6 +98,35 @@ app.UseWebSockets(new WebSocketOptions
 });
 
 app.UseDefaultFiles();
+
+// Precompressed entry document: picks br or gzip from Accept-Encoding and
+// falls through to the static files when nothing acceptable is offered.
+app.Use(async (context, next) =>
+{
+    if (compressedIndex is not null &&
+        (HttpMethods.IsGet(context.Request.Method) || HttpMethods.IsHead(context.Request.Method)) &&
+        (context.Request.Path == "/" ||
+         context.Request.Path.Equals("/index.html", StringComparison.OrdinalIgnoreCase)) &&
+        compressedIndex.TrySelect(context.Request.Headers.AcceptEncoding.ToString(), out var bytes, out var encoding))
+    {
+        context.Response.ContentType = "text/html; charset=utf-8";
+        // A plain header, not Response.ContentEncoding: that one expects an
+        // Encoding object and would try to transcode the body.
+        context.Response.Headers.ContentEncoding = encoding;
+        context.Response.Headers.Vary = "Accept-Encoding";
+        context.Response.ContentLength = bytes.Length;
+        context.Response.Headers.CacheControl = "no-store";
+
+        if (HttpMethods.IsHead(context.Request.Method))
+            return;
+
+        await context.Response.Body.WriteAsync(bytes, context.RequestAborted).ConfigureAwait(false);
+        return;
+    }
+
+    await next(context).ConfigureAwait(false);
+});
+
 app.UseStaticFiles(new StaticFileOptions
 {
     OnPrepareResponse = staticContext =>

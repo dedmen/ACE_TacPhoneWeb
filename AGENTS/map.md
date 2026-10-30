@@ -77,7 +77,10 @@ for mouse, touch, and pen.
   so the browser cannot claim a touch drag and fire `pointercancel` mid-stroke;
   click-per-point restores it for drag-to-pan. Toggle it wherever the mode changes
   (`togglePolylineDrawing`, `handlePolylineClickPerPointChange`,
-  `stopPolylineDrawing`).
+  `stopPolylineDrawing`). A non-passive `touchmove` listener on the viewport calls
+  `preventDefault()` while freehand is armed as a fallback for ancestors that
+  re-enable panning. The app root also clips with `overflow: hidden` so canvas
+  rounding cannot make the tab scroll container scrollable.
 - Measurement overlay is preview-only and click-per-point only: per-segment
   distances, total, per-vertex terrain-height labels, segment `Δh`, interior
   angles (degree text plus fixed 24 px arcs), and a first-segment bearing

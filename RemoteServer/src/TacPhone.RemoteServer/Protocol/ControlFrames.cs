@@ -25,6 +25,7 @@ public static class ControlTypes
     public const string PeerJoined = "peer-joined";
     public const string PeerLeft = "peer-left";
     public const string Code = "code";
+    public const string CodeUsed = "code-used";
     public const string Share = "share";
     public const string ShareRevoked = "share-revoked";
     public const string Error = "error";

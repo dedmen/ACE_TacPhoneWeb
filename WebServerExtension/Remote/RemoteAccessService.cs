@@ -101,7 +101,12 @@ namespace ArmaServerSide.Remote
                 var identity = RelayProtocol.ParseObject(identityJson);
                 _host = host.Trim();
                 _publicBase = publicBase;
-                _hostId = identity.String("id");
+
+                // The RemoteIdentity callback (and the SQF profileNamespace value)
+                // uses "hostId". Accept "id" as a fallback for older stored values.
+                _hostId = identity.String("hostId");
+                if (_hostId.Length == 0)
+                    _hostId = identity.String("id");
                 _hostSecret = identity.String("secret");
                 _armed = true;
                 _state = "connecting";
@@ -415,6 +420,17 @@ namespace ArmaServerSide.Remote
 
                     break;
                 }
+
+                case "code-used":
+                    // The server consumed the one-time code for a successful attach.
+                    lock (_gate)
+                    {
+                        _code = "";
+                        _codeExpiresAt = default;
+                        _codeTtlSeconds = 0;
+                    }
+
+                    break;
 
                 case "share":
                 {

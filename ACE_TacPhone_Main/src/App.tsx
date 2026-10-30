@@ -366,7 +366,7 @@ class App extends React.Component<{}, {loading: boolean, error: string | undefin
 
         if (this.state.error)
             return (
-                <div style={{ padding: 24, color: 'white', backgroundColor: '#2a1111', height: '100vh', boxSizing: 'border-box' }}>
+                <div style={{ padding: 24, color: 'white', backgroundColor: '#2a1111', height: '100%', boxSizing: 'border-box' }}>
                     <h2>TacPhone failed to start</h2>
                     <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{this.state.error}</pre>
                     <button type="button" onClick={() => void this.loadApps()}>Retry</button>
@@ -374,8 +374,11 @@ class App extends React.Component<{}, {loading: boolean, error: string | undefin
             );
 
         return (
-            <>         
-            <div style={{ width: '100%', height: '100vh', position: 'absolute' }}>
+            <>
+            {/* Fixed to the viewport rather than `100vh`: on mobile Chrome the
+                dynamic URL bar makes `100vh` taller than the visible area, the
+                page becomes scrollable, and drags scroll instead of drawing. */}
+            <div style={{ position: 'fixed', inset: 0, overflow: 'hidden' }}>
                 <Layout
                     model={this.model}
                     factory={this.factory} 

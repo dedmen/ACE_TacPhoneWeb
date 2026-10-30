@@ -105,6 +105,7 @@ the process starts.
 | `TacPhone:BindAddress` | string | `127.0.0.1` | Interface the app binds to. Keep it on loopback; see [Port / bind](#port--bind-443-vs-5080). |
 | `TacPhone:Port` | int | `443` | TCP port. `443` only when the app itself is the public boundary; nginx setups use `5080`. |
 | `TacPhone:DatabasePath` | string | `data/tacphone-remote.db` | SQLite file, relative to the content root (the working directory). The parent directory is created automatically. Must be writable by the service user. |
+| `TacPhone:CompressedStaticPath` | string | `""` (empty) | Cache directory for the precompressed `index.html` variants (`index.html.br`, `index.html.gz`, `index.html.sha256`). Empty = `compressed-static` next to the SQLite database (`/var/lib/tacphone-remote/compressed-static` in the recommended layout). A configured value is relative to the content root unless absolute. Must not be `wwwroot` — `/opt` is read-only in production. See [Static compression](#static-compression). |
 | `TacPhone:PublicBaseUrl` | string | `""` (empty) | Base URL used to build share links. When empty, the URL is derived from the `Host` header and `X-Forwarded-Proto` of the game connection, which is usually correct behind nginx. Set it explicitly (e.g. `https://tacphone.arma3.io`) if you terminate TLS elsewhere or proxy under a different name. |
 | `TacPhone:LogFile` | string | `logs/tacphone-remote.log` | Rolling log file, relative to the content root unless absolute. Leave empty to disable file logging (console/journald only). |
 | `TacPhone:LogFileMinLevel` | string | `Information` | Minimum level written to the log file (`Trace`/`Debug`/`Information`/`Warning`/`Error`/`Critical`/`None`). |
@@ -139,6 +140,7 @@ The shipped `appsettings.json` is exactly this shape:
     "BindAddress": "127.0.0.1",
     "Port": 443,
     "DatabasePath": "data/tacphone-remote.db",
+    "CompressedStaticPath": "",
     "PublicBaseUrl": "",
     "LogFile": "logs/tacphone-remote.log",
     "LogFileMinLevel": "Information",
@@ -209,7 +211,7 @@ and no authentication on `/health` or the static page.
 
 | Method | Path | Behaviour |
 | --- | --- | --- |
-| `GET` | `/` | Serves `wwwroot/index.html` with `Cache-Control: no-store`. |
+| `GET`/`HEAD` | `/`, `/index.html` | Serves `wwwroot/index.html` with `Cache-Control: no-store`, Brotli or gzip compressed when the client accepts it (see [Static compression](#static-compression)). |
 | `GET` | `/health` | Anonymous JSON health snapshot (see below). No DB writes. |
 | `GET` | `/ws` | WebSocket endpoint. The first control frame selects the role: `auth` with `"role":"game"`, or `attach` with `"role":"client"`. |
 | any | anything else | Falls back to the static entry (`index.html`); the UI is hash-routed, so there are no server-side routes. |
@@ -278,6 +280,48 @@ relay instance would not see the first one's entries (same as every other piece
 of relay state). Payloads and config contents are never logged. `TerrainCache:Enabled=false`
 restores the pure forwarding behaviour, and `/health` exposes unique-payload,
 byte, host-pin, hit and miss counters.
+
+---
+
+## Static compression
+
+`wwwroot/index.html` is one large file (inline JS and CSS) and nginx **proxies**
+it to this app instead of serving it from disk, so nginx's `gzip_static` /
+`brotli_static` never see it. The app therefore precompresses the file itself at
+startup and serves the matching variant from memory.
+
+- **Startup:** the file is read and SHA-256 hashed. If the marker
+  (`index.html.sha256`) in the cache directory matches and both variants exist
+  and are non-empty, they are loaded as-is — no recompression.
+- **Regeneration:** when the hash differs (you replaced `index.html`) or a
+  variant is missing or empty, both variants are rebuilt with
+  `CompressionLevel.SmallestSize`, kept in memory, and written to the cache
+  directory together with the marker. Writes are atomic: each file goes to
+  `*.tmp` and is then moved over the target, and the marker is written **last**
+  so an interrupted write just triggers a regeneration on the next start.
+- **Cache directory:** `TacPhone:CompressedStaticPath`; empty means
+  `compressed-static` next to the SQLite database
+  (`/var/lib/tacphone-remote/compressed-static` in the documented layout), which
+  the systemd unit already covers through `ReadWritePaths`. Do not point it at
+  `wwwroot`: `/opt` is read-only under `ProtectSystem=strict`.
+- **Read-only cache:** if the directory cannot be created or written, the server
+  logs one warning and keeps serving the in-memory variants. Startup is never
+  blocked by this.
+- **Serving:** `GET`/`HEAD` `/` and `/index.html` answer with the best variant
+  the client accepts — Brotli preferred, gzip fallback, `*` treated as gzip — and
+  set `Content-Type: text/html; charset=utf-8`, `Content-Encoding`,
+  `Vary: Accept-Encoding`, `Content-Length` and `Cache-Control: no-store`.
+  `Accept-Encoding` q-values are honoured; `q=0` disables that encoding and
+  `q=0.5` still selects it.
+- **Fallback:** a request that accepts neither encoding (or sends no
+  `Accept-Encoding`, or arrives for an unknown path) falls through to
+  `UseStaticFiles`/`MapFallbackToFile("index.html")` and gets the uncompressed
+  file.
+- Replacing `index.html` is detected on the next restart. There is no manual
+  `gzip`/`brotli` step, and the variants are git-ignored artifacts.
+
+The startup log records the source size, both variant sizes and whether the
+variants were reused or regenerated. File contents are never logged.
 
 ---
 
@@ -760,6 +804,10 @@ Things the swap must not lose:
   `/etc/tacphone-remote.env`,
 - `wwwroot/index.html` when you build the phone UI separately: publish copies the
   placeholder from the repository, so copy your real UI build over it again.
+  The precompressed Brotli/gzip variants are regenerated automatically on the
+  next start because the source hash changed (see
+  [Static compression](#static-compression)); delete
+  `compressed-static/` next to the database if you want to force it.
 
 Schema migrations run automatically at startup and are additive: new tables and
 columns are created, existing rows are preserved. There is no downgrade path —
@@ -862,6 +910,7 @@ per-request state. Polling it every 30–60 s from an external monitor is fine.
 | Service crashes immediately with a JIT/exec error | `MemoryDenyWriteExecute=true` was added. Remove it. |
 | Cannot find the relay logs | `TacPhone:LogFile` (default `logs/tacphone-remote.log` under the content root) and `journalctl -u tacphone-remote`. Set an absolute path on production. |
 | `TacPhone file logging disabled ...` on stderr | The log directory is not writable (for example the default under `/opt` with `ProtectSystem=strict`). Point `TacPhone__LogFile` at `/var/lib/tacphone-remote/logs/tacphone-remote.log`. |
+| `unknown control frame` in the log | A peer sent a JSON control frame with a `t` the server does not know. The warning now includes the raw frame with credential fields redacted; the game also gets the preview in the error frame. Update the peer and server to the same protocol version. |
 
 ---
 
@@ -874,7 +923,7 @@ the browser socket, not the person.
 | Direction | `t` values |
 | --- | --- |
 | game → server | `auth`, `code-new`, `share-create`, `share-revoke`, `kick`, `ping`, `pong` |
-| server → game | `auth-ok`, `peer-joined`, `peer-left`, `code`, `share`, `share-revoked`, `error`, `pong` |
+| server → game | `auth-ok`, `peer-joined`, `peer-left`, `code`, `code-used`, `share`, `share-revoked`, `error`, `pong` |
 | browser → server | `attach`, `ping`, `pong` |
 | server → browser | `attach-ok`, `host-offline`, `rejected`, `peer-kicked`, `pong` |
 

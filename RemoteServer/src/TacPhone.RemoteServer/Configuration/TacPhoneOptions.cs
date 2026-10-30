@@ -26,6 +26,13 @@ public sealed class TacPhoneOptions
     public string PublicBaseUrl { get; set; } = string.Empty;
 
     /// <summary>
+    /// Cache directory for the precompressed <c>index.html</c> variants. Empty
+    /// means <c>compressed-static</c> next to the SQLite database, which is the
+    /// only writable location on the production systemd unit.
+    /// </summary>
+    public string CompressedStaticPath { get; set; } = string.Empty;
+
+    /// <summary>
     /// Rolling log file, relative to the content root unless absolute. Leave
     /// empty to disable file logging (console/journald only).
     /// </summary>
@@ -62,7 +69,9 @@ public sealed class TacPhoneOptions
         return Path.IsPathRooted(path) ? Path.GetFullPath(path) : Path.GetFullPath(Path.Combine(contentRootPath, path));
     }
 
-    /// <summary>Absolute log file path for the given content root; empty disables file logging.</summary>
+    /// <summary>
+    /// Absolute log file path for the given content root; empty disables file logging.
+    /// </summary>
     public string ResolveLogFilePath(string contentRootPath)
     {
         if (string.IsNullOrWhiteSpace(LogFile))
@@ -70,6 +79,28 @@ public sealed class TacPhoneOptions
 
         ArgumentException.ThrowIfNullOrEmpty(contentRootPath);
         var path = LogFile.Trim();
+        return Path.IsPathRooted(path) ? Path.GetFullPath(path) : Path.GetFullPath(Path.Combine(contentRootPath, path));
+    }
+
+    /// <summary>
+    /// Absolute directory for the precompressed <c>index.html</c> variants.
+    /// Empty <see cref="CompressedStaticPath"/> resolves to
+    /// <c>compressed-static</c> next to the database file, which is writable
+    /// under the production systemd unit; a configured value is relative to the
+    /// content root unless absolute.
+    /// </summary>
+    public string ResolveCompressedStaticPath(string contentRootPath, string databasePath)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(contentRootPath);
+        ArgumentException.ThrowIfNullOrEmpty(databasePath);
+
+        if (string.IsNullOrWhiteSpace(CompressedStaticPath))
+        {
+            var directory = Path.GetDirectoryName(Path.GetFullPath(databasePath));
+            return Path.Combine(string.IsNullOrEmpty(directory) ? contentRootPath : directory, "compressed-static");
+        }
+
+        var path = CompressedStaticPath.Trim();
         return Path.IsPathRooted(path) ? Path.GetFullPath(path) : Path.GetFullPath(Path.Combine(contentRootPath, path));
     }
 

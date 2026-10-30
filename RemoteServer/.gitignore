@@ -13,6 +13,12 @@ data/
 # Runtime logs
 logs/
 
+# Precompressed index.html variants (generated at startup, see README)
+compressed-static/
+**/wwwroot/*.br
+**/wwwroot/*.gz
+**/wwwroot/*.sha256
+
 # Local configuration overrides
 appsettings.Development.json
 appsettings.Production.json

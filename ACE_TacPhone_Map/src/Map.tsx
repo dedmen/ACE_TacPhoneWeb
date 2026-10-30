@@ -175,6 +175,8 @@ class App extends React.Component<AppProps,MapState> {
     private polylineTapStart: { pointerId: number; x: number; y: number } | null = null;
     /** Pointer currently drawing a freehand stroke, or null. */
     private polylineStrokePointerId: number | null = null;
+    /** True while freehand mode suppresses native touch scrolling. */
+    private freehandTouchCapture = false;
     /** Right-button pan, only handled while drawing mode is armed. */
     private drawingDragPan: DragPan | null = null;
 
@@ -363,6 +365,11 @@ class App extends React.Component<AppProps,MapState> {
         viewport.addEventListener('pointercancel', this.handleMapPointerUp);
         viewport.addEventListener('pointerleave', this.handleViewportPointerLeave);
         viewport.addEventListener('contextmenu', this.handleViewportContextMenu);
+        // Not passive: Chromium only lets a touchmove listener stop the native
+        // scroll/pan gesture (and with it `pointercancel`) when it can call
+        // preventDefault(). `touch-action` is the primary guard; this is the
+        // fallback for hosts that re-enable panning on an ancestor.
+        viewport.addEventListener('touchmove', this.handleViewportTouchMove, { passive: false });
 
         // Delete key removes the hovered player marker.
         window.addEventListener('keydown', this.handleWindowKeyDown);
@@ -503,6 +510,7 @@ class App extends React.Component<AppProps,MapState> {
         this.clearMarkerMenuTimer();
         this.polylineTapStart = null;
         this.polylineStrokePointerId = null;
+        this.freehandTouchCapture = false;
         window.removeEventListener('keydown', this.handleWindowKeyDown);
 
         // Drop an in-progress marker move: flush the last position to the game
@@ -530,6 +538,7 @@ class App extends React.Component<AppProps,MapState> {
             viewport.removeEventListener('pointercancel', this.handleMapPointerUp);
             viewport.removeEventListener('pointerleave', this.handleViewportPointerLeave);
             viewport.removeEventListener('contextmenu', this.handleViewportContextMenu);
+            viewport.removeEventListener('touchmove', this.handleViewportTouchMove);
 
             // The preview layer needs the map only while it is attached.
             if (this.polylineDrawing) {
@@ -631,6 +640,7 @@ class App extends React.Component<AppProps,MapState> {
         // Freehand owns the drag gesture and locks the map; click-per-point
         // needs drag-to-pan again.
         this.setDragPanActive(clickPerPoint);
+        this.setFreehandTouchCapture(!clickPerPoint);
     };
 
     private togglePolylineDrawing = (): void => {
@@ -678,6 +688,7 @@ class App extends React.Component<AppProps,MapState> {
 
         // Freehand drawing must not pan; click-per-point still relies on it.
         this.setDragPanActive(polylineClickPerPointMode);
+        this.setFreehandTouchCapture(!polylineClickPerPointMode);
         this.setMapCursor('crosshair');
 
         if (colors.length === 0) {
@@ -694,6 +705,7 @@ class App extends React.Component<AppProps,MapState> {
             polylineDraw: { ...prevState.polylineDraw, isActive: false, vertexCount: 0 },
         }));
         this.setDragPanActive(true);
+        this.setFreehandTouchCapture(false);
         this.resetMapCursor();
     };
 
@@ -1058,6 +1070,40 @@ class App extends React.Component<AppProps,MapState> {
             originalEvent.isPrimary &&
             originalEvent.button === 2
         );
+    };
+
+    /**
+     * Freehand drawing has to own the whole touch gesture. `ol.css` leaves
+     * `touch-action: pan-x pan-y` on the viewport, so on touch the browser
+     * claims a drag for native panning after a few pixels, sends
+     * `pointercancel`, and the stroke ends after a handful of samples. Only
+     * freehand mode disables it: click-per-point keeps native gestures so
+     * drag-to-pan still works there.
+     */
+    private setFreehandTouchCapture(active: boolean): void {
+        this.freehandTouchCapture = active;
+
+        const viewport = this.map?.getViewport();
+        if (!viewport) {
+            return;
+        }
+
+        viewport.style.touchAction = active ? 'none' : '';
+    }
+
+    /**
+     * Last line of defence for freehand drawing: while it is armed, no touch
+     * gesture may scroll or pan, even if an ancestor or the host re-enables it.
+     * Without this a native pan also fires `pointercancel` and ends the stroke.
+     */
+    private handleViewportTouchMove = (event: TouchEvent): void => {
+        if (!this.freehandTouchCapture) {
+            return;
+        }
+
+        if (event.cancelable) {
+            event.preventDefault();
+        }
     };
 
     private setMapCursor(cursor: string): void {
@@ -2006,7 +2052,10 @@ class App extends React.Component<AppProps,MapState> {
         const markerDialog = this.state.markerDialog;
 
         return (
-            <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+            // `overflow: hidden` keeps the OpenLayers canvas rounding from
+            // making the flexlayout tab scrollable by a pixel or two, which
+            // would let Chrome claim touch drags as pans (pointercancel).
+            <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden' }}>
 
                 <div ref={this.mapRef} className={`${styles.map}`} style={{width: "100%", height: "100%"}}/>
 

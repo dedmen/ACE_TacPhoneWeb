@@ -55,7 +55,7 @@ export function RemotePairingScreen(): React.ReactElement | null {
                 {state === "host-offline" && (
                     <p className={styles.status}>
                         The game is not connected. Open the <strong>Remote Access</strong> panel
-                        in-game and leave it armed; this page reconnects automatically.
+                        in-game; this page reconnects automatically.
                     </p>
                 )}
 

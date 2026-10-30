@@ -78,6 +78,19 @@ embedded, and `console.log` / `console.debug` / `console.info` calls are removed
 Use `npm run build:debug` for an unminified build with an inline source map;
 `console.warn` and `console.error` calls are kept in both builds.
 
+## Shell and viewport
+
+The host is a single full-viewport application and the document itself never
+scrolls. `src/index.css` pins `html`, `body`, and `#root` to `height: 100%` with
+`overflow: hidden` and `overscroll-behavior: none`; `src/App.tsx` anchors the
+flexlayout shell with `position: fixed; inset: 0` and `overflow: hidden`.
+
+Keep it that way. A scrollable document or a `100vh` shell (taller than the
+visible area once mobile Chrome shows its URL bar) makes the browser treat touch
+drags as page pans: the page moves a few pixels and the browser sends
+`pointercancel`, which interrupts pointer-driven apps such as the Map's freehand
+polyline drawing. Apps that need scrolling scroll inside their own panel.
+
 ## Developing apps
 
 An app is a JavaScript ES module that is loaded dynamically by the host. A mod

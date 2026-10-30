@@ -18,7 +18,7 @@ phone browser ──wss────▶ tacphone.arma3.io/ws ──▶ RemoteServ
 ```
 
 The game opens the outbound socket only when the in-game **Remote Access** panel
-is opened. It stays armed until `Stop` or mission end.
+is opened. It stays connected until `Stop` or mission end.
 
 ## Files
 
@@ -58,13 +58,14 @@ same for any new extension call.
   the `RemoteIdentity` extension callback; SQF stores the JSON in
   `profileNamespace` under `ace_tacphone_remoteIdentity`.
 - One-time code: 10 chars `XXXX-XXXX-XX`, 120 s, single use. URL
-  `https://<host>/#p=<code>`.
+  `https://<host>/#p=<code>`. When the relay consumes it for an attach it sends
+  `code-used` to the game so the in-game panel stops showing a dead code.
 - Share link: 16-char key, TTL 15 min / 1 h / 4 h / 8 h / 24 h. Exactly one
   active share per host; creating a new one deletes the old one and disconnects
   its devices. URL `https://<host>/#s=<key>`.
 - The browser stores `{hostId, deviceToken}` in `localStorage`
   (`tacphone.device.<host>`), so it reconnects without a code once the game is
-  armed. Share devices expire with the share.
+  connected. Share devices expire with the share.
 - Keys are in the URL **fragment**, not the query string, so they do not land in
   nginx access logs.
 
@@ -137,6 +138,16 @@ host.
   `[Critical]` before exit. On systemd, point it at
   `/var/lib/tacphone-remote/logs/...` because `/opt` is read-only under
   `ProtectSystem=strict`.
+- The hosted `wwwroot/index.html` is precompressed at startup: SHA-256 of the
+  source is compared with `index.html.sha256` in `TacPhone:CompressedStaticPath`
+  (default `compressed-static` next to the SQLite DB, the only writable path in
+  production), and Brotli/gzip variants are rebuilt only when the hash changed or
+  a variant is missing. Variants are kept in memory (a read-only cache only logs
+  one warning) and served for `/` and `/index.html` with `Content-Encoding`,
+  `Vary: Accept-Encoding`, `Content-Length` and `no-store`, honouring
+  `Accept-Encoding` q-values; anything else falls back to the static files.
+  Replacing `index.html` therefore regenerates on the next restart, with no
+  manual `gzip` step and no nginx `gzip_static`.
 - Extension diagnostics (server errors, relay failures, connection lifecycle)
   never go to a console. `ExtensionLog` sends them through the `Log` extension
   callback; SQF buffers them and the in-game page writes them to its dev console

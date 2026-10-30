@@ -189,6 +189,15 @@ mouse, touch, and pen, and the default input mode is freehand:
   map: the Map app adds a second, right-button-only `DragPan` for drawing mode.
 - Vertices are sampled during the drag, but only once the pointer has moved at
   least 5 m (map units) from the previous sample.
+- On touch/pen, freehand mode sets `touch-action: none` on the OpenLayers
+  viewport for as long as it is active. Without it the browser claims the drag
+  for native panning, sends `pointercancel` after a few pixels, and the stroke
+  ends after a handful of samples. Click-per-point keeps the native gestures
+  (`touch-action: pan-x pan-y` from `ol.css`) so drag-to-pan still works. While
+  freehand is armed a non-passive `touchmove` listener on the viewport also calls
+  `preventDefault()`, so an ancestor that re-enables panning cannot take the
+  gesture back. The app root clips with `overflow: hidden` so canvas rounding
+  cannot make the flexlayout tab scrollable.
 - Releasing ends the stroke. Starting another drag appends to the same line, and
   a quick tap still places a single vertex.
 - The drawn points are simplified with Ramer–Douglas–Peucker (2 m tolerance)

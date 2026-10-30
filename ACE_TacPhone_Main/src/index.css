@@ -50,24 +50,36 @@
   }
 }
 
+/*
+ * The phone UI is one full-viewport app: the document itself must never scroll
+ * or rubber-band. Anything that scrolls scrolls inside a panel. A scrollable
+ * document makes Chrome claim map drags as page pans and fires `pointercancel`,
+ * which also breaks freehand polyline drawing.
+ */
+html,
+body,
 #root {
-  max-width: 100%;
-  margin: 0 auto;
-  text-align: center;
-  border-inline: 1px solid var(--border);
-  min-height: 100svh;
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  /* Also disables Android Chrome pull-to-refresh, which is easy to hit while
+     dragging a tab or a floating window. */
+  overscroll-behavior: none;
 }
 
 body {
-  margin: 0;
-  /* https://stackoverflow.com/questions/29008194/disabling-androids-chrome-pull-down-to-refresh-feature 
-    Disable pull-down to refresh on mobile, can easily happen when trying to drag a tab, or floating window
-  */
-  overscroll-behavior: contain;
-  overflow: hidden;
+  background: var(--bg);
+}
+
+#root {
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  /* No margin or border: a stray pixel makes the fixed layout overflow the
+     viewport, which is exactly what re-enables document scrolling. */
+  border: 0;
 }
 
 h1,

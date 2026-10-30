@@ -44,6 +44,14 @@ reference is [`ACE_TacPhone_Main/README.md`](../ACE_TacPhone_Main/README.md).
 
 ## Layout and panels
 
+- The page is exactly one viewport and never scrolls: `index.css` pins
+  `html`/`body`/`#root` to `height: 100%` with `overflow: hidden` and
+  `overscroll-behavior: none`, and `App.tsx` anchors the flexlayout shell with
+  `position: fixed; inset: 0`. Do not reintroduce `100vh` (taller than the
+  visible area on mobile Chrome) or margins/borders on `#root`: a scrollable
+  document makes touch drags pan the page and fire `pointercancel`, which breaks
+  canvas apps such as the Map's freehand drawing. Scrolling belongs inside a
+  panel.
 - flexlayout drives the tabs/tabsets. `src/App.tsx` is the shell; `PanelHost.tsx`
   creates one `PanelInstance` per mounted tab and disposes it on close/switch.
 - `PanelDirectory` (`window.TacPhone.panels`) is the source of truth for

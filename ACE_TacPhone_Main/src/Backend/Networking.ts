@@ -386,7 +386,7 @@ class NetworkingWebsocket implements Networking {
             }
 
             case "host-offline":
-                this.setRemoteState("host-offline", "The phone is not armed in-game.");
+                this.setRemoteState("host-offline", "The phone is not connected in-game.");
                 this.socket?.close();
                 break;
 

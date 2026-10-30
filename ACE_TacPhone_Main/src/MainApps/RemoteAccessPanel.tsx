@@ -131,6 +131,7 @@ const styles = {
         color: "#e6edf3",
         fontSize: 12,
     } as React.CSSProperties,
+    copied: { borderColor: "#2ea043", color: "#3fb950" } as React.CSSProperties,
     hint: { margin: "8px 0 0", color: "#8b949e", lineHeight: 1.45 } as React.CSSProperties,
     warning: { margin: "8px 0 0", color: "#d29922", lineHeight: 1.45 } as React.CSSProperties,
     error: { margin: "8px 0 0", color: "#f85149", lineHeight: 1.45 } as React.CSSProperties,
@@ -213,6 +214,12 @@ function RemoteAccessPanelInner(_props: AppProps): React.ReactElement {
     const [ttl, setTtl] = React.useState(3600);
     const [error, setError] = React.useState("");
     const [busy, setBusy] = React.useState(false);
+    const [copied, setCopied] = React.useState<string | null>(null);
+    const copyTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    React.useEffect(() => () => {
+        if (copyTimer.current) clearTimeout(copyTimer.current);
+    }, []);
 
     const refresh = React.useCallback(async () => {
         try {
@@ -227,7 +234,7 @@ function RemoteAccessPanelInner(_props: AppProps): React.ReactElement {
     React.useEffect(() => {
         let mounted = true;
 
-        // Opening the panel is what arms remote access for this session.
+        // Opening the panel starts the relay connection for this session.
         void (async () => {
             try {
                 const started = await remoteCall("Start");
@@ -267,7 +274,12 @@ function RemoteAccessPanelInner(_props: AppProps): React.ReactElement {
         }
     };
 
-    const copy = async (text: string): Promise<void> => {
+    const copy = async (text: string, key: string): Promise<void> => {
+        // Show success immediately; the clipboard call itself is fire-and-forget
+        // from the user's point of view (errors still surface in the panel).
+        setCopied(key);
+        if (copyTimer.current) clearTimeout(copyTimer.current);
+        copyTimer.current = setTimeout(() => setCopied(null), 2000);
         await run("CopyToClipboard", { text });
     };
 
@@ -343,19 +355,25 @@ function RemoteAccessPanelInner(_props: AppProps): React.ReactElement {
                 ) : null}
 
                 <div style={styles.row}>
-                    <button
-                        type="button"
-                        style={styles.primary}
-                        disabled={busy || state !== "online"}
-                        onClick={() => void run("NewCode")}
-                    >
-                        New code
-                    </button>
-                    {code ? (
-                        <button type="button" style={styles.button} onClick={() => void copy(code)}>
-                            Copy code
+                    {!code ? (
+                        <button
+                            type="button"
+                            style={styles.primary}
+                            disabled={busy || state !== "online"}
+                            onClick={() => void run("NewCode")}
+                        >
+                            New code
                         </button>
-                    ) : null}
+                    ) : (
+                        <button
+                            type="button"
+                            style={{ ...styles.button, ...(copied === "code" ? styles.copied : null) }}
+                            disabled={busy}
+                            onClick={() => void copy(code, "code")}
+                        >
+                            {copied === "code" ? "Copied!" : "Copy code"}
+                        </button>
+                    )}
                 </div>
 
                 {codeUrl ? <div style={{ marginTop: 10 }}><QrCode text={codeUrl} /></div> : null}
@@ -403,8 +421,13 @@ function RemoteAccessPanelInner(_props: AppProps): React.ReactElement {
                     <>
                         <input style={styles.link} readOnly value={share.url} onFocus={(event) => event.target.select()} />
                         <div style={styles.row}>
-                            <button type="button" style={styles.button} onClick={() => void copy(share.url)}>
-                                Copy link
+                            <button
+                                type="button"
+                                style={{ ...styles.button, ...(copied === "share" ? styles.copied : null) }}
+                                disabled={busy}
+                                onClick={() => void copy(share.url, "share")}
+                            >
+                                {copied === "share" ? "Copied!" : "Copy link"}
                             </button>
                             <span style={styles.hint}>Expires in {remaining(share.expiresIn)}</span>
                         </div>

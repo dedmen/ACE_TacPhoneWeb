@@ -37,6 +37,8 @@ public static class ServerFrames
     public static string Code(string code, int expiresInSeconds) =>
         Build(ControlTypes.Code, ("code", code), ("expiresIn", expiresInSeconds));
 
+    public static string CodeUsed() => Build(ControlTypes.CodeUsed);
+
     public static string Share(string key, string? url, int expiresInSeconds) =>
         Build(ControlTypes.Share, ("key", key), ("url", url), ("expiresIn", expiresInSeconds));
 

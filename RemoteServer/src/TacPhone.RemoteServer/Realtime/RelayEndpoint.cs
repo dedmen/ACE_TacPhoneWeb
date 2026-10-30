@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using TacPhone.RemoteServer.Configuration;
 using TacPhone.RemoteServer.Infrastructure;
 using TacPhone.RemoteServer.Protocol;
@@ -32,6 +33,11 @@ public sealed class RelayEndpoint
     private static readonly TimeSpan CleanupInterval = TimeSpan.FromSeconds(60);
 
     private static readonly string PingFrame = ServerFrames.Ping();
+
+    /// <summary>Redacts credential values when a bad frame is logged.</summary>
+    private static readonly Regex SensitiveJsonValue = new(
+        "\"(secret|hostSecret|deviceToken|code|share|password)\"\\s*:\\s*\"[^\"]*\"",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private readonly TacPhoneOptions _options;
     private readonly RemoteRepository _repository;
@@ -189,7 +195,15 @@ public sealed class RelayEndpoint
         if (authResult.IssuedSecret is not null)
         {
             // The secret itself is never logged; it is only returned in auth-ok.
-            _logger.LogInformation("Issued a new host identity");
+            if (!string.IsNullOrEmpty(auth.HostId))
+            {
+                _logger.LogWarning(
+                    "A game connection presented an unknown or invalid host identity; issued a new identity");
+            }
+            else
+            {
+                _logger.LogInformation("Issued a new host identity");
+            }
         }
 
         ShareRecord? activeShare = null;
@@ -298,6 +312,10 @@ public sealed class RelayEndpoint
     {
         if (!FrameCodec.TryDecodeGameFrame(payload, out var peerId, out var applicationPayload))
         {
+            _logger.LogWarning(
+                "Game sent a malformed binary frame ({Length} bytes): {Frame}",
+                payload.Length,
+                PreviewBytes(payload));
             session.Game.TryEnqueueText(ServerFrames.Error(ErrorCodes.BadFrame, "expected the binary peer envelope"));
             return;
         }
@@ -352,9 +370,17 @@ public sealed class RelayEndpoint
                     return;
 
                 default:
-                    _logger.LogWarning("Game sent an unknown control frame type '{FrameType}'", type ?? "(none)");
-                    session.Game.TryEnqueueText(ServerFrames.Error(ErrorCodes.Proto, $"unknown control frame: {type ?? "(none)"}"));
+                {
+                    _logger.LogWarning(
+                        "Game sent an unknown control frame type '{FrameType}': {Frame}",
+                        type ?? "(none)",
+                        PreviewFrame(text));
+
+                    session.Game.TryEnqueueText(ServerFrames.Error(
+                        ErrorCodes.Proto,
+                        $"unknown control frame: {type ?? "(none)"} — {PreviewFrame(text, 200)}"));
                     return;
+                }
             }
         }
     }
@@ -668,6 +694,11 @@ public sealed class RelayEndpoint
 
             var issued = await _repository.IssueDeviceAsync(hostId, null, deviceLabel, null, cancellationToken)
                 .ConfigureAwait(false);
+
+            // The one-time code is now spent; clear it from the in-game panel instead
+            // of letting it count down a dead code.
+            host.Game.TryEnqueueText(ServerFrames.CodeUsed());
+
             return AttachResult.Attached(host, issued.Record, issued.Token, "owner");
         }
 
@@ -838,16 +869,25 @@ public sealed class RelayEndpoint
                 if (frame.Type == WebSocketMessageType.Text)
                 {
                     var text = Encoding.UTF8.GetString(frame.Payload);
-                    if (IsControl(text, ControlTypes.Ping))
+                    if (TryGetControlType(text, out var controlType))
                     {
-                        client.Socket.TryEnqueueText(ServerFrames.Pong());
-                        continue;
-                    }
+                        switch (controlType)
+                        {
+                            case ControlTypes.Ping:
+                                client.Socket.TryEnqueueText(ServerFrames.Pong());
+                                continue;
 
-                    if (IsControl(text, ControlTypes.Pong))
-                    {
-                        // Keepalive answer from the browser; not application data.
-                        continue;
+                            case ControlTypes.Pong:
+                                // Keepalive answer from the browser; not application data.
+                                continue;
+
+                            default:
+                                _logger.LogWarning(
+                                    "Browser sent an unknown control frame type '{FrameType}': {Frame}",
+                                    controlType,
+                                    PreviewFrame(text));
+                                continue;
+                        }
                     }
                 }
 
@@ -1158,8 +1198,10 @@ public sealed class RelayEndpoint
         return Math.Clamp(ttl, 60, _options.Limits.MaxShareTtlSeconds);
     }
 
-    private static bool IsControl(string text, string expectedType)
+    private static bool TryGetControlType(string text, out string controlType)
     {
+        controlType = string.Empty;
+
         if (!TryParseJsonObject(text, out var document))
         {
             return false;
@@ -1167,8 +1209,44 @@ public sealed class RelayEndpoint
 
         using (document)
         {
-            return GetString(document.RootElement, "t") == expectedType;
+            var value = GetString(document.RootElement, "t");
+            if (string.IsNullOrEmpty(value))
+            {
+                return false;
+            }
+
+            controlType = value;
+            return true;
         }
+    }
+
+    /// <summary>
+    /// A short, redacted preview for a bad frame log. Control frames can carry
+    /// secrets (a malformed auth), so values of known credential fields are hidden.
+    /// </summary>
+    private static string PreviewFrame(string text, int max = 512)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return "(empty)";
+        }
+
+        var redacted = SensitiveJsonValue.Replace(text, "\"$1\":\"<redacted>\"");
+        return redacted.Length <= max
+            ? redacted
+            : redacted[..max] + $"… ({redacted.Length} chars)";
+    }
+
+    private static string PreviewBytes(ReadOnlySpan<byte> payload, int max = 32)
+    {
+        if (payload.IsEmpty)
+        {
+            return "(empty)";
+        }
+
+        var count = Math.Min(payload.Length, max);
+        var hex = Convert.ToHexString(payload[..count]);
+        return payload.Length > count ? $"{hex}… ({payload.Length} bytes)" : $"{hex} ({payload.Length} bytes)";
     }
 
     private static FirstFrame? ParseFirstFrame(string json)
