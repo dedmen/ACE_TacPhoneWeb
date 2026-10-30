@@ -119,9 +119,11 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
 - [x] **[cleanup]** Return codes are uninformative (`DllEntry.cs:88`:
   unknown method, missing arg, failed start, success all return 1).
   `RvExtensionVersion` ignores `outputSize`; `RvExtension` writes nothing.
-- [ ] **[cleanup]** Diagnostics only go to `Console.WriteLine`, which is invisible
-  in the native host. Add a file log or callback so startup/shutdown failures are
-  visible.
+- [x] **[cleanup]** Diagnostics only go to `Console.WriteLine`, which is invisible
+  in the native host. Fixed: `ExtensionLog` sends `{level, message, time}` through
+  the `Log` extension callback; SQF buffers the last 50 entries and pushes
+  `Host.Log` to the in-game page, which writes them to its dev console and shows
+  warnings/errors as notifications. `GetHostLog` replays the buffer on page boot.
 
 ## SQF <-> web protocol
 
@@ -355,3 +357,37 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
 ## Tooling and dependencies
 
 - [ ] **[cleanup]** rerun `npm audit`, both builds, and `check:importmap`.
+
+## Remote access (public relay)
+
+- [ ] **[cleanup]** `Networking.ts` decides "relay page" vs "direct LAN page" by
+  hostname (loopback/LAN IP/mDNS = direct, anything else = relay). A LAN host
+  reachable through a public DNS name would be misdetected. Consider an explicit
+  marker/header from the relay server instead.
+- [ ] **[decision]** Device labels come from `User-Agent`. Add a rename UI and
+  persist the label server-side.
+- [ ] **[decision]** No message chunking anywhere. Terrain SVGs and app bundles
+  are sent as one frame, bounded by the relay's 32 MiB cap. The future SQF client
+  is limited to 10 MB; if a terrain SVG exceeds it, split it on the sending side
+  (the Map app already splits it after receiving).
+- [x] **[wontfix]** No `GetFile` allowlist. Only packed game/mod files are
+  readable and they are public; access is gated by pairing codes/share links.
+- [ ] **[cleanup]** Relay traffic is plaintext at the server (TLS ends in nginx).
+  Documented; app-level encryption is not planned.
+- [ ] **[robustness]** `RemoteAccessService` reconnects with 2/4/8/16/30 s
+  backoff. Verify a long offline period does not produce unbounded tasks.
+- [ ] **[cleanup]** The relay server is a separate deployable
+  (`RemoteServer/`); it is not built or packaged by the add-on. Copy
+  `ACE_TacPhone_Main/dist/index.html` into its `wwwroot/` before publishing.
+- [ ] **[robustness]** The relay sends `{"t":"ping"}` every 30 s and drops peers
+  idle for `IdleTimeoutSeconds` (120 s). The extension and the host page answer
+  with `pong`; keep that intact when changing either transport.
+- [ ] **[cleanup]** The server stores only the share key hash, so a reconnecting
+  game cannot recover the share URL. The extension keeps its own key across
+  reconnects until the expiry/Stop; do not clear it on disconnect.
+- [ ] **[decision]** Attach rate limiting is per IP (10/min) and counts
+  successful attaches, so several devices behind one NAT share the budget.
+  Revisit if a household hits it.
+- [ ] **[cleanup]** `RemoteServer/wwwroot/index.html` is a placeholder. The
+  server README documents replacing it with the host build.
+

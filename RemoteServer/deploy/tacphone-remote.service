@@ -1,0 +1,49 @@
+[Unit]
+Description=TacPhone Remote Server (relay + static web UI)
+Documentation=https://tacphone.arma3.io/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tacphone
+Group=tacphone
+WorkingDirectory=/opt/tacphone-remote
+ExecStart=/usr/bin/dotnet /opt/tacphone-remote/TacPhone.RemoteServer.dll
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+KillSignal=SIGTERM
+SyslogIdentifier=tacphone-remote
+
+# Optional overrides: config keys can also live here as
+# TacPhone__Port=5080, TacPhone__BindAddress=127.0.0.1,
+# TacPhone__LogFile=/var/lib/tacphone-remote/logs/tacphone-remote.log, etc.
+EnvironmentFile=-/etc/tacphone-remote.env
+Environment=DOTNET_ENVIRONMENT=Production
+Environment=ASPNETCORE_ENVIRONMENT=Production
+
+# Only needed when binding 443 directly instead of using nginx.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+# Hardening. Do NOT add MemoryDenyWriteExecute: the .NET JIT needs W+X memory.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+ReadWritePaths=/var/lib/tacphone-remote
+LimitNOFILE=65535
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target

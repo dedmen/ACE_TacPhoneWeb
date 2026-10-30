@@ -1,6 +1,7 @@
 import React from "react";
 import { TACPHONE_API_VERSION } from "@ace-tacphone/api";
 import type { AppPanelInfo, AppProps, PanelInfo, TacPhoneHost } from "@ace-tacphone/api";
+import { RemoteAccessPanel } from "./RemoteAccessPanel";
 import { compressAndToBase64 } from "../Backend/Compression";
 
 // These are apps included in TacPhone, even if no other apps are loaded. Core functionality like Notifications and Settings
@@ -11,6 +12,7 @@ export const apiVersion = TACPHONE_API_VERSION;
 export function GetTacPhoneApps(): Array<AppPanelInfo> {
   return [
     ...devApps(),
+    remoteAccessPanel,
   ]
 };
 
@@ -114,13 +116,77 @@ const panelInspectorPanel: AppPanelInfo = {
   appComponent: PanelInspectorPanelContent,
 };
 
+const remoteAccessPanel: AppPanelInfo = {
+  id: "ACE_TacPhone_RemoteAccess",
+  GetDefaultTitle: () => "Remote Access",
+  appComponent: RemoteAccessPanel,
+};
+
 function devApps(): Array<AppPanelInfo> {
   return import.meta.env.DEV ? [panelInspectorPanel] : [];
+}
+
+type HostLogEntry = {
+  level?: string;
+  message?: string;
+  time?: string;
+};
+
+/**
+ * The extension has no console in the Arma process; its diagnostics arrive as
+ * `Host.Log` messages. They always go to the page's dev console, and warnings
+ * and errors become notification banners.
+ */
+function showHostLog(entry: HostLogEntry): void {
+  const level = entry.level ?? "info";
+  const body = entry.message ?? "";
+  const prefix = entry.time ? `[${entry.time}] ` : "";
+  const text = `[TacPhone host] ${prefix}${body}`;
+
+  if (level === "error")
+    console.error(text);
+  else if (level === "warning")
+    console.warn(text);
+  else
+    console.log(text);
+
+  if ((level === "error" || level === "warning") && body) {
+    try {
+      window.TacPhone.notifications.show({
+        title: level === "error" ? "TacPhone host error" : "TacPhone host warning",
+        body,
+        duration: level === "error" ? 0 : 20_000,
+      });
+    } catch (error) {
+      console.error("Could not show the TacPhone host log notification:", error);
+    }
+  }
+}
+
+export async function init(): Promise<void> {
+  // Replay diagnostics emitted before the page was ready. `GetHostLog` is
+  // local-only, so the hosted page gets a "forbidden" object and ignores it.
+  try {
+    const entries = await window.TacPhone.networking.Request({ a: "main", c: "GetHostLog" });
+    if (Array.isArray(entries)) {
+      for (const entry of entries) {
+        if (entry && typeof entry === "object")
+          showHostLog(entry as HostLogEntry);
+      }
+    }
+  } catch (error) {
+    console.log("TacPhone host log unavailable:", error);
+  }
 }
 
 export async function OnMessageFromGame(message: object): Promise<void> {
 
     const { c } = message as { c: string };
+
+    if (c == "Host.Log") {
+        showHostLog(message as HostLogEntry);
+        return;
+    }
 
     if (c == "RequestTerrainSVG") {
         // Game would like to get SVG image sent back to it

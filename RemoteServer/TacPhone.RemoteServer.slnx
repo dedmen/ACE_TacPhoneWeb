@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="src/TacPhone.RemoteServer/TacPhone.RemoteServer.csproj" />
+  <Project Path="tests/TacPhone.RemoteServer.Tests/TacPhone.RemoteServer.Tests.csproj" />
+</Solution>

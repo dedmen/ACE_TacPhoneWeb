@@ -12,8 +12,8 @@
  *
  * `global` is the property name on `window` that holds the module namespace.
  *
- * @typedef {'react' | 'react-dom' | 'react-dom/client' | 'react/jsx-runtime' | 'react/compiler-runtime'} SharedModuleSpecifier
- * @typedef {'React' | 'ReactDOM' | 'ReactDOMClient' | 'ReactJSXRuntime' | 'ReactCompilerRuntime'} SharedGlobalName
+ * @typedef {'react' | 'react-dom' | 'react-dom/client' | 'react/jsx-runtime' | 'react/compiler-runtime' | 'qrcode-generator'} SharedModuleSpecifier
+ * @typedef {'React' | 'ReactDOM' | 'ReactDOMClient' | 'ReactJSXRuntime' | 'ReactCompilerRuntime' | 'QRCode'} SharedGlobalName
  * @typedef {{ readonly specifier: SharedModuleSpecifier, readonly global: SharedGlobalName }} SharedModule
  */
 
@@ -24,6 +24,7 @@ export const SHARED_MODULES = Object.freeze([
     Object.freeze({ specifier: 'react-dom/client', global: 'ReactDOMClient' }),
     Object.freeze({ specifier: 'react/jsx-runtime', global: 'ReactJSXRuntime' }),
     Object.freeze({ specifier: 'react/compiler-runtime', global: 'ReactCompilerRuntime' }),
+    Object.freeze({ specifier: 'qrcode-generator', global: 'QRCode' }),
 ]);
 
 /** @type {readonly SharedModuleSpecifier[]} */

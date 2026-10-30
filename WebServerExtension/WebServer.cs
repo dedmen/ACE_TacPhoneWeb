@@ -7,6 +7,7 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Net.WebSockets;
 using System.Text;
+using ArmaServerSide.Transports;
 
 namespace ArmaServerSide
 {
@@ -15,36 +16,84 @@ namespace ArmaServerSide
     // Connection Manager Class
     public class WebSocketConnectionManager
     {
-        internal readonly ConcurrentDictionary<string, WebSocketConnection> _connections = new();
+        internal readonly ConcurrentDictionary<string, Connection> _connections = new();
 
-        public Task AddConnectionAsync(string connectionId, WebSocket webSocket)
+        internal sealed class Connection
         {
-            _connections.TryAdd(connectionId, new WebSocketConnection(webSocket));
-            Console.WriteLine($"Connection added: {connectionId}. Total connections: {_connections.Count}");
+            public IClientTransport Transport { get; }
+
+            public Connection(IClientTransport transport)
+            {
+                Transport = transport;
+            }
+        }
+
+        internal Task AddConnectionAsync(string connectionId, IClientTransport transport)
+        {
+            _connections[connectionId] = new Connection(transport);
+            ExtensionLog.Info($"Connection added: {connectionId}. Total connections: {_connections.Count}");
             return Task.CompletedTask;
         }
 
-        public async Task RemoveConnectionAsync(string connectionId)
+        public Task AddConnectionAsync(string connectionId, WebSocket webSocket)
+            => AddConnectionAsync(connectionId, new WebSocketTransport(webSocket));
+
+        /// <summary>
+        /// Removes a client. <paramref name="notifyGame"/> fires the Disconnect
+        /// callback so the game drops that client's interests.
+        /// </summary>
+        public async Task RemoveConnectionAsync(string connectionId, bool notifyGame = true, bool closeTransport = true)
         {
-            if (_connections.TryRemove(connectionId, out var connection))
+            if (!_connections.TryRemove(connectionId, out var connection))
+                return;
+
+            if (notifyGame)
             {
-                // Tell the game this client is gone so it can drop its data interests.
                 try
                 {
                     DllEntry.callback("ArmaWebHost", "Disconnect", Encoding.UTF8.GetBytes(connectionId));
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"Disconnect callback failed: {ex.Message}");
+                    ExtensionLog.Error("Disconnect callback failed", ex);
                 }
+            }
 
-                var webSocket = connection.WebSocket;
-                if (webSocket.State == WebSocketState.Open)
+            if (closeTransport)
+            {
+                try
                 {
-                    await CloseSafelyAsync(webSocket, WebSocketCloseStatus.NormalClosure, "Connection closed");
+                    await connection.Transport.CloseAsync().ConfigureAwait(false);
                 }
+                catch (Exception ex)
+                {
+                    ExtensionLog.Warn("Close failed", ex);
+                }
+            }
 
-                Console.WriteLine($"Connection removed: {connectionId}. Total connections: {_connections.Count}");
+            ExtensionLog.Info($"Connection removed: {connectionId}. Total connections: {_connections.Count}");
+        }
+
+        /// <summary>
+        /// Adds the sender id to a client request and hands it to the game.
+        /// Used by both the LAN WebSocket loop and the relay data path.
+        /// </summary>
+        internal void DispatchToGame(string connectionId, string messageJson)
+        {
+            var framed = RequestFraming.InjectSender(messageJson, connectionId);
+            if (framed is null)
+            {
+                ExtensionLog.Warn($"Dropping malformed client frame from {connectionId}.");
+                return;
+            }
+
+            try
+            {
+                DllEntry.callback("ArmaWebHost", "Request", Encoding.UTF8.GetBytes(framed));
+            }
+            catch (Exception ex)
+            {
+                ExtensionLog.Error("Request callback failed", ex);
             }
         }
 
@@ -71,9 +120,9 @@ namespace ArmaServerSide
 
             foreach (var connection in _connections)
             {
-                if (connection.Key != excludeConnectionId && connection.Value.WebSocket.State == WebSocketState.Open)
+                if (connection.Key != excludeConnectionId && connection.Value.Transport.IsOpen)
                 {
-                    tasks.Add(SendMessageToConnectionAsync(connection.Value, message));
+                    tasks.Add(connection.Value.Transport.SendTextAsync(message));
                 }
             }
 
@@ -81,15 +130,14 @@ namespace ArmaServerSide
         }
 
         /// <summary>
-        /// Broadcast to all currently open connections (wildcard "*").
-        /// Returns the number of connections that received the message.
+        /// Returns the number of connections that are currently open.
         /// </summary>
         public int CountOpenConnections()
         {
             int count = 0;
             foreach (var connection in _connections)
             {
-                if (connection.Value.WebSocket.State == WebSocketState.Open)
+                if (connection.Value.Transport.IsOpen)
                 {
                     count++;
                 }
@@ -97,49 +145,11 @@ namespace ArmaServerSide
             return count;
         }
 
-        private async Task SendMessageToConnectionAsync(WebSocketConnection connection, string message)
-        {
-            // WebSocket only allows one send at a time, so serialize sends per connection.
-            await connection.SendLock.WaitAsync();
-            try
-            {
-                var webSocket = connection.WebSocket;
-                if (webSocket.State != WebSocketState.Open)
-                {
-                    return;
-                }
-
-                var bytes = Encoding.UTF8.GetBytes(message);
-                await webSocket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error sending message: {ex.Message}");
-            }
-            finally
-            {
-                connection.SendLock.Release();
-            }
-        }
-
         public async Task SendMessageToConnectionAsync(string connectionId, string message)
         {
             if (_connections.TryGetValue(connectionId, out var connection))
             {
-                await SendMessageToConnectionAsync(connection, message);
-            }
-
-            //#TODO error?
-        }
-
-        internal sealed class WebSocketConnection
-        {
-            public WebSocket WebSocket { get; }
-            public SemaphoreSlim SendLock { get; } = new(1, 1);
-
-            public WebSocketConnection(WebSocket webSocket)
-            {
-                WebSocket = webSocket;
+                await connection.Transport.SendTextAsync(message).ConfigureAwait(false);
             }
         }
     }
@@ -147,6 +157,11 @@ namespace ArmaServerSide
     internal class WebServer
     {
         WebApplication app = null!;
+
+        readonly WebSocketConnectionManager _connections = new();
+
+        /// <summary>Shared with the remote-access service so relay peers use the same routing.</summary>
+        internal WebSocketConnectionManager Connections => _connections;
 
         // Set when the host starts shutting down; every WebSocket wait observes it.
         readonly CancellationTokenSource _stopping = new();
@@ -157,7 +172,7 @@ namespace ArmaServerSide
             var builder = WebApplication.CreateBuilder();
 
             // Add services to the container
-            builder.Services.AddSingleton<WebSocketConnectionManager>();
+            builder.Services.AddSingleton(_connections);
             builder.Services.AddCors(options =>
             {
                 // Cross-origin access is only needed by the local Vite dev server. The
@@ -199,14 +214,14 @@ namespace ArmaServerSide
                 var origin = context.Request.Headers.Origin.ToString();
                 if (!IsAllowedOrigin(origin, context.Request))
                 {
-                    Console.WriteLine($"Rejected WebSocket origin '{origin}' for host '{context.Request.Host}'");
+                    ExtensionLog.Warn($"Rejected WebSocket origin '{origin}' for host '{context.Request.Host}'");
                     context.Response.StatusCode = StatusCodes.Status403Forbidden;
                     return;
                 }
 
                 if (context.WebSockets.IsWebSocketRequest)
                 {
-                    var connectionManager = context.RequestServices.GetService<WebSocketConnectionManager>()!;
+                    var connectionManager = _connections;
 
                     var webSocket = await context.WebSockets.AcceptWebSocketAsync();
                     var connectionId = Guid.NewGuid().ToString();
@@ -401,12 +416,12 @@ namespace ArmaServerSide
             catch (Exception ex)
             {
                 // Do not risk a blocking DisposeAsync after a failed stop.
-                Console.WriteLine($"WebServer stop failed: {ex.Message}");
+                ExtensionLog.Error("WebServer stop failed", ex);
                 return;
             }
 
             try { app.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
-            catch (Exception ex) { Console.WriteLine($"WebServer dispose failed: {ex.Message}"); }
+            catch (Exception ex) { ExtensionLog.Error("WebServer dispose failed", ex); }
         }
 
 
@@ -440,7 +455,7 @@ namespace ArmaServerSide
                         if (messageStream.Length + result.Count > maxMessageSize)
                         {
                             await WebSocketConnectionManager.CloseSafelyAsync(webSocket, WebSocketCloseStatus.MessageTooBig, "Message too large");
-                            await connectionManager.RemoveConnectionAsync(connectionId);
+                            await connectionManager.RemoveConnectionAsync(connectionId, notifyGame: true, closeTransport: false);
                             return;
                         }
 
@@ -450,7 +465,7 @@ namespace ArmaServerSide
 
                     if (result.MessageType == WebSocketMessageType.Close)
                     {
-                        await connectionManager.RemoveConnectionAsync(connectionId);
+                        await connectionManager.RemoveConnectionAsync(connectionId, notifyGame: true, closeTransport: false);
                         await WebSocketConnectionManager.CloseSafelyAsync(webSocket, result.CloseStatus ?? WebSocketCloseStatus.NormalClosure, result.CloseStatusDescription);
                         return;
                     }
@@ -458,33 +473,27 @@ namespace ArmaServerSide
                     if (result.MessageType == WebSocketMessageType.Text)
                     {
                         var messageJson = Encoding.UTF8.GetString(messageStream.GetBuffer(), 0, (int)messageStream.Length);
-                        //#TODO validate its valid json?
 
-                        //#TODO separately implement file read requests here, and we can send response in binary
-
-                        // This should be format { k: "keystring", d: {...} }, same as what usually goes direct to Arma
-                        // We pass this to Arma, but we need to tell it where it should send the reply to, the websocket client here
-                        messageJson = messageJson.Insert(1, $"\"s\":\"{connectionId}\", ");
-
-                        DllEntry.callback("ArmaWebHost", "Request", System.Text.Encoding.UTF8.GetBytes(messageJson));
-                        // Arma will reply by calling WebServer.SendTo with the connectionId
+                        // This should be format { k: "keystring", d: {...} }, same as what usually goes direct to Arma.
+                        // The manager adds "s" so the game knows where to send the reply.
+                        connectionManager.DispatchToGame(connectionId, messageJson);
                     }
                 }
 
-                await connectionManager.RemoveConnectionAsync(connectionId);
+                await connectionManager.RemoveConnectionAsync(connectionId, notifyGame: true, closeTransport: false);
             }
             catch (OperationCanceledException)
             {
                 // Host is shutting down (mission restart): drop the connection now
                 // instead of waiting for a peer that may never answer.
                 webSocket.Abort();
-                await connectionManager.RemoveConnectionAsync(connectionId);
+                await connectionManager.RemoveConnectionAsync(connectionId, notifyGame: true, closeTransport: false);
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error handling WebSocket connection {connectionId}: {ex.Message}");
+                ExtensionLog.Error($"Error handling WebSocket connection {connectionId}", ex);
                 webSocket.Abort();
-                await connectionManager.RemoveConnectionAsync(connectionId);
+                await connectionManager.RemoveConnectionAsync(connectionId, notifyGame: true, closeTransport: false);
             }
         }
 
@@ -531,7 +540,7 @@ namespace ArmaServerSide
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"HandleFileContent failed: {ex.Message}");
+                ExtensionLog.Error("HandleFileContent failed", ex);
             }
 
             //#TODO cache it, files don't change. _fileCache. Also needs to be threadsafe And if not in cache, need to reuse the existing promise
@@ -550,7 +559,7 @@ namespace ArmaServerSide
 
             try
             {
-                var connectionManager = app.Services.GetService<WebSocketConnectionManager>()!;
+                var connectionManager = _connections;
 
                 // Normalize targets: drop empty/whitespace, dedupe (Ordinal), handle "*"
                 var normalizedTargets = new HashSet<string>(StringComparer.Ordinal);
@@ -583,7 +592,7 @@ namespace ArmaServerSide
                         
                         // Count only if the connection exists and is open
                         if (connectionManager._connections.TryGetValue(target, out var conn) && 
-                            conn.WebSocket.State == WebSocketState.Open)
+                            conn.Transport.IsOpen)
                         {
                             delivered++;
                         }
@@ -591,7 +600,7 @@ namespace ArmaServerSide
 
                     if (delivered < normalizedTargets.Count)
                     {
-                        Console.WriteLine($"SendTo: {normalizedTargets.Count - delivered} of {normalizedTargets.Count} target(s) were not connected");
+                        ExtensionLog.Warn($"SendTo: {normalizedTargets.Count - delivered} of {normalizedTargets.Count} target(s) were not connected");
                     }
                 }
 
@@ -599,7 +608,7 @@ namespace ArmaServerSide
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"SendTo failed: {ex.Message}");
+                ExtensionLog.Error("SendTo failed", ex);
                 return 0;
             }
         }

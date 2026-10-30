@@ -1,0 +1,18 @@
+# Build output
+bin/
+obj/
+publish/
+publish.new/
+
+# Local SQLite state: never commit a relay database
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Runtime logs
+logs/
+
+# Local configuration overrides
+appsettings.Development.json
+appsettings.Production.json

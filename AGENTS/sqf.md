@@ -73,6 +73,32 @@ the engine would otherwise open an error popup. `GetFile` remaps `/` or `""` to
 `data\index.html`, normalises `/` to `\`, and returns `""` when the file does
 not exist.
 
+## Extension calls
+
+The **array form** of `callExtension` returns an array, not a string:
+```sqf
+private _response = "arma_webhost" callExtension ["SendTo", _targets + [_json]];
+// _response is [result, returnCode, errorCode]
+private _status = if (_response isEqualType []) then { _response param [0, ""] } else { _response };
+```
+
+- Always unwrap element 0 before `fromJSON`, `parseSimpleArray`, string comparison,
+  or splitting `OK <delivered> <requested>`.
+- The single-argument form (`"ext" callExtension "arg"`) still returns a string.
+  Do not assume one shape at a shared call site.
+- Existing examples: `fnc_sendCommandToPhone.sqf`, `fnc_remoteAccess.sqf`,
+  `XEH_postInit.sqf` (`StartServer`).
+- A `fromJSON` on the raw array fails with "Type array, expected string"; that is
+  this mistake, not a bad extension response.
+
+### Extension diagnostics
+
+The extension has no console. `arma_webhost` sends `{level, message, time}`
+through the `Log` extension callback; `XEH_postInit.sqf` buffers the last 50
+entries and pushes `Host.Log` to the in-game page, which writes it to the dev
+console and shows warnings/errors as notifications. `GetHostLog` (local only)
+returns and clears the buffer; the host `main` app replays it from `init()`.
+
 ## Game → web push
 
 ```sqf
@@ -145,6 +171,9 @@ Pattern for an app:
 
 ## SQF rules
 
+- `callExtension` with the array syntax returns `[result, returnCode, errorCode]`,
+  not a string. Unwrap `param [0, ""]` before parsing or comparing. See
+  [Extension calls](#extension-calls).
 - Performance is critical. Prefer the cheapest expression that does the job and
   avoid per-call allocation/iteration, especially in event handlers and
   per-frame code.

@@ -25,6 +25,7 @@ its own file map, rules, and links to the deeper READMEs.
 | Workspace commands, packages, build/release, tooling | [`AGENTS/build.md`](AGENTS/build.md) |
 | Development server, app discovery, VS Code debugging | [`AGENTS/dev.md`](AGENTS/dev.md) |
 | .NET `WebServerExtension` | [`AGENTS/webhost.md`](AGENTS/webhost.md) |
+| Remote access: public relay, pairing codes, share links | [`AGENTS/remote.md`](AGENTS/remote.md) |
 
 When a change crosses an area, read the other file only for that boundary. When
 you change behavior, update the matching `AGENTS/*.md` file and its README

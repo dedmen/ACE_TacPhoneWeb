@@ -78,3 +78,5 @@ do not use the VS Code integrated browser (it does not resolve `webRoot`).
 | App loads but `window.TacPhone` is missing | The page is served by the host server, not the app's own Vite server. |
 | Breakpoints do not bind in app sources | Keep the `devAppsPlugin` source-map rewrite; do not add `sourceMapPathOverrides`. |
 | `npm run preview` uses dev app URLs but 404s | `/devapps/` is `apply: 'serve'`; this is a known limitation (see `TODO.md`). |
+| Hosted page shows "The game is not connected" | The in-game Remote Access panel was never opened this session, the relay is down, or the CBA `Remote host` is wrong. See [`remote.md`](remote.md). |
+| LAN page shows the pairing screen | The page was opened through a public hostname; the direct/relay detection treats only loopback, LAN IPs and `.local` as direct (see `TODO.md`). |

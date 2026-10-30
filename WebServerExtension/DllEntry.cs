@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using ArmaServerSide.Remote;
 // ReSharper disable InconsistentNaming
 
 // This hosts a simple HTTP webserver, serving files (loaded from in-game, typically only index.html)
@@ -43,7 +44,7 @@ namespace ArmaServerSide
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"RVExtensionRegisterCallback failed: {ex.Message}");
+                ExtensionLog.Error("RVExtensionRegisterCallback failed", ex);
             }
         }
 
@@ -62,6 +63,7 @@ namespace ArmaServerSide
         #endregion
 
         static WebServer? _webServer = null;
+        static RemoteAccessService? _remoteAccess = null;
 
         [UnmanagedCallersOnly(EntryPoint = "RVExtensionArgs")]
         public static unsafe int RvExtensionArgs(IntPtr output, int outputSize, IntPtr methodP, IntPtr argsP, int argCount)
@@ -80,6 +82,8 @@ namespace ArmaServerSide
 
                         if (_webServer != null)
                         {
+                            _remoteAccess?.Stop();
+                            _remoteAccess = null;
                             _webServer.Stop();
                             _webServer = null;
                         }
@@ -89,6 +93,7 @@ namespace ArmaServerSide
                         // Publish before starting: a file request that arrives while Kestrel is
                         // starting must be able to find the instance and complete its wait.
                         _webServer = server;
+                        _remoteAccess = new RemoteAccessService(server.Connections);
 
                         try
                         {
@@ -97,7 +102,9 @@ namespace ArmaServerSide
                         catch (Exception ex)
                         {
                             _webServer = null;
-                            Console.WriteLine($"WebServer failed to start: {ex.Message}");
+                            _remoteAccess?.Stop();
+                            _remoteAccess = null;
+                            ExtensionLog.Error("WebServer failed to start", ex);
 
                             // Release a half-built host; Start() may have failed after binding.
                             try { server.Stop(); } catch (Exception) { /* already shutting down */ }
@@ -144,6 +151,20 @@ namespace ArmaServerSide
 
                         _webServer.HandleFileContent(fileName, content);
                         return WriteOutput(output, outputSize, "OK");
+                    }
+                    case "RemoteAccess" when args.Length >= 1:
+                    {
+                        if (_remoteAccess == null)
+                            return WriteOutput(output, outputSize, "ERROR: server not running");
+
+                        var subcommand = Marshal.PtrToStringUTF8(args[0]) ?? string.Empty;
+                        var rest = new string[args.Length - 1];
+                        for (int i = 1; i < args.Length; i++)
+                        {
+                            rest[i - 1] = Marshal.PtrToStringUTF8(args[i]) ?? string.Empty;
+                        }
+
+                        return WriteOutput(output, outputSize, _remoteAccess.Handle(subcommand, rest));
                     }
                 }
 

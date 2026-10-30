@@ -11,6 +11,7 @@ import * as ReactDOM from 'react-dom';
 import * as ReactDOMClient from 'react-dom/client';
 import * as ReactJSXRuntime from 'react/jsx-runtime';
 import * as ReactCompilerRuntime from 'react/compiler-runtime';
+import qrcode from 'qrcode-generator';
 import { SHARED_MODULES } from '@ace-tacphone/build/shared-modules';
 
 // The Record type makes TypeScript report a missing global when SHARED_MODULES changes.
@@ -20,6 +21,7 @@ const sharedGlobals: Record<(typeof SHARED_MODULES)[number]['global'], unknown> 
     ReactDOMClient,
     ReactJSXRuntime,
     ReactCompilerRuntime,
+    QRCode: qrcode,
 };
 
 for (const { global } of SHARED_MODULES) {
@@ -28,6 +30,7 @@ for (const { global } of SHARED_MODULES) {
 
 import './Backend/Host'; // Builds the single window.TacPhone host object
 import './Panels/PanelHost.tsx'; // Tab <-> PanelInstance binding
+import { RemotePairingScreen } from './Panels/RemotePairingScreen';
 
 ReactDOMClient.createRoot(document.getElementById('root')!).render(
     // StrictMode is enabled on purpose: React mounts every component twice in
@@ -35,6 +38,7 @@ ReactDOMClient.createRoot(document.getElementById('root')!).render(
     // written to be idempotent across that double mount, so a duplicate app or
     // panel instance is a bug to fix, not a reason to disable StrictMode.
     <StrictMode>
+        <RemotePairingScreen />
         <App/>
     </StrictMode>,
 )

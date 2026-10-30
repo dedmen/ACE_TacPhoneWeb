@@ -30,6 +30,8 @@ Output: `bin\x64\Release\net10.0\win-x64\publish\arma_webhost_x64.dll`.
 | --- | --- |
 | `DllEntry.cs` | Native exports: `RVExtension`, `RVExtensionArgs`, `RVExtensionVersion`, callback registration, and a try/catch around every export. |
 | `WebServer.cs` | Kestrel host, HTTP file endpoint, WebSocket endpoint, file cache, origin checks. |
+| `Transports/` | `IClientTransport` + the LAN WebSocket adapter; the connection manager routes both LAN and relay clients. |
+| `Remote/` | Outbound relay client, peer bookkeeping, codes, share links. See [`remote.md`](remote.md). |
 | `ArmaServerSide.csproj` | NativeAOT publish settings and native link inputs. |
 | `featureflags.obj` | Checked-in C shim object; kept linked. |
 | `linker.xml`, `Properties/launchSettings.json`, publish profile | Legacy/cleanup items; see `TODO.md` before relying on them. |
@@ -41,6 +43,7 @@ Output: `bin\x64\Release\net10.0\win-x64\publish\arma_webhost_x64.dll`.
 | `StartServer` | `port` | Starts (or replaces) the server. `OK`, or `ERROR: ...` with the failure reason. |
 | `SendTo` | one or more targets, then the JSON content as the last argument | Sends to those WebSocket clients; `"*"` broadcasts. Returns `OK <delivered> <requested>` or an error. |
 | `FileContent` | `fileName`, `content` | Completes a pending HTTP file request with the game's answer; `OK`. |
+| `RemoteAccess` | `subcommand`, then its arguments (`Start` takes host + identity JSON) | Arms/stops the outbound relay, returns status/codes/shares as JSON. See [`remote.md`](remote.md). |
 
 `SendTo` never expands `"*"` in SQF; the extension does. Every target is passed
 as a separate extension argument with the JSON last, because the JSON can contain
@@ -58,6 +61,11 @@ commas and must stay one argument.
   `{k, d}`; game pushes use `{k: "command", d: {...}}`.
 - On disconnect the extension calls the `Disconnect` callback so the game can
   drop that client's data interests.
+- The relay client (`Remote/`) is a single outbound `wss://` opened on demand by
+  `RemoteAccess.Start`. Relay peers get server-generated ids and share the same
+  `SendTo` / `Disconnect` semantics as LAN sockets. When the relay assigns a new
+  host identity, the extension calls the `RemoteIdentity` callback; SQF persists
+  it in `profileNamespace`.
 - CORS is loopback-only. The game can serve any path the VFS exposes and the WS
   API is unauthenticated; see the security/TLS decisions in `TODO.md` before
   exposing the port beyond loopback.
@@ -82,6 +90,9 @@ must catch and return a status.
 
 Startup errors are returned by `StartServer` and logged in
 [`XEH_postInit.sqf`](../../XEH_postInit.sqf); the game also prints a failure to
-`systemChat`. The extension only writes diagnostics to `Console.WriteLine`,
-which is invisible in the native host (see `TODO.md`). Check the port (`8001`),
-the HTTPS certificate, and the event log when the page cannot connect.
+`systemChat`. The extension has no console: every diagnostic goes through
+`ExtensionLog` and the `Log` extension callback, SQF buffers it, and the in-game
+page receives `Host.Log` (dev console plus a notification for warnings/errors).
+`GetHostLog` replays the buffer on page boot. Check the page's dev console and
+notifications, then the port (`8001`), the HTTPS certificate, and the event log
+when the page cannot connect.

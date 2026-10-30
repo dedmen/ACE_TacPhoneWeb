@@ -13,6 +13,7 @@ copying artifacts into the game. Runtime rules live in the area docs.
 | `ACE_TacPhone_Map/` | Reference app, sibling of the host. |
 | `SampleApp/` | Minimal example app; also the new-app template. |
 | `WebServerExtension/` | .NET 10 NativeAOT `arma_webhost_x64`; external-browser dev only. See [`webhost.md`](webhost.md). |
+| `RemoteServer/` | .NET 10 relay + static host for public remote access. Separate deployable, not part of the add-on. See [`remote.md`](remote.md). |
 | `WebHostExtension_FeatureFlagsExport/` | C shim for `RVExtensionFeatureFlags`; `WebServerExtension/featureflags.obj` is checked in and linked. |
 | `../` (`addons/tacphone`) | Parent game add-on: SQF, config, apps. See [`sqf.md`](sqf.md). |
 
@@ -39,6 +40,13 @@ npm run build          # tsc -b + vite release build + shared-import check
 npm run build:debug    # unminified + inline source maps
 npx tsc -b             # typecheck only
 Copy-Item dist\index.html ..\..\data\index.html
+```
+
+Public relay (`RemoteServer/`, optional): copy the same host build into the
+server before publishing it:
+
+```powershell
+Copy-Item ACE_TacPhone_Main\dist\index.html RemoteServer\src\TacPhone.RemoteServer\wwwroot\index.html
 ```
 
 Apps (`ACE_TacPhone_Map`, `SampleApp`), run from the app folder:

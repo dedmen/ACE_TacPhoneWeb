@@ -1,0 +1,110 @@
+.backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    box-sizing: border-box;
+    background: radial-gradient(circle at top, #1d2733 0%, #0b0f14 70%);
+    color: #e8eef5;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.card {
+    width: min(420px, 100%);
+    padding: 28px;
+    border: 1px solid #2c3947;
+    border-radius: 14px;
+    background: rgba(19, 26, 34, 0.96);
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
+}
+
+.title {
+    margin: 0 0 16px;
+    font-size: 1.25rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+}
+
+.status {
+    margin: 0 0 18px;
+    color: #b9c7d6;
+    line-height: 1.5;
+    font-size: 0.95rem;
+}
+
+.form {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.input {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 10px 12px;
+    border: 1px solid #3a4a5c;
+    border-radius: 8px;
+    background: #0e141b;
+    color: #e8eef5;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 1rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.input:focus {
+    outline: 2px solid #3b82f6;
+    outline-offset: 1px;
+}
+
+.button,
+.secondary {
+    padding: 10px 16px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    font-size: 0.95rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.button {
+    background: #2f7cf6;
+    color: #fff;
+}
+
+.button:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.secondary {
+    width: 100%;
+    margin-bottom: 12px;
+    background: transparent;
+    border-color: #3a4a5c;
+    color: #cfdae6;
+}
+
+.error {
+    margin: 0 0 12px;
+    color: #ff9b9b;
+    font-size: 0.85rem;
+    line-height: 1.4;
+}
+
+.footer {
+    margin: 22px 0 0;
+    padding-top: 14px;
+    border-top: 1px solid #26323f;
+    color: #6f8092;
+    font-size: 0.78rem;
+    line-height: 1.5;
+    text-align: center;
+}
+
+.footer a {
+    color: #8fb6e8;
+}

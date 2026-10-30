@@ -12,6 +12,7 @@ import * as ReactDOM from 'react-dom';
 import * as ReactDOMClient from 'react-dom/client';
 import * as ReactJSXRuntime from 'react/jsx-runtime';
 import * as ReactCompilerRuntime from 'react/compiler-runtime';
+import qrcode from 'qrcode-generator';
 import { SHARED_MODULES } from '@ace-tacphone/build/shared-modules';
 
 // TypeScript checks that this map covers every specifier in SHARED_MODULES.
@@ -21,6 +22,7 @@ const sharedModuleNamespaces: Record<(typeof SHARED_MODULES)[number]['specifier'
     'react-dom/client': ReactDOMClient,
     'react/jsx-runtime': ReactJSXRuntime,
     'react/compiler-runtime': ReactCompilerRuntime,
+    'qrcode-generator': qrcode,
 };
 
 // Vite dedupes by package name, not by subpath. Derive the package roots from

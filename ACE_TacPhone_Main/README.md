@@ -7,6 +7,11 @@ manager, the networking layer, and the build that is embedded in the in-game
 In development the same code runs as a normal web page and talks to a running
 Arma client through the `ArmaWebHost` extension over a WebSocket.
 
+The same build is also deployed to the public relay host. When the page is
+served from a public hostname it shows a pairing screen and connects through the
+relay instead of the game's own LAN webhost. See
+[`AGENTS/remote.md`](../AGENTS/remote.md).
+
 ## Requirements
 
 | Component | Minimum | Notes |

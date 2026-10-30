@@ -73,6 +73,11 @@ for mouse, touch, and pen.
   simplifies with Ramer–Douglas–Peucker (2 m) before sending.
 - Right-drag pans while drawing; a second right-button-only `DragPan` is added
   for the mode. Marker long-press/double-click/drag gestures are suppressed.
+- Freehand sets `touch-action: none` on the OL viewport (`setFreehandTouchCapture`)
+  so the browser cannot claim a touch drag and fire `pointercancel` mid-stroke;
+  click-per-point restores it for drag-to-pan. Toggle it wherever the mode changes
+  (`togglePolylineDrawing`, `handlePolylineClickPerPointChange`,
+  `stopPolylineDrawing`).
 - Measurement overlay is preview-only and click-per-point only: per-segment
   distances, total, per-vertex terrain-height labels, segment `Δh`, interior
   angles (degree text plus fixed 24 px arcs), and a first-segment bearing

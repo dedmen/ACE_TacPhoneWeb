@@ -147,6 +147,8 @@ so it must be one self-contained ES module:
 - Keep `react`, `react-dom`, `react-dom/client`, `react/jsx-runtime`, and
   `react/compiler-runtime` external. The host import map provides them. A second
   React copy breaks hooks/context.
+- `qrcode-generator` is also provided by the host import map (`window.QRCode`),
+  so apps can render QR codes without bundling another copy.
 - Extra JavaScript/CSS files may be shipped separately and loaded through
   `window.TacPhone.networking.LoadGameFileText`; they are still leaf modules with
   no relative imports. Cache them and expect an extra game-file read.
