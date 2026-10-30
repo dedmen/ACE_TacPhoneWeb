@@ -56,3 +56,47 @@ export function createMarker(marker: MarkerCreationData): Promise<{ name: string
         return { name };
     });
 }
+
+/**
+ * Updates an existing marker.
+ *
+ * The payload is sent through the same command as `createMarker`: the game
+ * treats a known marker name as an update and only applies the fields that are
+ * present, so callers can send a single changed property.
+ */
+export function updateMarker(
+    name: string,
+    changes: Omit<Partial<MarkerCreationData>, 'name'>,
+): Promise<void> {
+    return window.Networking.Request({
+        a: 'ACE_TacPhone_Map',
+        c: 'CreateMarker',
+        marker: {
+            ...changes,
+            name,
+        },
+    }).then(() => undefined);
+}
+
+/**
+ * Moves an existing marker to a new position.
+ *
+ * This is a position-only payload sent to the same command as `createMarker`:
+ * the game treats a known marker name as an update instead of creating a
+ * second marker.
+ */
+export function updateMarkerPosition(name: string, position: [number, number]): Promise<void> {
+    return updateMarker(name, { position });
+}
+
+/**
+ * Deletes a marker in the game. `name` is the internal marker name returned by
+ * `createMarker`, not the user-visible label.
+ */
+export function deleteMarker(name: string): Promise<void> {
+    return window.Networking.Request({
+        a: 'ACE_TacPhone_Map',
+        c: 'DeleteMarker',
+        marker: name,
+    }).then(() => undefined);
+}

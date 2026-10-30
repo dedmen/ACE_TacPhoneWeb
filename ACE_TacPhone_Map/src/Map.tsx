@@ -8,7 +8,9 @@ import { View } from 'ol';
 import type { ViewOptions } from 'ol/View.js';
 import TileLayer from 'ol/layer/Tile';
 import DoubleClickZoom from 'ol/interaction/DoubleClickZoom';
+import DragPan from 'ol/interaction/DragPan';
 import type { MapBrowserEvent } from 'ol';
+import type { FeatureLike } from 'ol/Feature';
 
 
 import Projection from 'ol/proj/Projection';
@@ -19,6 +21,7 @@ import ImageTileSource from 'ol/source/ImageTile';
 import { LayerSwitcher } from './LayerSwitcher';
 import { MarkerLayerManager, type MarkerColor, type MarkerType } from './MapMarkers/MarkerLayer';
 import { MarkerCreateDialog } from './MapMarkers/MarkerCreateDialog';
+import { MarkerContextMenu } from './MapMarkers/MarkerContextMenu';
 import { createMarker, type MarkerCreationData } from './MapMarkers/MarkerApi';
 import {
     MAP_SERVICE,
@@ -33,6 +36,12 @@ const MAP_MARKERS_INTEREST = 'ACE_TacPhone_Map.markers';
 
 const LONG_PRESS_DURATION_MS = 600;
 const LONG_PRESS_MOVE_TOLERANCE_PX = 10;
+// Press-and-hold on a marker picks it up. Same delay for mouse and touch.
+const MARKER_MOVE_HOLD_MS = 100;
+// Assumed marker menu size, used to keep it inside the map container.
+const MARKER_MENU_WIDTH_PX = 200;
+const MARKER_MENU_HEIGHT_PX = 100;
+const MARKER_MENU_MARGIN_PX = 8;
 
 const TERRAIN_TILE_SIZE = 256;
 const TERRAIN_MIN_RESOLUTION = 0.2;
@@ -42,14 +51,49 @@ const INITIAL_TERRAIN_EXTENT: [number, number, number, number] = [0, 0, 30720, 3
 
 interface MarkerDialogState {
   isOpen: boolean;
+  mode: 'create' | 'edit';
+  /** Internal name of the marker being edited; null while creating. */
+  markerName: string | null;
   coordinate: [number, number] | null;
+  initialLabel: string;
+  initialType: string;
+  initialColor: string;
   markerTypes: MarkerType[];
   markerColors: MarkerColor[];
+}
+
+interface MarkerMenuState {
+  name: string;
+  /** Position in pixels, relative to the map container. */
+  x: number;
+  y: number;
+}
+
+/** A marker lifted by the pointer, waiting to be dropped. */
+interface MarkerMoveState {
+  name: string;
+  pointerId: number;
+  startX: number;
+  startY: number;
+  lastX: number;
+  lastY: number;
+  moved: boolean;
+  pointerType: string;
+}
+
+/** A pending press-and-hold on a marker that will start a move. */
+interface MarkerHoldState {
+  name: string;
+  pointerId: number;
+  x: number;
+  y: number;
+  pointerType: string;
 }
 
 interface MapState {
   layerSwitcherIsOpen: boolean;
   markerDialog: MarkerDialogState;
+  markerMenu: MarkerMenuState | null;
   terrainError: string | null;
 }
 
@@ -64,6 +108,9 @@ class App extends React.Component<{},MapState> {
 
     private markerManager: MarkerLayerManager | null = null;
 
+    /** Releases the marker-data interest; set while this panel is mounted. */
+    private releaseMarkersInterest: (() => void) | undefined;
+
     /** Static context type for class components. */
     static contextType = window.TacPhoneUtils.PanelContext;
     /** Panel instance from React context, or undefined before mount/context. */
@@ -74,6 +121,18 @@ class App extends React.Component<{},MapState> {
 
     private longPressTimer: number | null = null;
     private longPressStart: { x: number; y: number; pointerId: number; coordinate: [number, number] } | null = null;
+
+    /** Marker under the mouse pointer, if it may be moved/deleted. */
+    private hoveredMarkerName: string | null = null;
+    /** Pending press-and-hold that will lift a marker. */
+    private markerHoldTimer: number | null = null;
+    private markerHoldStart: MarkerHoldState | null = null;
+    /** Touch only: opens the context menu when the hold never turns into a drag. */
+    private markerMenuTimer: number | null = null;
+    /** Marker currently being dragged by the pointer. */
+    private markerMoveState: MarkerMoveState | null = null;
+    /** Pointer capture taken by the marker move, if it could be set. */
+    private markerPointerCapture: { viewport: HTMLElement; pointerId: number } | null = null;
 
     private loadMarkerIcon = (iconPath: string): Promise<string> => {
         if (!this.markerManager) {
@@ -90,10 +149,16 @@ class App extends React.Component<{},MapState> {
             layerSwitcherIsOpen: false,
             markerDialog: {
                 isOpen: false,
+                mode: 'create',
+                markerName: null,
                 coordinate: null,
+                initialLabel: '',
+                initialType: '',
+                initialColor: '',
                 markerTypes: [],
                 markerColors: [],
             },
+            markerMenu: null,
             terrainError: null,
         };
     }
@@ -236,6 +301,11 @@ class App extends React.Component<{},MapState> {
         viewport.addEventListener('pointermove', this.handleMapPointerMove);
         viewport.addEventListener('pointerup', this.handleMapPointerUp);
         viewport.addEventListener('pointercancel', this.handleMapPointerUp);
+        viewport.addEventListener('pointerleave', this.handleViewportPointerLeave);
+        viewport.addEventListener('contextmenu', this.handleViewportContextMenu);
+
+        // Delete key removes the hovered player marker.
+        window.addEventListener('keydown', this.handleWindowKeyDown);
 
         void window.Networking.LoadGameTerrain({ drawTreeObjects: false, layerMountains: true, simpleRoads: true })
             .then((svgString) => {
@@ -369,6 +439,20 @@ class App extends React.Component<{},MapState> {
         this.pendingFlyTo = null;
 
         this.cancelLongPress();
+        this.cancelMarkerHold();
+        this.clearMarkerMenuTimer();
+        window.removeEventListener('keydown', this.handleWindowKeyDown);
+
+        // Drop an in-progress marker move: flush the last position to the game
+        // and make sure no pointer capture or disabled interaction survives.
+        if (this.markerMoveState) {
+            this.markerManager?.endMarkerMove(this.markerMoveState.name);
+            this.markerMoveState = null;
+        }
+        this.releaseMarkerPointerCapture();
+        this.setDragPanActive(true);
+        this.hoveredMarkerName = null;
+
         this.terrainLoadToken += 1;
 
         const map = this.map;
@@ -382,6 +466,8 @@ class App extends React.Component<{},MapState> {
             viewport.removeEventListener('pointermove', this.handleMapPointerMove);
             viewport.removeEventListener('pointerup', this.handleMapPointerUp);
             viewport.removeEventListener('pointercancel', this.handleMapPointerUp);
+            viewport.removeEventListener('pointerleave', this.handleViewportPointerLeave);
+            viewport.removeEventListener('contextmenu', this.handleViewportContextMenu);
 
             // Detach the map from the DOM target
             map.setTarget(undefined);
@@ -415,20 +501,277 @@ class App extends React.Component<{},MapState> {
 
     private handleMapDoubleClick = (event: MapBrowserEvent): void => {
         // OpenLayers also emulates double-click for touch double taps.
-        // Only desktop double-clicks should open the dialog.
+        // Touch markers open the context menu instead.
         const originalEvent = event.originalEvent as PointerEvent;
         if (originalEvent.pointerType === 'touch') {
+            return;
+        }
+
+        // A double-click on a player marker edits it; any other marker owns the
+        // spot, so no new marker may be created on top of it.
+        const markerName = this.getEditableMarkerNameAtEvent(originalEvent);
+        if (markerName) {
+            this.openMarkerEditDialog(markerName);
+            return;
+        }
+
+        if (this.getMarkerNameAtEvent(originalEvent)) {
             return;
         }
 
         this.openMarkerDialog([event.coordinate[0], event.coordinate[1]]);
     };
 
-    private handleMapPointerDown = (event: PointerEvent): void => {
-        if (event.pointerType !== 'touch' && event.pointerType !== 'pen') {
+    private getMarkerFeatureAtEvent(event: PointerEvent | MouseEvent): FeatureLike | null {
+        const map = this.map;
+        const manager = this.markerManager;
+
+        if (!map || !manager) {
+            return null;
+        }
+
+        return map.forEachFeatureAtPixel(
+            map.getEventPixel(event),
+            (candidate) => candidate,
+            {
+                layerFilter: (layer) => layer === manager.layer,
+                hitTolerance: 6,
+            },
+        ) ?? null;
+    }
+
+    /**
+     * Returns the name of any registered marker under the event, or null.
+     */
+    private getMarkerNameAtEvent(event: PointerEvent | MouseEvent): string | null {
+        const feature = this.getMarkerFeatureAtEvent(event);
+        return feature ? this.markerManager?.getMarkerName(feature) ?? null : null;
+    }
+
+    /**
+     * Returns the name of the player marker under the event, or null. Only
+     * `_USER_DEFINED` point markers of the marker layer are considered, so the
+     * result is always safe to pass to the manager's edit/move/delete methods.
+     */
+    private getEditableMarkerNameAtEvent(event: PointerEvent | MouseEvent): string | null {
+        const feature = this.getMarkerFeatureAtEvent(event);
+        return feature ? this.markerManager?.getEditableMarkerName(feature) ?? null : null;
+    }
+
+    /** Enables/disables map panning while a marker is dragged. */
+    private setDragPanActive(active: boolean): void {
+        this.map?.getInteractions().forEach((interaction) => {
+            if (interaction instanceof DragPan) {
+                interaction.setActive(active);
+            }
+        });
+    }
+
+    private setMapCursor(cursor: string): void {
+        const map = this.map;
+        if (!map) {
             return;
         }
 
+        map.getViewport().style.cursor = cursor;
+    }
+
+    private resetMapCursor(): void {
+        this.setMapCursor('');
+    }
+
+    private static hasMovedBeyondTolerance(x: number, y: number, event: PointerEvent): boolean {
+        const dx = event.clientX - x;
+        const dy = event.clientY - y;
+
+        return dx * dx + dy * dy > LONG_PRESS_MOVE_TOLERANCE_PX * LONG_PRESS_MOVE_TOLERANCE_PX;
+    }
+
+    private updateMarkerHover(event: PointerEvent): void {
+        if (this.markerMoveState) {
+            return;
+        }
+
+        const name = this.getEditableMarkerNameAtEvent(event);
+        if (name === this.hoveredMarkerName) {
+            return;
+        }
+
+        this.hoveredMarkerName = name;
+        this.setMapCursor(name ? 'grab' : '');
+    }
+
+    private handleViewportPointerLeave = (): void => {
+        // With pointer capture the pointer keep sending events, so this only
+        // fires for a pointer that really left the map.
+        this.hoveredMarkerName = null;
+        this.cancelMarkerHold();
+
+        if (!this.markerMoveState) {
+            this.resetMapCursor();
+        }
+    };
+
+    private handleViewportContextMenu = (event: MouseEvent): void => {
+        // The native menu would otherwise pop up on right click / touch hold and
+        // steal the gesture, but it stays available on empty map space.
+        if (this.markerMoveState || this.markerHoldStart) {
+            event.preventDefault();
+            return;
+        }
+
+        if (this.getEditableMarkerNameAtEvent(event)) {
+            event.preventDefault();
+        }
+    };
+
+    private handleWindowKeyDown = (event: KeyboardEvent): void => {
+        if (event.key !== 'Delete') {
+            return;
+        }
+
+        const name = this.hoveredMarkerName;
+        if (!name) {
+            return;
+        }
+
+        // Never swallow Delete while the user types into a field.
+        if (App.isEditableElement(event.target) || App.isEditableElement(document.activeElement)) {
+            return;
+        }
+
+        event.preventDefault();
+        this.markerManager?.deleteMarker(name);
+
+        this.hoveredMarkerName = null;
+        this.resetMapCursor();
+        this.closeMarkerMenu();
+    };
+
+    private static isEditableElement(target: EventTarget | null): boolean {
+        if (!(target instanceof HTMLElement)) {
+            return false;
+        }
+
+        if (target.isContentEditable) {
+            return true;
+        }
+
+        return target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT';
+    }
+
+    private startMarkerHold(name: string, event: PointerEvent, durationMs: number): void {
+        this.cancelMarkerHold();
+
+        this.markerHoldStart = {
+            name,
+            pointerId: event.pointerId,
+            x: event.clientX,
+            y: event.clientY,
+            pointerType: event.pointerType,
+        };
+
+        this.markerHoldTimer = window.setTimeout(() => {
+            const hold = this.markerHoldStart;
+            this.markerHoldTimer = null;
+            this.markerHoldStart = null;
+
+            if (!hold) {
+                return;
+            }
+
+            this.beginMarkerMove(hold);
+        }, durationMs);
+    }
+
+    private cancelMarkerHold(): void {
+        if (this.markerHoldTimer !== null) {
+            window.clearTimeout(this.markerHoldTimer);
+            this.markerHoldTimer = null;
+        }
+
+        this.markerHoldStart = null;
+    }
+
+    private clearMarkerMenuTimer(): void {
+        if (this.markerMenuTimer !== null) {
+            window.clearTimeout(this.markerMenuTimer);
+            this.markerMenuTimer = null;
+        }
+    }
+
+    private beginMarkerMove(hold: MarkerHoldState): void {
+        const manager = this.markerManager;
+        const map = this.map;
+
+        if (!manager || !map || !manager.beginMarkerMove(hold.name)) {
+            return;
+        }
+
+        this.closeMarkerMenu();
+
+        this.markerMoveState = {
+            name: hold.name,
+            pointerId: hold.pointerId,
+            startX: hold.x,
+            startY: hold.y,
+            lastX: hold.x,
+            lastY: hold.y,
+            moved: false,
+            pointerType: hold.pointerType,
+        };
+
+        // The map must not pan while the marker follows the pointer.
+        this.setDragPanActive(false);
+        this.setMapCursor('grabbing');
+
+        // Touch keeps lifting the marker at 100 ms, but a hold that never
+        // turns into a drag is a request for the marker menu, not a move.
+        if (hold.pointerType !== 'mouse') {
+            this.clearMarkerMenuTimer();
+            this.markerMenuTimer = window.setTimeout(() => {
+                this.markerMenuTimer = null;
+
+                const move = this.markerMoveState;
+                if (!move || move.moved || move.pointerId !== hold.pointerId) {
+                    return;
+                }
+
+                this.markerManager?.endMarkerMove(move.name);
+                this.releaseMarkerPointerCapture();
+                this.setDragPanActive(true);
+                this.markerMoveState = null;
+                this.resetMapCursor();
+                this.openMarkerMenu(move.name, move.lastX, move.lastY);
+            }, LONG_PRESS_DURATION_MS - MARKER_MOVE_HOLD_MS);
+        }
+
+        const viewport = map.getViewport();
+        try {
+            viewport.setPointerCapture(hold.pointerId);
+            this.markerPointerCapture = { viewport, pointerId: hold.pointerId };
+        } catch {
+            // Capture is best effort; the pointer may already be gone.
+            this.markerPointerCapture = null;
+        }
+    }
+
+    private releaseMarkerPointerCapture(): void {
+        const capture = this.markerPointerCapture;
+        if (!capture) {
+            return;
+        }
+
+        this.markerPointerCapture = null;
+
+        try {
+            capture.viewport.releasePointerCapture(capture.pointerId);
+        } catch {
+            // Already released by the browser.
+        }
+    }
+
+    private handleMapPointerDown = (event: PointerEvent): void => {
         if (!event.isPrimary) {
             return;
         }
@@ -438,7 +781,40 @@ class App extends React.Component<{},MapState> {
             return;
         }
 
+        if (event.pointerType === 'mouse') {
+            // Only the primary button grabs markers; the right button is left to
+            // the contextmenu handler.
+            if (event.button !== 0) {
+                return;
+            }
+
+            const name = this.getEditableMarkerNameAtEvent(event);
+            if (!name) {
+                return;
+            }
+
+            this.cancelLongPress();
+            this.startMarkerHold(name, event, MARKER_MOVE_HOLD_MS);
+            return;
+        }
+
+        if (event.pointerType !== 'touch' && event.pointerType !== 'pen') {
+            return;
+        }
+
         this.cancelLongPress();
+
+        // A press on a player marker grabs the marker; any other marker owns
+        // the spot, so the create-marker long press must not start there.
+        const markerName = this.getEditableMarkerNameAtEvent(event);
+        if (markerName) {
+            this.startMarkerHold(markerName, event, MARKER_MOVE_HOLD_MS);
+            return;
+        }
+
+        if (this.getMarkerNameAtEvent(event)) {
+            return;
+        }
 
         const coordinate = this.map?.getEventCoordinate(event);
         if (!coordinate) {
@@ -466,24 +842,106 @@ class App extends React.Component<{},MapState> {
     };
 
     private handleMapPointerMove = (event: PointerEvent): void => {
+        const move = this.markerMoveState;
+        if (move && event.pointerId === move.pointerId) {
+            this.updateMarkerMove(event, move);
+            return;
+        }
+
+        // Hover only while no button is pressed, so panning does not flicker the
+        // cursor between grab and the default.
+        if (event.pointerType === 'mouse' && event.buttons === 0) {
+            this.updateMarkerHover(event);
+        }
+
+        const hold = this.markerHoldStart;
+        if (hold && event.pointerId === hold.pointerId && App.hasMovedBeyondTolerance(hold.x, hold.y, event)) {
+            // The pointer pans the map instead of grabbing the marker.
+            this.cancelMarkerHold();
+            return;
+        }
+
         const start = this.longPressStart;
         if (!start || event.pointerId !== start.pointerId) {
             return;
         }
 
-        const dx = event.clientX - start.x;
-        const dy = event.clientY - start.y;
-
-        if (dx * dx + dy * dy > LONG_PRESS_MOVE_TOLERANCE_PX * LONG_PRESS_MOVE_TOLERANCE_PX) {
+        if (App.hasMovedBeyondTolerance(start.x, start.y, event)) {
             this.cancelLongPress();
         }
     };
 
+    private updateMarkerMove(event: PointerEvent, move: MarkerMoveState): void {
+        const map = this.map;
+        if (!map) {
+            return;
+        }
+
+        // Holding still is a "select" gesture on touch, so the marker must not
+        // jump to the finger before the user actually drags.
+        if (!move.moved && !App.hasMovedBeyondTolerance(move.startX, move.startY, event)) {
+            return;
+        }
+
+        move.moved = true;
+        move.lastX = event.clientX;
+        move.lastY = event.clientY;
+        // A real drag wins over the touch hold-to-open-menu timer.
+        this.clearMarkerMenuTimer();
+        event.preventDefault();
+
+        const coordinate = map.getEventCoordinate(event);
+        this.markerManager?.moveMarker(move.name, [coordinate[0], coordinate[1]]);
+    }
+
     private handleMapPointerUp = (event: PointerEvent): void => {
+        const move = this.markerMoveState;
+        if (move && event.pointerId === move.pointerId) {
+            this.finishMarkerMove(event, move);
+            return;
+        }
+
+        if (this.markerHoldStart && event.pointerId === this.markerHoldStart.pointerId) {
+            this.cancelMarkerHold();
+        }
+
         if (this.longPressStart && event.pointerId === this.longPressStart.pointerId) {
             this.cancelLongPress();
         }
     };
+
+    private finishMarkerMove(event: PointerEvent, move: MarkerMoveState): void {
+        const manager = this.markerManager;
+        this.clearMarkerMenuTimer();
+        const cancelled = event.type === 'pointercancel'; // pointercancel is bound to the same handler
+        const coordinate = cancelled ? null : (this.map?.getEventCoordinate(event) ?? null);
+
+        if (manager) {
+            if (move.moved && coordinate) {
+                manager.endMarkerMove(move.name, [coordinate[0], coordinate[1]]);
+            } else {
+                // A press without a drag selects the marker; drop it where it
+                // already is instead of snapping it to the pointer.
+                manager.endMarkerMove(move.name);
+            }
+        }
+
+        this.releaseMarkerPointerCapture();
+        this.setDragPanActive(true);
+        this.markerMoveState = null;
+
+        if (this.hoveredMarkerName) {
+            this.setMapCursor('grab');
+        } else {
+            this.resetMapCursor();
+        }
+
+        // Release without dragging on touch/pen opens the marker menu. Desktop
+        // keeps its hover + Delete key flow and never opens the menu from a drag.
+        if (!cancelled && !move.moved && move.pointerType !== 'mouse') {
+            this.openMarkerMenu(move.name, event.clientX, event.clientY);
+        }
+    }
 
     private cancelLongPress(): void {
         if (this.longPressTimer !== null) {
@@ -495,6 +953,43 @@ class App extends React.Component<{},MapState> {
     }
 
     private openMarkerDialog = (coordinate: [number, number]): void => {
+        this.openMarkerDialogWith({
+            mode: 'create',
+            markerName: null,
+            coordinate,
+            initialLabel: '',
+            initialType: '',
+            initialColor: '',
+        });
+    };
+
+    /**
+     * Opens the marker dialog pre-filled for an existing player marker.
+     */
+    private openMarkerEditDialog = (name: string): void => {
+        const data = this.markerManager?.getMarkerData(name);
+        if (!data) {
+            return;
+        }
+
+        this.openMarkerDialogWith({
+            mode: 'edit',
+            markerName: name,
+            coordinate: data.position,
+            initialLabel: data.label,
+            initialType: data.type,
+            initialColor: data.color,
+        });
+    };
+
+    private openMarkerDialogWith(dialog: {
+        mode: 'create' | 'edit';
+        markerName: string | null;
+        coordinate: [number, number];
+        initialLabel: string;
+        initialType: string;
+        initialColor: string;
+    }): void {
         const markerManager = this.markerManager;
 
         if (!markerManager) {
@@ -506,9 +1001,10 @@ class App extends React.Component<{},MapState> {
 
         this.setState({
             layerSwitcherIsOpen: false,
+            markerMenu: null,
             markerDialog: {
                 isOpen: true,
-                coordinate,
+                ...dialog,
                 markerTypes,
                 markerColors,
             },
@@ -529,7 +1025,7 @@ class App extends React.Component<{},MapState> {
                 }));
             });
         }
-    };
+    }
 
     private closeMarkerDialog = (): void => {
         this.setState((prevState) => ({
@@ -541,11 +1037,71 @@ class App extends React.Component<{},MapState> {
         }));
     };
 
-    private handleCreateMarker = (marker: MarkerCreationData): void => {
-        createMarker(marker).catch((error: unknown) => {
-            console.error('Failed to create marker', error);
-        });
+    private handleMarkerDialogSubmit = (marker: MarkerCreationData): void => {
+        const { mode, markerName } = this.state.markerDialog;
+
+        if (mode === 'edit' && markerName !== null) {
+            this.markerManager?.updateMarkerProperties(markerName, {
+                label: marker.label,
+                type: marker.type,
+                color: marker.color,
+            });
+        } else {
+            createMarker(marker).catch((error: unknown) => {
+                console.error('Failed to create marker', error);
+            });
+        }
+
         this.closeMarkerDialog();
+    };
+
+    /**
+     * Opens the marker context menu at a screen position, clamped so the menu
+     * stays inside the map container.
+     */
+    private openMarkerMenu = (name: string, clientX: number, clientY: number): void => {
+        const container = this.mapRef.current;
+
+        if (!container) {
+            return;
+        }
+
+        const rect = container.getBoundingClientRect();
+
+        const maxX = Math.max(MARKER_MENU_MARGIN_PX, rect.width - MARKER_MENU_WIDTH_PX - MARKER_MENU_MARGIN_PX);
+        const maxY = Math.max(MARKER_MENU_MARGIN_PX, rect.height - MARKER_MENU_HEIGHT_PX - MARKER_MENU_MARGIN_PX);
+
+        const x = Math.min(Math.max(clientX - rect.left, MARKER_MENU_MARGIN_PX), maxX);
+        const y = Math.min(Math.max(clientY - rect.top, MARKER_MENU_MARGIN_PX), maxY);
+
+        this.setState({
+            layerSwitcherIsOpen: false,
+            markerMenu: { name, x, y },
+        });
+    };
+
+    private closeMarkerMenu = (): void => {
+        if (this.state.markerMenu === null) {
+            return;
+        }
+
+        this.setState({ markerMenu: null });
+    };
+
+    private handleEditMarkerFromMenu = (name: string): void => {
+        this.closeMarkerMenu();
+        this.openMarkerEditDialog(name);
+    };
+
+    private handleDeleteMarkerFromMenu = (name: string): void => {
+        this.markerManager?.deleteMarker(name);
+
+        if (this.hoveredMarkerName === name) {
+            this.hoveredMarkerName = null;
+            this.resetMapCursor();
+        }
+
+        this.closeMarkerMenu();
     };
 
 
@@ -855,6 +1411,9 @@ class App extends React.Component<{},MapState> {
     }
 
     render() {
+        const markerMenu = this.state.markerMenu;
+        const markerDialog = this.state.markerDialog;
+
         return (
             <div style={{ position: 'relative', width: '100%', height: '100%' }}>
 
@@ -888,14 +1447,30 @@ class App extends React.Component<{},MapState> {
                     </div>
                 )}
 
-                {this.state.markerDialog.isOpen && this.state.markerDialog.coordinate !== null && (
+                {markerDialog.isOpen && markerDialog.coordinate !== null && (
                     <MarkerCreateDialog
-                        coordinate={this.state.markerDialog.coordinate}
-                        markerTypes={this.state.markerDialog.markerTypes}
-                        markerColors={this.state.markerDialog.markerColors}
+                        key={markerDialog.mode === 'edit' ? `edit:${markerDialog.markerName}` : 'create'}
+                        coordinate={markerDialog.coordinate}
+                        markerTypes={markerDialog.markerTypes}
+                        markerColors={markerDialog.markerColors}
                         loadMarkerIcon={this.loadMarkerIcon}
-                        onSubmit={this.handleCreateMarker}
+                        initialLabel={markerDialog.initialLabel}
+                        initialType={markerDialog.initialType}
+                        initialColor={markerDialog.initialColor}
+                        title={markerDialog.mode === 'edit' ? 'Edit Marker' : 'Add Marker'}
+                        submitLabel={markerDialog.mode === 'edit' ? 'Save' : 'Create'}
+                        onSubmit={this.handleMarkerDialogSubmit}
                         onCancel={this.closeMarkerDialog}
+                    />
+                )}
+
+                {markerMenu !== null && (
+                    <MarkerContextMenu
+                        x={markerMenu.x}
+                        y={markerMenu.y}
+                        onEdit={() => this.handleEditMarkerFromMenu(markerMenu.name)}
+                        onDelete={() => this.handleDeleteMarkerFromMenu(markerMenu.name)}
+                        onClose={this.closeMarkerMenu}
                     />
                 )}
             </div>

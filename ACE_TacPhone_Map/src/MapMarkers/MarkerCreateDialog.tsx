@@ -10,6 +10,12 @@ interface MarkerCreateDialogProps {
     loadMarkerIcon: (iconPath: string) => Promise<string>;
     onSubmit: (marker: MarkerCreationData) => void;
     onCancel: () => void;
+    /** Pre-filled values when the dialog edits an existing marker. */
+    initialLabel?: string;
+    initialType?: string;
+    initialColor?: string;
+    title?: string;
+    submitLabel?: string;
 }
 
 function useDropdown(): {
@@ -248,10 +254,15 @@ export function MarkerCreateDialog({
     loadMarkerIcon,
     onSubmit,
     onCancel,
+    initialLabel = '',
+    initialType = '',
+    initialColor = '',
+    title = 'Add Marker',
+    submitLabel = 'Create',
 }: MarkerCreateDialogProps): React.JSX.Element {
-    const [label, setLabel] = useState('');
-    const [selectedType, setSelectedType] = useState('');
-    const [selectedColor, setSelectedColor] = useState('');
+    const [label, setLabel] = useState(initialLabel);
+    const [selectedType, setSelectedType] = useState(initialType);
+    const [selectedColor, setSelectedColor] = useState(initialColor);
     const inputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
@@ -284,9 +295,9 @@ export function MarkerCreateDialog({
     const selectedColorInfo = markerColors.find((color) => color.className === selectedColor) ?? null;
     const canSubmit = label.trim().length > 0 && selectedType !== '' && selectedColor !== '';
 
-    const handleSubmit = (event: React.FormEvent<HTMLFormElement>): void => {
-        event.preventDefault();
-
+    // The in-game browser sandbox has no 'allow-forms', so a real <form> submit is
+    // blocked before any handler runs. Submit from button/Enter handlers instead.
+    const submit = (): void => {
         if (!canSubmit) return;
 
         onSubmit({
@@ -295,6 +306,13 @@ export function MarkerCreateDialog({
             color: selectedColor,
             position: coordinate,
         });
+    };
+
+    const handleInputKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): void => {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            submit();
+        }
     };
 
     return (
@@ -306,9 +324,9 @@ export function MarkerCreateDialog({
                 }
             }}
         >
-            <form className={DialogStyle.dialog} onSubmit={handleSubmit}>
+            <div className={DialogStyle.dialog} role="dialog" aria-modal="true" aria-label={title}>
                 <div className={DialogStyle.dialog_header}>
-                    <h3 className={DialogStyle.dialog_title}>Add Marker</h3>
+                    <h3 className={DialogStyle.dialog_title}>{title}</h3>
                     <button
                         type="button"
                         className={DialogStyle.close_button}
@@ -330,6 +348,7 @@ export function MarkerCreateDialog({
                         maxLength={128}
                         placeholder="Enter marker name"
                         onChange={(event) => setLabel(event.target.value)}
+                        onKeyDown={handleInputKeyDown}
                     />
                 </label>
 
@@ -357,11 +376,16 @@ export function MarkerCreateDialog({
                     <button type="button" className={DialogStyle.button} onClick={onCancel}>
                         Cancel
                     </button>
-                    <button type="submit" className={`${DialogStyle.button} ${DialogStyle.button_primary}`} disabled={!canSubmit}>
-                        Create
+                    <button
+                        type="button"
+                        className={`${DialogStyle.button} ${DialogStyle.button_primary}`}
+                        onClick={submit}
+                        disabled={!canSubmit}
+                    >
+                        {submitLabel}
                     </button>
                 </div>
-            </form>
+            </div>
         </div>
     );
 }

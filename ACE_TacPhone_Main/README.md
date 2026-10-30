@@ -157,7 +157,7 @@ class ace_tacphone_apps {
 | `scope` | Yes | Must be greater than `0`; use `2`. |
 | `ace_tacphone_file` | Yes, except `main` | Path to the production ES module entry in the game filesystem. It is read with `LoadGameFileText` and imported from a blob URL. |
 | `ace_tacphone_devFile` | Recommended | Entry point relative to the app folder, for example `src\main.tsx`. The development loader imports this path from `/devapps/<AppName>/`; if omitted it falls back to `src/main.tsx`. |
-| `ace_tacphone_requestProcessor` | For app requests | Name of the SQF function that handles requests sent with `a: "<AppName>"`. It receives the request hashmap and may return any JSON-serializable value or a promise. |
+| `ace_tacphone_requestProcessor` | For app requests | Name of the SQF function that handles requests sent with `a: "<AppName>"`. It receives the request hashmap and the requesting client id (`"local"` for the in-game browser, otherwise the websocket connection id), and may return any JSON-serializable value or a promise. |
 | `icon` | No | Currently reserved; panel icons come from `GetTacPhoneIcon()`. |
 
 `<AppName>` is also the routing key. It is the `a` field in requests and is the
@@ -215,9 +215,9 @@ const result = await window.Networking.Request({
 });
 ```
 
-The request is routed to the app's `ace_tacphone_requestProcessor`. Returning a
-promise from SQF is supported; the host waits for it and forwards the resolved
-value.
+The request is routed to the app's `ace_tacphone_requestProcessor` as
+`[request, clientId]`. Returning a promise from SQF is supported; the host waits
+for it and forwards the resolved value.
 
 Messages pushed from the game to a browser arrive at `OnMessageFromGame`. The
 `a` field identifies the target app. Use the host's command registry to route a

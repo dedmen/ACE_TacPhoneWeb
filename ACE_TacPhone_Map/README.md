@@ -119,10 +119,33 @@ await window.Networking.Request({
 });
 ```
 
-The map's SQF processor handles `GetAllMarkers`, `CreateMarker`, and
-`GetMarkerTypes`. Messages from the game are routed through
+The map's SQF processor handles `GetAllMarkers`, `CreateMarker` (creates a new
+marker, or updates an existing one when `marker.name` is supplied),
+`DeleteMarker`, and `GetMarkerTypes`. Messages from the game are routed through
 `mapCommandRegistry` (`src/CommandRegistry.ts`), which is an instance of the
 host's `window.TacPhoneUtils.CommandRegistry`.
+
+### Marker interaction
+
+Only markers whose name starts with `_USER_DEFINED` (player-created markers) can
+be moved or deleted; all other markers are read-only.
+
+- **Desktop**: hover a marker and press `Delete` to delete it. Double-click a
+  marker to edit its label, type, and color. Press and hold the left mouse
+  button on a marker (100 ms without moving), then drag to move it.
+- **Touch/pen**: press and hold a marker for 100 ms to lift it (drop-shadow
+  highlight), then drag to move it; releasing drops it at the pointer. Holding
+  still until the 600 ms long-press timeout, or releasing without dragging,
+  opens a context menu with edit and delete actions.
+- A long-press or double-click on top of an existing marker never opens the
+  marker creation dialog, so markers cannot be stacked on the same spot.
+- While a marker is being dragged, the local pointer position wins: incoming
+  `Marker.Upsert` messages cannot move it, but other property changes (type,
+  color, label, ...) still apply. Movement is sent to the game as a position-only
+  `CreateMarker` request (`{ name, position }`), throttled to one request per
+  100 ms plus a final update on release. Editing sends only the changed
+  `label`/`type`/`color` fields through the same `CreateMarker` update path.
+  Deleting sends `DeleteMarker` with the marker name.
 
 ### Map service (other TacPhone apps)
 

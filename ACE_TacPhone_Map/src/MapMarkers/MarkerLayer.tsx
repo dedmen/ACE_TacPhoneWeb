@@ -6,6 +6,7 @@ import LineString from 'ol/geom/LineString';
 import { Style, Icon, Text, Fill, Stroke } from 'ol/style';
 import { mapCommandRegistry } from '../CommandRegistry';
 import { markKnownMarkerNames, notifyMarkerUpsert, registerMarkerLayer } from './MarkerNotifications';
+import { deleteMarker as deleteMarkerRequest, updateMarker as updateMarkerRequest, updateMarkerPosition } from './MarkerApi';
 
 
 // name, type, color, dir, pos, text, shape, alpha, brush, size, channel, polyline
@@ -19,6 +20,18 @@ const MAX_PENDING_MARKER_OPERATIONS = 512;
 const MARKER_REQUEST_TIMEOUT_MS = 10_000;
 const DEFAULT_MARKER_COLOR = '#ffffff';
 const DEFAULT_MARKER_SIZE: [number, number] = [1, 1];
+// Minimum delay between two position updates sent to the game while a marker
+// is dragged. In-between positions are coalesced into one trailing update.
+const MARKER_MOVE_THROTTLE_MS = 100;
+const USER_DEFINED_MARKER_PREFIX = '_USER_DEFINED';
+
+/**
+ * Only markers created by players (the game names them with the
+ * `_USER_DEFINED` prefix) may be moved or deleted from the Web UI.
+ */
+export function isEditableMarkerName(name: unknown): name is string {
+    return typeof name === 'string' && name !== '' && name.startsWith(USER_DEFINED_MARKER_PREFIX);
+}
 
 export interface MarkerType {
     className: string;
@@ -33,6 +46,25 @@ export interface MarkerColor {
     className: string;
     name: string;
     color: string;
+}
+
+/** Everything the edit dialog needs to pre-fill itself. */
+export interface MarkerProperties {
+    name: string;
+    label: string;
+    type: string;
+    color: string;
+    position: [number, number];
+}
+
+/** Per-marker bookkeeping while the user drags a marker in the Web UI. */
+interface MarkerMoveState {
+    /** Timestamp of the last position update sent to the game. */
+    lastSentAt: number;
+    /** Last position sent, so duplicate requests are dropped. */
+    lastSentPosition: [number, number] | null;
+    /** Pending trailing update, at most one per marker. */
+    pendingTimer: number | null;
 }
 
 interface MarkerBrush {
@@ -202,6 +234,11 @@ export class MarkerLayerManager {
     private pendingOverflowWarned = false;
     private destroyed = false;
 
+    // Markers the user is currently dragging in the Web UI. Presence means the
+    // local geometry is authoritative until the drag ends, so game updates must
+    // not fight the pointer.
+    private movingMarkers = new Map<string, MarkerMoveState>();
+
     private unregisterHooks: Array<() => void> = [];
 
     // Keeps the module-scope marker notification backup handler quiet while this
@@ -365,6 +402,15 @@ export class MarkerLayerManager {
         // Unregisters cleanly from the global registry when called
         this.unregisterHooks.forEach((unregister) => unregister());
         this.unregisterHooks = [];
+
+        // Drop in-flight move updates; the markers are gone with the layer.
+        this.movingMarkers.forEach((move) => {
+            if (move.pendingTimer !== null) {
+                window.clearTimeout(move.pendingTimer);
+            }
+        });
+        this.movingMarkers.clear();
+
         this.pendingMarkerOperations = [];
         this.markerTextures.clear();
         this.markerRegistry.clear();
@@ -454,6 +500,7 @@ export class MarkerLayerManager {
         const alpha = feature.get('alpha') as number; 
         const size = feature.get('size') as [number, number];
         const shadow = feature.get('shadow') as boolean;
+        const elevated = feature.get('elevated') === true;
 
 
         // Try to replicate Arma's text zooming size behavior
@@ -493,11 +540,22 @@ export class MarkerLayerManager {
         baseStyle.getImage()?.setScale(size);
 
 
-        if (shadow)
+        if (shadow || elevated)
         {
+            // One cloned style drawn behind the marker. It never carries the
+            // label, otherwise the text would be rendered twice.
             var subShadow = baseStyle.clone();
-            subShadow.getImage()?.setDisplacement([3, -3]); //#TODO thats not the correct offset, it also depends on scale?
-            (subShadow.getImage() as Icon).setColor('rgba(0, 0, 0, 0.8)');
+            subShadow.setText(new Text({ text: '' }));
+
+            if (elevated) {
+                // A lifted marker always gets a shadow, even when its type has
+                // none, so the drag target reads as "picked up".
+                subShadow.getImage()?.setDisplacement([5, -5]);
+                (subShadow.getImage() as Icon).setColor('rgba(0, 0, 0, 0.55)');
+            } else {
+                subShadow.getImage()?.setDisplacement([3, -3]); //#TODO thats not the correct offset, it also depends on scale?
+                (subShadow.getImage() as Icon).setColor('rgba(0, 0, 0, 0.8)');
+            }
 
             return [
                 subShadow,
@@ -531,6 +589,12 @@ export class MarkerLayerManager {
                 anchor: [0.5, 0.5], // Centers horizontal axis, anchors bottom vertical axis
                 scale: 1,
                 crossOrigin: 'anonymous',
+                // Icons must stay out of the declutter tree: a feature with a
+                // marker shadow returns two styles (shadow + icon) at the same
+                // position, and OpenLayers would otherwise declutter the icon
+                // (and the label rendered with it) away, leaving only the
+                // black shadow. Labels still declutter on their own.
+                declutterMode: 'none',
             });
 
         var resStyle = new Style({
@@ -576,6 +640,285 @@ export class MarkerLayerManager {
         return (this.markerTypes.get(type)?.shadow ?? 0) !== 0;
     }
 
+    /**
+     * Finds the registered feature for a marker name. Registry keys are
+     * channel-prefixed, and the game addresses markers by name only.
+     */
+    private getRegisteredFeature(name: string): Feature<Point | LineString> | null {
+        const suffix = `:${name}`;
+
+        for (const [key, feature] of this.markerRegistry) {
+            if (key === name || key.endsWith(suffix)) {
+                return feature;
+            }
+        }
+
+        return null;
+    }
+
+    private isRegisteredFeature(feature: FeatureLike): boolean {
+        for (const registered of this.markerRegistry.values()) {
+            if (registered === feature) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Returns the marker name of a registered marker feature, or null when the
+     * feature does not belong to this layer.
+     */
+    public getMarkerName(feature: FeatureLike): string | null {
+        if (this.destroyed) {
+            return null;
+        }
+
+        const name = feature.get('id');
+        if (typeof name !== 'string' || name === '') {
+            return null;
+        }
+
+        return this.isRegisteredFeature(feature) ? name : null;
+    }
+
+    /**
+     * Returns the marker name of a feature the user may edit, or null when the
+     * feature is not a registered point marker created by a player.
+     */
+    public getEditableMarkerName(feature: FeatureLike): string | null {
+        const name = this.getMarkerName(feature);
+
+        if (!isEditableMarkerName(name) || !(feature.getGeometry() instanceof Point)) {
+            return null;
+        }
+
+        return name;
+    }
+
+    /**
+     * Returns the data needed to pre-fill the edit dialog for a player marker.
+     */
+    public getMarkerData(name: string): MarkerProperties | null {
+        if (this.destroyed || !isEditableMarkerName(name)) {
+            return null;
+        }
+
+        const feature = this.getRegisteredFeature(name);
+        const geometry = feature?.getGeometry();
+        if (!feature || !(geometry instanceof Point)) {
+            return null;
+        }
+
+        const coordinates = geometry.getCoordinates();
+        return {
+            name,
+            label: (feature.get('label') as string | undefined) ?? '',
+            type: (feature.get('type') as string | undefined) ?? '',
+            color: (feature.get('color') as string | undefined) ?? '',
+            position: [coordinates[0], coordinates[1]],
+        };
+    }
+
+    /**
+     * Registers a marker as being dragged. Until `endMarkerMove` is called the
+     * local geometry wins over game updates, and the marker renders elevated.
+     */
+    public beginMarkerMove(name: string): boolean {
+        if (this.destroyed || !isEditableMarkerName(name)) {
+            return false;
+        }
+
+        const feature = this.getRegisteredFeature(name);
+        if (!feature || !(feature.getGeometry() instanceof Point)) {
+            return false;
+        }
+
+        this.movingMarkers.set(name, {
+            lastSentAt: 0,
+            lastSentPosition: null,
+            pendingTimer: null,
+        });
+        feature.set('elevated', true);
+        return true;
+    }
+
+    /**
+     * Applies a drag position locally and forwards it to the game, throttled to
+     * one request per marker every `MARKER_MOVE_THROTTLE_MS`.
+     */
+    public moveMarker(name: string, position: [number, number]): void {
+        const move = this.movingMarkers.get(name);
+        if (this.destroyed || !move) {
+            return;
+        }
+
+        const feature = this.getRegisteredFeature(name);
+        if (!feature) {
+            return;
+        }
+
+        const geometry = feature.getGeometry();
+        if (!(geometry instanceof Point)) {
+            return;
+        }
+
+        // Local geometry is authoritative while dragging, so the icon follows
+        // the pointer without waiting for the game.
+        geometry.setCoordinates(position);
+
+        const now = Date.now();
+
+        if (now - move.lastSentAt >= MARKER_MOVE_THROTTLE_MS) {
+            this.clearPendingMoveTimer(move);
+            this.sendMarkerPosition(name, move, position, now);
+            return;
+        }
+
+        // Coalesce everything in between into a single trailing update that
+        // carries the newest position.
+        this.clearPendingMoveTimer(move);
+        move.pendingTimer = window.setTimeout(() => {
+            move.pendingTimer = null;
+
+            if (this.destroyed || !this.movingMarkers.has(name)) {
+                return;
+            }
+
+            const sentAt = Date.now();
+            this.sendMarkerPosition(name, move, position, sentAt);
+        }, MARKER_MOVE_THROTTLE_MS - (now - move.lastSentAt));
+    }
+
+    /**
+     * Ends a drag, flushing the final position to the game. Safe to call for a
+     * marker that was deleted meanwhile.
+     */
+    public endMarkerMove(name: string, position?: [number, number]): void {
+        if (this.destroyed) {
+            return;
+        }
+
+        const move = this.movingMarkers.get(name);
+        const feature = this.getRegisteredFeature(name);
+        const geometry = feature?.getGeometry();
+        const point = geometry instanceof Point ? geometry : null;
+
+        if (position && point) {
+            point.setCoordinates(position);
+        }
+
+        if (move) {
+            this.clearPendingMoveTimer(move);
+
+            if (point && isEditableMarkerName(name) && (position !== undefined || move.lastSentPosition !== null)) {
+                // Flush the final position right away instead of waiting for
+                // the throttle window, so the game ends up on the released spot.
+                const finalPosition: [number, number] = position ?? point.getCoordinates() as [number, number];
+                this.sendMarkerPosition(name, move, finalPosition, Date.now());
+            }
+        }
+
+        feature?.set('elevated', false);
+        this.movingMarkers.delete(name);
+    }
+
+    /**
+     * Deletes a player-created marker locally and in the game.
+     */
+    public deleteMarker(name: string): void {
+        if (this.destroyed || !isEditableMarkerName(name) || !this.getRegisteredFeature(name)) {
+            return;
+        }
+
+        // Remove it right away; the round trip must not delay the UI.
+        this.removeMarkerFeature(name);
+
+        // A deleted marker cannot be dragged any more; drop any pending move.
+        const move = this.movingMarkers.get(name);
+        if (move) {
+            this.clearPendingMoveTimer(move);
+            this.movingMarkers.delete(name);
+        }
+
+        deleteMarkerRequest(name).catch((error: unknown) => {
+            console.error('Failed to delete marker', error);
+        });
+    }
+
+    /**
+     * Applies edited marker properties locally and forwards them to the game.
+     * Only fields present in `changes` are touched.
+     */
+    public updateMarkerProperties(
+        name: string,
+        changes: { label?: string; type?: string; color?: string },
+    ): void {
+        if (this.destroyed || !isEditableMarkerName(name)) {
+            return;
+        }
+
+        const feature = this.getRegisteredFeature(name);
+        if (!feature || !(feature.getGeometry() instanceof Point)) {
+            return;
+        }
+
+        const label = changes.label ?? (feature.get('label') as string | undefined) ?? '';
+        const type = changes.type ?? (feature.get('type') as string | undefined) ?? '';
+        const color = changes.color ?? (feature.get('color') as string | undefined) ?? '';
+        const alpha = (feature.get('alpha') as number | undefined) ?? 1;
+
+        // Update locally first so the map reflects the edit immediately; the
+        // game echoes a regular Marker.Upsert afterwards.
+        feature.set('label', label);
+        feature.set('type', type);
+        feature.set('color', color);
+        feature.set('shadow', this.getMarkerShadow(type));
+        feature.set('baseStyle', this.createFeatureStyle(type, 'ICON', color, '', '', alpha));
+        this.source.changed();
+
+        updateMarkerRequest(name, changes).catch((error: unknown) => {
+            if (this.destroyed) {
+                return;
+            }
+
+            console.error('Failed to edit marker', error);
+        });
+    }
+
+    private clearPendingMoveTimer(move: MarkerMoveState): void {
+        if (move.pendingTimer === null) {
+            return;
+        }
+
+        window.clearTimeout(move.pendingTimer);
+        move.pendingTimer = null;
+    }
+
+    private sendMarkerPosition(
+        name: string,
+        move: MarkerMoveState,
+        position: [number, number],
+        sentAt: number,
+    ): void {
+        const lastPosition = move.lastSentPosition;
+        if (lastPosition && lastPosition[0] === position[0] && lastPosition[1] === position[1]) {
+            return;
+        }
+
+        move.lastSentAt = sentAt;
+        move.lastSentPosition = [position[0], position[1]];
+
+        void updateMarkerPosition(name, position).catch((error: unknown) => {
+            if (this.destroyed) {
+                return;
+            }
+
+            console.error('Failed to move marker', error);
+        });
+    }
+
     private flushPendingMarkerOperations(): void {
         const pending = this.pendingMarkerOperations;
         this.pendingMarkerOperations = [];
@@ -591,7 +934,7 @@ export class MarkerLayerManager {
                     this.applyUpsert(operation.marker);
                     notifyMarkerUpsert(operation.marker, this.playerId);
                 } else {
-                    this.deleteMarker(operation.name);
+                    this.removeMarkerFeature(operation.name);
                 }
             } catch (error) {
                 // One malformed update must not abort the rest of the queue.
@@ -636,6 +979,10 @@ export class MarkerLayerManager {
         const [name, type, color, dir, pos, text, shape, alpha, brush, size, channel, polyline] = data;
         const registryKey = this.markerKey(name, channel);
 
+        // While the user drags this marker, the local geometry wins. Every
+        // other field is still applied; only the position/geometry is kept.
+        const isMoving = this.movingMarkers.has(name);
+
         var sizeSplit = parseMarkerSize(size);
         var featureStyle = this.createFeatureStyle(type, shape, color, brush, size, alpha);
         var shadow = this.getMarkerShadow(type);
@@ -649,7 +996,17 @@ export class MarkerLayerManager {
             if (existingFeature) {
                 const geometry = existingFeature.getGeometry();
                 if (geometry instanceof LineString) {
-                    geometry.setCoordinates(coordinates);
+                    if (!isMoving) {
+                        geometry.setCoordinates(coordinates);
+                    }
+                } else if (isMoving) {
+                    // Do not swap the dragged point for the incoming polyline.
+                    existingFeature.set("baseStyle", featureStyle);
+                    existingFeature.set("label", text);
+                    existingFeature.set("alpha", alpha);
+                    existingFeature.set("type", type);
+                    existingFeature.set("color", color);
+                    return;
                 } else {
                     // Replace point with polyline
                     this.source.removeFeature(existingFeature);
@@ -664,6 +1021,8 @@ export class MarkerLayerManager {
                     newFeature.set("size", sizeSplit);
                     newFeature.set("baseStyle", featureStyle);
                     newFeature.set("shadow", shadow);
+                    newFeature.set("type", type);
+                    newFeature.set("color", color);
                     this.source.addFeature(newFeature);
                     this.markerRegistry.set(registryKey, newFeature);
                     return;
@@ -672,6 +1031,8 @@ export class MarkerLayerManager {
                 existingFeature.set("baseStyle", featureStyle);
                 existingFeature.set("label", text);
                 existingFeature.set("alpha", alpha);
+                existingFeature.set("type", type);
+                existingFeature.set("color", color);
             } else {
                 const newFeature = new Feature({
                     geometry: new LineString(coordinates),
@@ -680,6 +1041,8 @@ export class MarkerLayerManager {
                 });
                 newFeature.set("alpha", alpha);
                 newFeature.set("baseStyle", featureStyle);
+                newFeature.set("type", type);
+                newFeature.set("color", color);
                 this.source.addFeature(newFeature);
                 this.markerRegistry.set(registryKey, newFeature);
             }
@@ -697,8 +1060,10 @@ export class MarkerLayerManager {
             // Update coordinates smoothly
             const geometry = existingFeature.getGeometry();
             if (geometry instanceof Point) {
-                geometry.setCoordinates(pos);
-            } else if (geometry instanceof LineString) {
+                if (!isMoving) {
+                    geometry.setCoordinates(pos);
+                }
+            } else if (geometry instanceof LineString && !isMoving) {
                 // Switching from polyline to point
                 this.source.removeFeature(existingFeature);
                 this.markerRegistry.delete(registryKey);
@@ -712,6 +1077,8 @@ export class MarkerLayerManager {
                 newFeature.set("size", sizeSplit);
                 newFeature.set("baseStyle", featureStyle);
                 newFeature.set("shadow", shadow);
+                newFeature.set("type", type);
+                newFeature.set("color", color);
                 this.source.addFeature(newFeature);
                 this.markerRegistry.set(registryKey, newFeature);
                 return;
@@ -723,6 +1090,8 @@ export class MarkerLayerManager {
             existingFeature.set("baseStyle", featureStyle);
             existingFeature.set("label", text);
             existingFeature.set("shadow", shadow);
+            existingFeature.set("type", type);
+            existingFeature.set("color", color);
 
             //#TODO all the others
 
@@ -739,13 +1108,15 @@ export class MarkerLayerManager {
             newFeature.set("size", sizeSplit);
             newFeature.set("baseStyle", featureStyle);
             newFeature.set("shadow", shadow);
+            newFeature.set("type", type);
+            newFeature.set("color", color);
 
             this.source.addFeature(newFeature);
             this.markerRegistry.set(registryKey, newFeature);
         }
     }
 
-    private deleteMarker(name: string): void {
+    private removeMarkerFeature(name: string): void {
         const suffix = `:${name}`;
 
         // The game sends deletes by name only, so remove every channel entry
@@ -764,7 +1135,8 @@ export class MarkerLayerManager {
     }
 
     /**
-     * Deletes a marker when it leaves or disconnects
+     * Deletes a marker when it leaves or disconnects. This is the local-only
+     * path: a game-pushed delete must never be echoed back to the game.
      */
     public handleDelete(id: string): void {
         if (this.destroyed) {
@@ -776,7 +1148,7 @@ export class MarkerLayerManager {
             return;
         }
 
-        this.deleteMarker(id);
+        this.removeMarkerFeature(id);
     }
 
     /**
