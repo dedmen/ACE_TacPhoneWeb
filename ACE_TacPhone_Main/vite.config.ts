@@ -4,7 +4,7 @@ import babel from '@rolldown/plugin-babel'
 import { viteSingleFile } from "vite-plugin-singlefile"
 import dts from 'vite-plugin-dts'
 import { createHash } from 'node:crypto'
-import { isAbsolute, relative, resolve, sep } from 'node:path'
+import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { discoverDevApps } from './dev-apps.js'
 
 // These are added to global window, see main.tsx
@@ -35,11 +35,53 @@ const sharedPackageNames = [...new Set(SHARED_MODULES.map(({ specifier }) => {
 
 type DevApp = Awaited<ReturnType<typeof discoverDevApps>>['apps'][number];
 
+// Subset of Vite's TransformResult map that this config touches.
+type DevSourceMap = {
+    file?: string;
+    sourceRoot?: string;
+    sources?: (string | null)[];
+};
+
+// Vite's dev source maps for app files list their sources relative to the
+// module ("MarkerLayer.tsx"). Debuggers resolve those against their `webRoot`
+// and with /@fs/ URLs that yields "<host>/@fs/D:/...", which is not the file on
+// disk, so breakpoints set in app sources never bind (and the app opens as a
+// temporary file). Store absolute source paths instead; they map straight back
+// to the real files in every debugger.
+function absolutizeAppSourceMap(map: unknown, appDirPrefixes: string[]) {
+    if (typeof map !== 'object' || map === null) return;
+
+    const sourceMap = map as DevSourceMap;
+    const file = sourceMap.file;
+    if (typeof file !== 'string' || sourceMap.sourceRoot || !Array.isArray(sourceMap.sources)) return;
+
+    const modulePath = normalizePath(file).replace(/\?.*$/, '');
+    const modulePathLower = modulePath.toLowerCase();
+    if (!appDirPrefixes.some(prefix => modulePathLower.startsWith(prefix))) return;
+
+    const moduleDir = dirname(modulePath);
+    const sources = sourceMap.sources as (string | null)[];
+    for (let i = 0; i < sources.length; i++) {
+        const source = sources[i];
+        if (!source) continue;
+
+        // Dev URLs may carry HMR timestamps (`?t=...`); the file on disk does not.
+        const sourcePath = source.replace(/\?.*$/, '');
+
+        // Leave URLs (webpack://, data:, ...) alone and resolve the rest.
+        const absolute = isAbsolute(sourcePath);
+        if (!absolute && /^[a-z][a-z0-9+.-]*:/i.test(sourcePath)) continue;
+
+        sources[i] = normalizePath(absolute ? sourcePath : resolve(moduleDir, sourcePath));
+    }
+}
+
 // App folders may live outside this Vite root. Import the app through the
 // stable /devapps/<Name>/ URL and translate it to Vite's /@fs/ URL here, so the
 // app code does not need to know where its folder is on disk.
 function devAppsPlugin(devApps: DevApp[], warnings: string[]): Plugin {
     const appsByName = new Map(devApps.map(app => [app.name, app]));
+    const appDirPrefixes = devApps.map(app => `${normalizePath(app.dir).toLowerCase()}/`);
 
     return {
         name: 'tacphone-dev-apps',
@@ -59,6 +101,17 @@ function devAppsPlugin(devApps: DevApp[], warnings: string[]): Plugin {
                     `  TacPhone app ${app.name} -> ${relative(server.config.root, app.dir) || app.dir}`,
                 );
             }
+
+            // The dev server's transform middleware serves whatever
+            // `environment.transformRequest` returns, so patch the source map
+            // there (once) instead of touching every response body.
+            const environment = server.environments.client;
+            const transformRequest = environment.transformRequest.bind(environment);
+            environment.transformRequest = async (url) => {
+                const result = await transformRequest(url);
+                if (result?.map) absolutizeAppSourceMap(result.map, appDirPrefixes);
+                return result;
+            };
 
             server.middlewares.use((req, res, next) => {
                 const requestUrl = req.url;

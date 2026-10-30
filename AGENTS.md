@@ -35,6 +35,7 @@ Both copy destinations are git-ignored in ACE3. No tests. Release strips `consol
 - Arma + TacPhone must run; extension serves `wss://localhost:8001/ws`; local ASP.NET TLS cert must be trusted.
 - App discovery: `dev-apps.local.json` (git-ignored, `{ "apps": [...] }`), `TACPHONE_DEV_APPS` path list, or sibling folder with `"tacphone": { "app": "<AppName>" }` in `package.json`. Host serves all as `/devapps/<AppName>/`; loader uses `ace_tacphone_devFile` (default `src/main.tsx`). Name = config class = request `a`. Move/extend discovery in `dev-apps.js`; no junctions needed. Restart Vite after changing discovery config.
 - The Map's `npm run dev` forwards to the host's Vite server; apps have no standalone dev server.
+- VS Code debugging: app files are served from `/@fs/<absolute path>`, so `devAppsPlugin` rewrites their dev source maps to absolute source paths; keep that patch or breakpoints in app sources never bind (they land in `.../@fs/D:/...` temporary files). Host files still map through `webRoot`.
 
 ## Runtime constraints
 - In-game browser: sandboxed Chromium 126; no `fetch`/XHR/`localStorage`/`IndexedDB`. Use `window.Networking`.

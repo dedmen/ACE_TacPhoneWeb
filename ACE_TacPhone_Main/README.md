@@ -49,6 +49,11 @@ Vite and keep:
 "webRoot": "${workspaceFolder}/websource/ACE_TacPhone_Main"
 ```
 
+Development apps live outside the Vite root, so their files are served from
+`/@fs/<absolute path>` URLs. `devAppsPlugin` rewrites the dev source maps of app
+files to absolute source paths, so breakpoints set in app sources bind to the
+real files. Do not add a `sourceMapPathOverrides` workaround for `/@fs/` URLs.
+
 The VS Code integrated browser does not resolve `webRoot` correctly and will
 not bind source-map breakpoints.
 
