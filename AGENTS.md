@@ -50,6 +50,11 @@ Both copy destinations are git-ignored in ACE3. No tests. Release strips `consol
 - Inter-app: an app exposes a service with `window.AppApi.register(panel, { service, version, api })` from its panel lifecycle (panel handle from `usePanel()` / `PanelContext`; clean up on unmount), and other apps route with `resolveAsync()`; a missing app is opened as a floating popup by default (`placement` option / `PanelDirectory.open()`). APIs are page-local, never reachable from the game, and have no permission model: the whole UI and all apps are one trust domain, and everything stays inside the single page/tab (no native window popouts).
 - Requests: `window.Networking.Request({a:'<AppName>', c:'...'})` -> app's SQF `ace_tacphone_requestProcessor`; may return JSON or promise. `window.AppDirectory` read-only.
 - Register game side in `addons/tacphone/apps/*/ace_tacphone_apps.hpp` (or mission `description.ext`); config class = routing `a`, and dev discovery maps that name to an app folder.
+- **Interest**: `window.InterestRegistry` returns a refcounted disposer; re-announced on WS reconnect. Game: registry `ace_tacphone_AppDataInterests`, commands `Interest.Set` / `Interest.Clear` handled before app dispatch, CBA events `ace_tacphone_interestActivated` / `ace_tacphone_interestDeactivated` with payload `[interestName]`.
+
+## SQF
+- Performance is very important in SQF; prefer the cheapest expression that does the job and avoid per-call allocation/iteration.
+- Avoid type checks in SQF wherever possible. Assume the correct types are sent: the web code validates data before sending it to SQF, so re-checking there is redundant and type checking is expensive in SQF.
 
 ## WebServerExtension
 ```powershell

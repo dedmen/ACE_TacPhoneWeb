@@ -170,6 +170,25 @@ The Map app generates toast-style `window.Notifications` for marker updates:
 No notification-specific SQF code is needed; the game-side markers are handled by
 the request processor and command registry, while the host UI generates banners.
 
+## Data interest
+
+The Map app tells the game when it needs marker data. The interest name is
+`ACE_TacPhone_Map.markers` (constant `MAP_MARKERS_INTEREST` in `src/Map.tsx`,
+matching `INTEREST_MARKERS` in `addons/tacphone/apps/map/script_component.hpp`).
+
+- A mounted Map panel acquires the interest in `componentDidMount`, before the
+  marker manager requests its `GetAllMarkers` snapshot. Request order is
+  preserved, so the game is already filtering and sending marker updates when the
+  snapshot arrives.
+- Unmounting the panel releases it. The release runs before the rest of the
+  teardown, so it also happens when map creation failed part-way.
+- While no client holds the interest, the game installs no marker event handlers
+  and does no marker work; the Map panel still shows the snapshot it loaded.
+- The interest is reference-counted by the host (`window.InterestRegistry`):
+  several Map panels in one page share one game interest, closing one panel keeps
+  it active, and closing the last one withdraws it. After a websocket reconnect
+  the registry re-announces the active interests automatically.
+
 ## Packaging constraints
 
 The production loader reads the entry file from the game filesystem and imports

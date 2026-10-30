@@ -18,6 +18,7 @@ import type * as ReactCompilerRuntime from "react/compiler-runtime";
 
 import type { AppDirectory } from "./Backend/AppDirectory";
 import type { AppApiRegistry } from "./Backend/AppApi";
+import type { InterestRegistry } from "./Backend/InterestRegistry";
 import type { Networking } from "./Backend/Networking";
 import type { CommandRegistry } from "./Backend/MessageRouter";
 import type { NotificationCenter } from "./Backend/Notifications";
@@ -49,6 +50,7 @@ export type {
 } from "./Backend/PanelDirectory";
 export { AppDirectory } from "./Backend/AppDirectory";
 export { AppApiRegistry } from "./Backend/AppApi";
+export { InterestRegistry } from "./Backend/InterestRegistry";
 export { CommandRegistry } from "./Backend/MessageRouter";
 export { NotificationCenter } from "./Backend/Notifications";
 export { PanelDirectory } from "./Backend/PanelDirectory";
@@ -70,6 +72,8 @@ declare global {
         PanelDirectory: PanelDirectory;
         // Inter-app services: register an app's API, resolve and call another app's.
         AppApi: AppApiRegistry;
+        // Demand-driven game data: acquire and release named data interests.
+        InterestRegistry: InterestRegistry;
         // Host notification stack: show banners, subscribe to the current stack.
         Notifications: NotificationCenter;
         TacPhoneUtils: {

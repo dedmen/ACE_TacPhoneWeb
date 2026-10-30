@@ -109,14 +109,30 @@ namespace ArmaServerSide
                     }
                     case "SendTo" when args.Length >= 2:
                     {
-                        var target = Marshal.PtrToStringUTF8(args[0])!;
-                        var content = Marshal.PtrToStringUTF8(args[1])!;
+                        // Content is the LAST argument; every preceding argument is a target.
+                        var content = Marshal.PtrToStringUTF8(args[^1]) ?? string.Empty;
+                        
+                        // Parse each arg with Marshal.PtrToStringUTF8; skip null/empty targets.
+                        var targets = new List<string>();
+                        for (int i = 0; i < args.Length - 1; i++)
+                        {
+                            var target = Marshal.PtrToStringUTF8(args[i]);
+                            if (!string.IsNullOrEmpty(target))
+                            {
+                                targets.Add(target);
+                            }
+                        }
 
                         if (_webServer == null)
                             return WriteOutput(output, outputSize, "ERROR: server not running");
 
-                        _webServer.SendTo(target, content);
-                        return WriteOutput(output, outputSize, "OK");
+                        if (targets.Count == 0)
+                            return WriteOutput(output, outputSize, "ERROR: invalid arguments");
+
+                        int delivered = _webServer.SendTo(targets, content);
+                        
+                        // Return format: "OK <delivered> <requested>"
+                        return WriteOutput(output, outputSize, $"OK {delivered} {targets.Count}");
                     }
                     case "FileContent" when args.Length >= 2:
                     {

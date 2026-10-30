@@ -208,9 +208,77 @@ export declare class CommandRegistry {
     clear(): void;
 }
 
+/**
+ * Reference-counted registry of the data interests of one page.
+ *
+ * One instance lives at module scope as `window.InterestRegistry`. Apps acquire
+ * an interest for as long as they need its data and release it otherwise; see
+ * the README section "Data interests".
+ */
+export declare class InterestRegistry {
+    /** References per desired interest. Only interests with a positive count are kept. */
+    private readonly references;
+    /** Interests the game was already told about; emptied when the transport drops. */
+    private readonly announced;
+    private readonly listeners;
+    private unsubscribeConnection;
+    private connected;
+    private pagehideInstalled;
+    private notifying;
+    /**
+     * Adds one reference to an interest.
+     *
+     * The game is told only on the first reference (0 -> 1); further calls just
+     * increase the count. The returned disposer is idempotent and withdraws the
+     * interest when the last reference is released (1 -> 0). An invalid name is
+     * rejected with a warning and yields a disposer that does nothing.
+     *
+     * The request is issued synchronously, and both transports preserve request
+     * order, so a follow-up request (for example a snapshot) cannot overtake it.
+     */
+    acquire(interest: string): () => void;
+    /** True while this page holds at least one reference to the interest. */
+    isActive(interest: string): boolean;
+    /** Every interest this page currently holds, in the order they were acquired. */
+    list(): string[];
+    /** Subscribes to changes of the held set. Returns an unsubscribe function. */
+    onDidChange(listener: (interests: string[]) => void): () => void;
+    /** Drops one reference; the interest is withdrawn from the game on 1 -> 0. */
+    private release;
+    /**
+     * Brings the game in sync with the desired set: announces interests it does
+     * not know about yet and withdraws the ones nobody wants anymore.
+     *
+     * Nothing is sent while the transport is down; the reconnect handler replays
+     * the whole desired set, so a live connection is the only requirement.
+     */
+    private flush;
+    /** Sends one interest request; failures are logged, never thrown. */
+    private post;
+    /** Transport went up or down; a reconnect replays the whole desired set. */
+    private readonly handleConnectionChange;
+    /** Best effort on unload: the in-game browser never disconnects by itself. */
+    private readonly handlePageHide;
+    /** Connects to the transport and the page lifecycle once, on first use. */
+    private ensureSubscriptions;
+    /** Forwards the current interest list to the listeners; listener failures are contained. */
+    private notifyChanged;
+}
+
 export declare interface Networking {
     WhenReady(): Promise<void>;
     Request(params: object): Promise<object>;
+    /**
+     * Subscribes to the connectivity of the transport.
+     *
+     * The listener is called with `true` whenever the transport became usable and
+     * with `false` whenever it went away, so a caller that mirrors state in the
+     * game through requests can re-send it after a reconnect. A subscriber that
+     * arrives while the transport is already connected is told `true` right away;
+     * the in-game transport is always connected and reports `true` once. The
+     * returned function unsubscribes and is a no-op for the in-game transport.
+     */
+    OnConnectionChange(listener: (connected: boolean) => void): () => void;
     /** Loads a text file from the game filesystem. */
     LoadGameFileText(path: string): Promise<string>;
     /** Loads a texture from the game filesystem and returns it as a data URL. */
@@ -545,6 +613,7 @@ declare global {
         AppDirectory: AppDirectory;
         PanelDirectory: PanelDirectory;
         AppApi: AppApiRegistry;
+        InterestRegistry: InterestRegistry;
         Notifications: NotificationCenter;
         TacPhoneUtils: {
             CommandRegistry: typeof CommandRegistry;

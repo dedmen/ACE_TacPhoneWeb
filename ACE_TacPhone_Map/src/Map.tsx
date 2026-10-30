@@ -27,6 +27,10 @@ import {
     type MapFlyToOptions,
 } from './MapApi';
 
+// Game-side data interest for marker updates. Must match INTEREST_MARKERS in
+// addons/tacphone/apps/map/script_component.hpp.
+const MAP_MARKERS_INTEREST = 'ACE_TacPhone_Map.markers';
+
 const LONG_PRESS_DURATION_MS = 600;
 const LONG_PRESS_MOVE_TOLERANCE_PX = 10;
 
@@ -159,9 +163,43 @@ class App extends React.Component<{},MapState> {
         return { view: new View(options), preserved: preservedState !== null };
     }
 
+    /**
+     * Holds the game-side marker interest while this panel is mounted. Multiple
+     * Map panels share one game interest through the host's reference count, so
+     * this is safe to call once per mounted panel and guarded against repeats.
+     */
+    private acquireMarkersInterest(): void {
+        if (this.releaseMarkersInterest) {
+            return;
+        }
+
+        this.releaseMarkersInterest = window.InterestRegistry.acquire(MAP_MARKERS_INTEREST);
+    }
+
+    /**
+     * Releases the marker interest exactly once, even when map creation failed
+     * part-way. The stored disposer is idempotent, but it is also cleared so a
+     * later mount cannot release twice.
+     */
+    private releaseMarkersInterestIfHeld(): void {
+        const release = this.releaseMarkersInterest;
+        if (!release) {
+            return;
+        }
+
+        this.releaseMarkersInterest = undefined;
+        release();
+    }
+
     componentDidMount() {
 
         if (!this.mapRef.current) return;
+
+        // Acquire the marker interest before the marker manager requests the
+        // initial snapshot, so the game filters and sends marker updates from
+        // that point on. The transport preserves request order, so the acquire
+        // is processed before GetAllMarkers.
+        this.acquireMarkersInterest();
 
         var projection = new Projection({
             code: 'static-image',
@@ -311,6 +349,12 @@ class App extends React.Component<{},MapState> {
     }
 
     componentWillUnmount(): void {
+        /**
+         * Release the marker interest first: it must happen even if the map was
+         * only partially created, and no teardown step below can skip it.
+         */
+        this.releaseMarkersInterestIfHeld();
+
         /**
          * Unregister the MapApi BEFORE map teardown, so that window.AppApi.list()
          * and other lookups see the cleanup immediately. The pendingFlyTo is now

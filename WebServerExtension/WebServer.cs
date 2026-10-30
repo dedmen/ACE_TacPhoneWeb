@@ -1,7 +1,6 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using System.Collections.Concurrent;
@@ -16,7 +15,7 @@ namespace ArmaServerSide
     // Connection Manager Class
     public class WebSocketConnectionManager
     {
-        private readonly ConcurrentDictionary<string, WebSocketConnection> _connections = new();
+        internal readonly ConcurrentDictionary<string, WebSocketConnection> _connections = new();
 
         public Task AddConnectionAsync(string connectionId, WebSocket webSocket)
         {
@@ -29,6 +28,16 @@ namespace ArmaServerSide
         {
             if (_connections.TryRemove(connectionId, out var connection))
             {
+                // Tell the game this client is gone so it can drop its data interests.
+                try
+                {
+                    DllEntry.callback("ArmaWebHost", "Disconnect", Encoding.UTF8.GetBytes(connectionId));
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Disconnect callback failed: {ex.Message}");
+                }
+
                 var webSocket = connection.WebSocket;
                 if (webSocket.State == WebSocketState.Open)
                 {
@@ -36,10 +45,6 @@ namespace ArmaServerSide
                 }
 
                 Console.WriteLine($"Connection removed: {connectionId}. Total connections: {_connections.Count}");
-
-                // Notify remaining clients
-                //var notification = new { type = "user_left", connectionId = connectionId, totalConnections = _connections.Count };
-                //await BroadcastAsync(JsonSerializer.Serialize(notification));
             }
         }
 
@@ -73,6 +78,23 @@ namespace ArmaServerSide
             }
 
             await Task.WhenAll(tasks);
+        }
+
+        /// <summary>
+        /// Broadcast to all currently open connections (wildcard "*").
+        /// Returns the number of connections that received the message.
+        /// </summary>
+        public int CountOpenConnections()
+        {
+            int count = 0;
+            foreach (var connection in _connections)
+            {
+                if (connection.Value.WebSocket.State == WebSocketState.Open)
+                {
+                    count++;
+                }
+            }
+            return count;
         }
 
         private async Task SendMessageToConnectionAsync(WebSocketConnection connection, string message)
@@ -110,9 +132,7 @@ namespace ArmaServerSide
             //#TODO error?
         }
 
-        public int GetConnectionCount() => _connections.Count;
-
-        private sealed class WebSocketConnection
+        internal sealed class WebSocketConnection
         {
             public WebSocket WebSocket { get; }
             public SemaphoreSlim SendLock { get; } = new(1, 1);
@@ -391,7 +411,6 @@ namespace ArmaServerSide
 
 
 
-
         static async Task HandleWebSocketAsync(string connectionId, WebSocket webSocket, WebSocketConnectionManager connectionManager, CancellationToken stopping)
         {
             const int receiveBufferSize = 1024 * 4;
@@ -518,19 +537,70 @@ namespace ArmaServerSide
             //#TODO cache it, files don't change. _fileCache. Also needs to be threadsafe And if not in cache, need to reuse the existing promise
         }
 
-        internal void SendTo(string target, string content)
+        /// <summary>
+        /// Sends content to a list of targets (connection ids or wildcards).
+        /// - Content is delivered via asynchronous sends; this returns immediately.
+        /// - Returns the number of targets that were successfully connected and open.
+        /// - "*" means broadcast to all currently open sockets; other remote ids are ignored when "*" is present.
+        /// - Empty/whitespace target ids are skipped. Explicit ids that are not connected are counted as undelivered and logged once per call.
+        /// </summary>
+        internal int SendTo(IReadOnlyList<string> targets, string content)
         {
-            // Send content to specific websocket client
-            if (_stopped) return;
+            if (_stopped) return 0;
 
             try
             {
-                var websocketManager = app.Services.GetService<WebSocketConnectionManager>()!;
-                _ = websocketManager.SendMessageToConnectionAsync(target, content);
+                var connectionManager = app.Services.GetService<WebSocketConnectionManager>()!;
+
+                // Normalize targets: drop empty/whitespace, dedupe (Ordinal), handle "*"
+                var normalizedTargets = new HashSet<string>(StringComparer.Ordinal);
+                
+                foreach (var target in targets)
+                {
+                    string? trimmed = target?.Trim();
+                    if (!string.IsNullOrEmpty(trimmed))
+                    {
+                        normalizedTargets.Add(trimmed);
+                    }
+                }
+
+                // If "*" is present, collapse to broadcast and ignore other remote ids
+                int delivered;
+                if (normalizedTargets.Contains("*"))
+                {
+                    // Broadcast to all open connections
+                    // Fire-and-forget, consistent with the explicit-target path below.
+                    _ = connectionManager.BroadcastAsync(content, null);
+                    delivered = connectionManager.CountOpenConnections();
+                }
+                else
+                {
+                    delivered = 0;
+                    foreach (var target in normalizedTargets)
+                    {
+                        // Send to specific connection (fire-and-forget for async)
+                        _ = connectionManager.SendMessageToConnectionAsync(target, content);
+                        
+                        // Count only if the connection exists and is open
+                        if (connectionManager._connections.TryGetValue(target, out var conn) && 
+                            conn.WebSocket.State == WebSocketState.Open)
+                        {
+                            delivered++;
+                        }
+                    }
+
+                    if (delivered < normalizedTargets.Count)
+                    {
+                        Console.WriteLine($"SendTo: {normalizedTargets.Count - delivered} of {normalizedTargets.Count} target(s) were not connected");
+                    }
+                }
+
+                return delivered;
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"SendTo failed: {ex.Message}");
+                return 0;
             }
         }
     }

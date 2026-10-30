@@ -62,9 +62,7 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
   `WebServer.cs:189-221`: concurrent GETs share a `TaskCompletionSource`, and the
   first waiter calls `TrySetCanceled()` on it. Give each request its own timeout,
   never cancel the shared source, and pass `context.RequestAborted`.
-- [ ] **[robustness]** `SendTo` is fire-and-forget and silently drops unknown
-  targets (`WebServer.cs:459-463`, `:86-94`), while the SQF continuation assumes
-  delivery (`XEH_postInit.sqf:76-85`). Return a delivery status to SQF.
+- [x] **[robustness]** `SendTo` takes multiple targets, returns `OK <delivered> <requested>`, `"*"` broadcasts remotely, and unknown ids are logged.
 - [ ] **[robustness]** 30 MB per-connection message limit with no auth or rate
   limit (`WebServer.cs:352`) is a LAN memory DoS. Lower the limit for control
   frames and reject early.
@@ -115,8 +113,9 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
   file is `featureflags.obj`: breaks on case-sensitive agents and silently
   ignores edits to `FeatureFlags.c`. Compile the C file in the build instead.
 - [ ] **[cleanup]** `IsTrimmable=false` is misleading under `PublishAot`; the two
-  CS8625 nullable warnings (`WebServer.cs:112`, `DllEntry.cs:40`); unused
-  `using Microsoft.AspNetCore.Mvc` and unused `BroadcastAsync`/`GetConnectionCount`.
+  CS8625 nullable warnings (`WebServer.cs:112`, `DllEntry.cs:40`). The unused
+  `using Microsoft.AspNetCore.Mvc` and dead `GetConnectionCount` were removed.
+  `CountOpenConnections()` remains as the live connection counter.
 - [x] **[cleanup]** Return codes are uninformative (`DllEntry.cs:88`:
   unknown method, missing arg, failed start, success all return 1).
   `RvExtensionVersion` ignores `outputSize`; `RvExtension` writes nothing.
@@ -140,6 +139,12 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
   (`XEH_postInit.sqf:41, 43, 52`), and `:48` passes an array to `systemChat`,
   which expects a string, so 404s raise a script error instead of logging. Gate
   behind a debug flag and use `diag_log`/`str`.
+- [ ] **[cleanup]** Remove the temporary interest debug logging:
+  `fnc_interestSet.sqf` prints one `systemChat` line when an information interest
+  appears and one when it disappears (added for bring-up visibility of the
+  data-interest system). Delete those lines, or downgrade them to `diag_log`
+  behind a debug flag, once the feature is verified. The source lines are marked
+  `//#TODO remove debug logging`.
 - [ ] **[bug]** The dev console opens on every mission start:
   `fnc_loadPhoneBackground.sqf:76-80` (`//#TODO development, remove this`).
 - [ ] **[decision]** Only `/` is remapped to the addon data folder
@@ -210,9 +215,7 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
   emits a self-contained declaration exporting `MapApi`, `MapViewState`,
   `MapFlyToOptions`, `MAP_SERVICE`, and `MAP_SERVICE_VERSION`. Apps no longer
   keep their own copy of that bundler.
-- [ ] **[cleanup]** Broadcast log spam when no map panel is mounted:
-  `routeMessage` warns for every `Marker.Upsert`/`Delete` (`MessageRouter.ts:51`)
-  and `console.warn` survives the release strip. Log at debug level.
+- [x] **[cleanup]** Broadcast log spam when no map panel is mounted: marker updates are only sent to interested clients, so no broadcast reaches a page without a Map panel. Log at debug level.
 - [ ] **[cleanup]** `Map.tsx:96` `forceUpdate` hack; a state bump or ref-driven
   redraw would be clearer.
 - [x] **[cleanup]** `README.md:66` omits the emitted `.d.ts` from the build

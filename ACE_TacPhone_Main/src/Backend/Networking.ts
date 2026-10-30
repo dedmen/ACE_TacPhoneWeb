@@ -4,6 +4,17 @@ import { SendMessageToApp } from "./AppMessaging";
 export interface Networking {
  WhenReady(): Promise<void>;
  Request(params:object): Promise<object>;
+ /**
+  * Subscribes to the connectivity of the transport.
+  *
+  * The listener is called with `true` whenever the transport became usable and
+  * with `false` whenever it went away, so a caller that mirrors state in the
+  * game through requests can re-send it after a reconnect. A subscriber that
+  * arrives while the transport is already connected is told `true` right away;
+  * the in-game transport is always connected and reports `true` once. The
+  * returned function unsubscribes and is a no-op for the in-game transport.
+  */
+ OnConnectionChange(listener: (connected: boolean) => void): () => void;
  /** Loads a text file from the game filesystem. */
  LoadGameFileText(path: string): Promise<string>;
  /** Loads a texture from the game filesystem and returns it as a data URL. */
@@ -53,6 +64,19 @@ class NetworkingA3 implements Networking {
     LoadGameFileText(path: string): Promise<string> {
         path = path.replaceAll("/", "\\");
         return window.A3API.RequestFile(path);
+    }
+
+    OnConnectionChange(listener: (connected: boolean) => void): () => void {
+        // The in-game transport is injected synchronously by the game and never
+        // disconnects while the page lives, so it is connected from the start.
+        try {
+            listener(true);
+        } catch (error) {
+            console.error("TacPhone in-game connection listener failed:", error);
+        }
+
+        // The in-game transport never disconnects; there is nothing to unsubscribe from.
+        return () => undefined;
     }
 
     LoadGameFileTexture(path: string, maxSize: number): Promise<string> {
@@ -124,6 +148,10 @@ class NetworkingWebsocket implements Networking {
     // Requests made before the connection opens are queued instead of being sent on a CONNECTING socket.
     private preOpenQueue: Array<{ key: string; data: object }> = [];
 
+    // Connectivity listeners; they survive reconnect attempts, because connect()
+    // replaces the socket, not the manager.
+    private connectionListeners = new Set<(connected: boolean) => void>();
+
     // We cannot use A3API's pendingRequests implementation, so we ship our own
     private pendingRequests: { [key: string]: PendingRequest[] } = {};
 
@@ -143,6 +171,17 @@ class NetworkingWebsocket implements Networking {
     private rejectAllPendingRequests(reason: unknown): void {
         for (const key of Object.keys(this.pendingRequests)) {
             this.rejectRequest(key, reason);
+        }
+    }
+
+    /** Tells every listener whether the socket is usable; listener failures are contained. */
+    private notifyConnectionChange(connected: boolean): void {
+        for (const listener of [...this.connectionListeners]) {
+            try {
+                listener(connected);
+            } catch (error) {
+                console.error("TacPhone connection listener failed:", error);
+            }
         }
     }
 
@@ -213,6 +252,8 @@ class NetworkingWebsocket implements Networking {
             this.resolveReady?.();
             this.resolveReady = this.rejectReady = undefined;
             this.flushPreOpenQueue();
+            // After the queue flush, so queued requests keep their send order.
+            this.notifyConnectionChange(true);
         };
 
         this.socket.onmessage = (event) => {
@@ -250,6 +291,8 @@ class NetworkingWebsocket implements Networking {
                 this.rejectReady(new Error(`TacPhone websocket closed before connecting (code=${event.code})`));
                 this.resolveReady = this.rejectReady = undefined;
             }
+
+            this.notifyConnectionChange(false);
         };
 
         this.socket.onerror = (error) => {
@@ -260,6 +303,8 @@ class NetworkingWebsocket implements Networking {
                 this.rejectReady(new Error("Could not connect to the TacPhone websocket"));
                 this.resolveReady = this.rejectReady = undefined;
             }
+
+            this.notifyConnectionChange(false);
         };
     };
 
@@ -269,6 +314,24 @@ class NetworkingWebsocket implements Networking {
             this.connect();
 
         return this.readyPromise;
+    }
+
+    OnConnectionChange(listener: (connected: boolean) => void): () => void {
+        this.connectionListeners.add(listener);
+
+        // Catch-up for a subscriber that arrives after the socket already opened;
+        // onopen covers everyone who subscribed before that.
+        if (this.isReady) {
+            try {
+                listener(true);
+            } catch (error) {
+                console.error("TacPhone connection listener failed:", error);
+            }
+        }
+
+        return () => {
+            this.connectionListeners.delete(listener);
+        };
     }
 
     GenerateRequestID(): string {

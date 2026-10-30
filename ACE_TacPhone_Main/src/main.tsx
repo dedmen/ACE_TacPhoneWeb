@@ -30,6 +30,7 @@ import './Backend/MessageRouter.ts'; // Must be in so it sets the globally acces
 import './Backend/Notifications.ts'; // Sets window.Notifications before any app can show one
 import './Backend/PanelDirectory.ts'; // Sets window.PanelDirectory before any panel mounts
 import './Backend/AppApi.ts'; // Sets window.AppApi before any app registers its API
+import './Backend/InterestRegistry.ts'; // Sets window.InterestRegistry before any app acquires an interest
 import './Panels/PanelContext.ts'; // Sets window.TacPhoneUtils.PanelContext/usePanel
 import './Panels/PanelHost.tsx'; // Tab <-> PanelInstance binding
 

@@ -250,6 +250,7 @@ The host exposes these before loading apps:
 | `window.TacPhoneUtils.CommandRegistry` | Message router helper shown above. |
 | `window.PanelDirectory` | Enumerate, focus, activate, and open panels. See [Inter-app API](#inter-app-api). |
 | `window.AppApi` | Register an app's API and resolve or call another app's. See [Inter-app API](#inter-app-api). |
+| `window.InterestRegistry` | Acquire and release named data interests so the game only sends what the page needs. See [Data interests](#data-interests). |
 | `window.TacPhoneUtils.PanelContext` | React context with the live `PanelInstance` of the panel an app is rendered in. |
 | `window.TacPhoneUtils.usePanel()` | Hook form of `PanelContext` for function components. |
 
@@ -520,6 +521,58 @@ ship their own bundler.
   ids or registrations. Apps re-register when their panel mounts again.
 - There are no cross-app events or subscriptions yet; use method calls.
 - There is no permission model between apps.
+
+## Data interests
+
+The game only does the expensive work for data that some page asked for, and
+only sends it to the pages that asked. An app announces a named interest; the
+game then targets its updates for that data at this page until the interest is
+released.
+
+Names are opaque strings namespaced by app (`<AppName>.<feature>`), for example
+`ACE_TacPhone_Map.markers`. They must be non-empty and at most 128 characters;
+anything else is rejected with a console warning.
+
+```ts
+export class MyPanel extends React.Component<{}, {}> {
+    private releaseInterest: (() => void) | undefined;
+
+    componentDidMount(): void {
+        // Reference counted per page: two panels of this app share one game interest.
+        this.releaseInterest = window.InterestRegistry.acquire('ACE_TacPhone_MyApp.updates');
+
+        // Requests keep their order, so a snapshot requested after this line
+        // cannot miss an update and does not need to await an acknowledgement.
+        window.Networking.Request({ a: 'ACE_TacPhone_MyApp', c: 'GetSnapshot' });
+    }
+
+    componentWillUnmount(): void {
+        this.releaseInterest?.();
+    }
+}
+```
+
+| Method | Returns | Notes |
+| --- | --- | --- |
+| `acquire(interest)` | `() => void` | Adds one reference; the game is told only on the first one. The disposer is idempotent and withdraws the interest when the last reference is released. |
+| `isActive(interest)` | `boolean` | `true` while this page holds at least one reference. |
+| `list()` | `string[]` | The interests this page currently holds. |
+| `onDidChange(listener)` | `() => void` | Calls `listener(interests)` when the held set changes; the return value unsubscribes. |
+
+- The interest belongs to the page, not to a panel: an app that is open twice
+  holds one interest, and closing one panel keeps it. Release on unmount, and
+  only release what `acquire()` returned.
+- "Open but inactive" (for example a GPS panel that is visible but not tracking)
+  means calling the disposer and acquiring again when updates are needed. Do not
+  keep an unused interest alive: the game would keep working for nothing.
+- Reconnects are handled for you. The game drops a websocket client's interests
+  when its connection closes, so the registry re-announces every held interest
+  after a reconnect. Nothing is sent while the transport is down; an interest
+  acquired then is announced as soon as it is up.
+- A `pagehide` handler sends one best-effort clear for the in-game browser, which
+  never disconnects on its own.
+- Nothing here throws: an invalid name or a failed request is logged, and the
+  interest state of this page stays as `list()` reports it.
 
 ## Import-map constraints
 
