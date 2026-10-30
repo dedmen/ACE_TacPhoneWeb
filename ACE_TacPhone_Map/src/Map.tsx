@@ -9,6 +9,8 @@ import type { ViewOptions } from 'ol/View.js';
 import TileLayer from 'ol/layer/Tile';
 import DoubleClickZoom from 'ol/interaction/DoubleClickZoom';
 import DragPan from 'ol/interaction/DragPan';
+import DragRotate from 'ol/interaction/DragRotate';
+import PinchRotate from 'ol/interaction/PinchRotate';
 import type { MapBrowserEvent } from 'ol';
 import type { FeatureLike } from 'ol/Feature';
 
@@ -262,6 +264,9 @@ class App extends React.Component<AppProps,MapState> {
             // Let fit() show the whole terrain on panels whose aspect ratio differs
             // from the terrain instead of clipping one axis.
             showFullExtent: true,
+            // The map is north-up only: the rotation constraint ignores every
+            // rotation, including two-finger rotate and programmatic calls.
+            enableRotation: false,
             minResolution: TERRAIN_MIN_RESOLUTION,
             maxResolution,
             center: [
@@ -349,8 +354,14 @@ class App extends React.Component<AppProps,MapState> {
 
         // Double-click (desktop) creates a marker. Remove the default double-click zoom
         // interaction so that creating a marker doesn't also zoom the map.
+        // Rotation interactions are removed as well: the map stays north-up, and
+        // a two-finger touch must only pan/zoom instead of rotating.
         [...map.getInteractions().getArray()].forEach((interaction) => {
-            if (interaction instanceof DoubleClickZoom) {
+            if (
+                interaction instanceof DoubleClickZoom ||
+                interaction instanceof DragRotate ||
+                interaction instanceof PinchRotate
+            ) {
                 map.removeInteraction(interaction);
             }
         });

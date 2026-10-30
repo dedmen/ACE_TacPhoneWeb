@@ -155,6 +155,15 @@ trip per point. The web helper is `getTerrainHeights(positions)` in
 `src/MapMarkers/TerrainHeightApi.ts`, which validates both the input and the
 reply and rejects on invalid data.
 
+### Map view
+
+The map is always north-up. The view is created with `enableRotation: false`
+(so the rotation constraint clamps to 0), and the `DragRotate` and `PinchRotate`
+interactions are removed when the map is created. Two-finger touch gestures
+therefore only pan and zoom; `Shift`+`Alt`+drag does not rotate either. The
+terrain view is rebuilt when the terrain SVG arrives, and `createTerrainView()`
+reapplies the same option, so a reload cannot reintroduce rotation.
+
 ### Marker interaction
 
 Only markers whose name starts with `_USER_DEFINED` (player-created markers) can

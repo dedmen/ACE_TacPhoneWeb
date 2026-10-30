@@ -51,6 +51,10 @@ freehand strokes request none.
 
 Only `_USER_DEFINED` markers are editable; everything else is read-only.
 
+The map is always north-up: the view sets `enableRotation: false` and the
+`DragRotate`/`PinchRotate` interactions are removed at map creation, so
+two-finger touch cannot rotate it.
+
 - Desktop: hover + `Delete` deletes; double-click edits label/type/color;
   hold left mouse 100 ms then drag to move.
 - Touch/pen: hold 100 ms to lift and drag; holding until the 600 ms long-press
