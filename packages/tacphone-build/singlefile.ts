@@ -76,6 +76,23 @@ export function replaceCss(jsContent: string, cssFilename: string, cssCode: stri
 	return inlined
 }
 
+/**
+ * The in-game browser loads app modules with `A3API.RequestFile`, which hands the
+ * file text to the page with non-ASCII UTF-8 decoded as the system ANSI codepage:
+ * "🥞" arrives as "ðŸ¥ž". Escaping every non-ASCII code unit keeps the bundle pure
+ * ASCII, so it survives any byte-to-string conversion, and the JS parser restores
+ * the original characters at runtime.
+ *
+ * This runs on the generated JavaScript, where non-ASCII only occurs inside
+ * string, template, and regex literals or comments; `\uXXXX` is valid in all of
+ * them. Surrogate pairs are escaped one code unit at a time on purpose.
+ */
+export function escapeNonAscii(code: string): string {
+	return code.replace(/[^\x00-\x7F]/g, (character) => {
+		return "\\u" + character.charCodeAt(0).toString(16).padStart(4, "0")
+	})
+}
+
 const isJsFile = /\.[mc]?js$/
 const isCssFile = /\.css$/
 //const isHtmlFile = /\.html?$/
@@ -173,7 +190,7 @@ export function viteSingleFile({
 					bundlesToDelete.push(filename)
 					replacedHtml = replaceCss(replacedHtml, cssChunk.fileName, cssChunk.source as string)
 				}
-				htmlChunk.code = replacedHtml
+				htmlChunk.code = escapeNonAscii(replacedHtml)
 			}
 			if (deleteInlinedFiles) {
 				for (const name of bundlesToDelete) {

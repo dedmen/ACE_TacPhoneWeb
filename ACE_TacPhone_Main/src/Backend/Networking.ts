@@ -1,5 +1,6 @@
 import "./A3API";
 import { SendMessageToApp } from "./AppMessaging";
+import { decodeGameText, decodeGameTextDeep } from "./GameText";
 import type { Networking } from "./Types";
 
 class NetworkingA3 implements Networking {
@@ -25,7 +26,10 @@ class NetworkingA3 implements Networking {
 
             if (window.A3API._push(reqKey, 
                 {
-                    resolve: (resultData): void => { resolve(JSON.parse(atob(resultData)))},
+                    // The engine base64-encodes SQF replies and we decode them with atob,
+                    // which gives a byte string. Repair the UTF-8 before parsing so string
+                    // values are not mojibake; ASCII payloads take the no-copy fast path.
+                    resolve: (resultData): void => { resolve(JSON.parse(decodeGameText(atob(resultData))))},
                     reject 
                 }
                 ))
@@ -35,7 +39,7 @@ class NetworkingA3 implements Networking {
 
     LoadGameFileText(path: string): Promise<string> {
         path = path.replaceAll("/", "\\");
-        return window.A3API.RequestFile(path);
+        return window.A3API.RequestFile(path).then(decodeGameText);
     }
 
     OnConnectionChange(listener: (connected: boolean) => void): () => void {
@@ -55,18 +59,22 @@ class NetworkingA3 implements Networking {
         if (path.startsWith("\\"))
             path = path.substring(1);
 
+        // Texture content is raw bytes, not text. Never run it through decodeGameText.
         return window.A3API.RequestTexture(path, maxSize);
     }
 
     LoadGameTerrain(config: object): Promise<string> {
-        return window.A3API.RequestTerrainSVG(config);
+        // The SVG is text (including location names), so it needs the UTF-8 repair.
+        return window.A3API.RequestTerrainSVG(config).then(decodeGameText);
     }
 
     OnMessageFromGame(message: object): void {
         // The game sent us a message, probably a notification about something
-        // Forward it to the App its destined for
-        console.log("Message from game", message);
-        SendMessageToApp(message);
+        // Pushes arrive through JSON.parse(atob(...)) with the same byte-string text.
+        // Marker payloads are small, so walking them once stays cheap.
+        const decoded = decodeGameTextDeep(message);
+        console.log("Message from game", decoded);
+        SendMessageToApp(decoded);
     }
 
 };

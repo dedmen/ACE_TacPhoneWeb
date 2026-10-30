@@ -67,8 +67,11 @@ remotely. Web code validates data; do not repeat type checks in SQF.
 
 Built-in `main` commands include `GetAvailableApps`, `GetFile`, `GetPlayerPos`,
 `GetTime`, `Interest.Set`, `Interest.Clear`, `GetLayout`, `SaveLayout`, and the
-terrain/texture proxies. `GetFile` remaps `/` or `""` to `data\index.html`,
-normalises `/` to `\`, and returns `""` when the file does not exist.
+terrain/texture proxies. `RequestTexture` checks `fileExists` first and
+returns `{ok: false}` instead of forwarding when the texture is missing, since
+the engine would otherwise open an error popup. `GetFile` remaps `/` or `""` to
+`data\index.html`, normalises `/` to `\`, and returns `""` when the file does
+not exist.
 
 ## Game → web push
 

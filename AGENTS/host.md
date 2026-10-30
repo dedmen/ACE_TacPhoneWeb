@@ -88,6 +88,19 @@ filesystem through the transport. The built-in `main` app
 (`src/MainApps/main.tsx`) handles game requests for terrain/texture, compresses
 them, and replies with `ReplyRequestTerrainSVG` / `ReplyRequestTexture`.
 
+The engine moves `ExecJS` sources through base64 and decodes them with `atob`,
+so non-ASCII text in in-game replies and pushes arrives as a UTF-8 byte string
+(`"Кa32"` → `"Ð\u009aa32"`). The helpers in
+[`Backend/GameText.ts`](../ACE_TacPhone_Main/src/Backend/GameText.ts) repair that
+at the transport boundary: `Request` parses after `decodeGameText`,
+`OnMessageFromGame` walks the parsed message with `decodeGameTextDeep`, and
+`LoadGameFileText` / `LoadGameTerrain` decode their text. Only contiguous
+high-byte runs are decoded, and pure-ASCII strings return without copying, so
+base64 payloads stay cheap. Terrain SVGs can be ~30 MB and cost one scan, plus
+one copy if they contain names. Texture content from `LoadGameFileTexture` is
+binary and must never be decoded. The WebSocket transport already receives
+proper UTF-8 and does not decode anything.
+
 ## Inter-app registry (`Backend/InterApp.ts`)
 
 - `register(panel, { service, version, api })` is keyed by panel instance and

@@ -126,6 +126,13 @@ self-contained ES module that can be imported from a blob URL. Apps cannot use
 relative imports, dynamic chunk imports, local `React.lazy` chunks, CSS side
 files, or `new URL(..., import.meta.url)`.
 
+It also rewrites every non-ASCII code unit in the final JavaScript to a
+`\uXXXX` escape. The in-game loader gets app text through `A3API.RequestFile`,
+which decodes the file's UTF-8 bytes as the system ANSI codepage, so raw emoji
+or accents arrive as mojibake. Keeping the bundle ASCII makes the text invariant
+under that conversion; the JS parser restores the characters at runtime, so
+source files can keep literal emoji.
+
 The host is different: it builds an HTML page and uses
 `vite-plugin-singlefile` instead. Do not swap them.
 

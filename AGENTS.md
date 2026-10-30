@@ -32,6 +32,7 @@ section in the same change.
 
 ## Rules that apply to every area
 
+- **PowerShell Commands**: All commands must be run using **PowerShell**. Use semicolons (`;`) to separate multiple commands on one line, not `&&`. Example: `Copy-Item file1.txt ..\data\file1.txt; Copy-Item file2.txt ..\data\file2.txt`. Using shell operators like `&&` will cause PowerShell parser errors.
 - The in-game browser is sandboxed Chromium 126: no `fetch`/XHR, `localStorage`,
   or `IndexedDB`. Use `window.TacPhone.networking` for everything. Open dev
   pages through `http://localhost:<port>`, never `127.0.0.1`; `IsLocalDev()`

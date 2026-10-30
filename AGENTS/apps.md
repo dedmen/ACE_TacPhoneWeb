@@ -140,7 +140,10 @@ so it must be one self-contained ES module:
 - `build.lib.formats: ['es']` and no code splitting; no relative imports, dynamic
   chunk imports, local `React.lazy` chunks, or `new URL(..., import.meta.url)`.
 - Inline CSS and assets with `@ace-tacphone/build/singlefile`
-  (`viteSingleFile`); no sidecar CSS file.
+  (`viteSingleFile`); no sidecar CSS file. The plugin also escapes every
+  non-ASCII code unit to `\uXXXX`: the in-game loader's `A3API.RequestFile`
+  mis-decodes UTF-8 (emoji arrive as mojibake), so an app bundle must stay pure
+  ASCII. Keep literal emoji/accents in source; do not add a separate escape step.
 - Keep `react`, `react-dom`, `react-dom/client`, `react/jsx-runtime`, and
   `react/compiler-runtime` external. The host import map provides them. A second
   React copy breaks hooks/context.
