@@ -1,0 +1,58 @@
+import { resolve } from 'node:path'
+import { defineConfig, type PluginOption } from 'vite'
+import react, { reactCompilerPreset } from '@vitejs/plugin-react'
+import babel from '@rolldown/plugin-babel'
+import { libInjectCss } from 'vite-plugin-lib-inject-css'
+import { viteSingleFile } from './build/singlefile.ts'
+import { SHARED_MODULE_SPECIFIERS } from '../ACE_TacPhone_Main/shared-modules.js'
+
+// https://vite.dev/config/
+export default defineConfig(({ mode }) => {
+  // `vite build` (production) and `npm run build` (release) ship optimized code.
+  // Use `npm run build:debug` when you need unminified code and source maps.
+  const isRelease = mode !== 'debug'
+
+  const plugins: PluginOption[] = [
+    react(),
+    libInjectCss(),
+    babel({ presets: [reactCompilerPreset()] }),
+    viteSingleFile({ failOnNotInlined: isRelease }),
+  ]
+
+  return {
+    devtools: false,
+    plugins,
+
+    build: {
+      minify: isRelease ? 'oxc' : false,
+      sourcemap: isRelease ? false : 'inline',
+      lib: {
+          entry: resolve(import.meta.dirname, 'src/main.tsx'),
+          name: 'ace_tacphone_sampleapp',
+          fileName: () => `ace_tacphone_sampleapp.js`,
+          formats: ['es'], // The production loader imports this file as an ES module from a blob URL
+      },
+      rollupOptions: {
+          // Only the exact bare specifiers provided by ACE_TacPhone_Main's import map may stay external.
+          external: [...SHARED_MODULE_SPECIFIERS],
+          ...(isRelease ? {
+              treeshake: {
+                  // Keep console.warn/error for in-game diagnostics, drop noisy logging.
+                  manualPureFunctions: ['console.log', 'console.debug', 'console.info'],
+              },
+          } : {}),
+          output: {
+              // The production loader can only fetch one file. Never emit separate chunks.
+              codeSplitting: false,
+              ...(isRelease ? {
+                  minify: {
+                      compress: true,
+                      mangle: true,
+                      codegen: true,
+                  },
+              } : {}),
+          }
+      }
+    },
+  }
+})

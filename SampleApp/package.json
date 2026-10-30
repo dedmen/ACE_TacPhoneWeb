@@ -1,0 +1,42 @@
+{
+  "name": "ace-tacphone-sampleapp",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "tacphone": {
+    "app": "SampleApp"
+  },
+  "main": "./dist/ace_tacphone_sampleapp.js",
+  "scripts": {
+    "dev": "npm --prefix ../ACE_TacPhone_Main run dev --",
+    "build": "tsc -b && vite build --mode release && node ../ACE_TacPhone_Main/scripts/check-shared-imports.mjs",
+    "build:debug": "tsc -b && vite build --mode debug && node ../ACE_TacPhone_Main/scripts/check-shared-imports.mjs",
+    "check:importmap": "node ../ACE_TacPhone_Main/scripts/check-shared-imports.mjs",
+    "lint": "oxlint",
+    "preview": "vite preview"
+  },
+  "peerDependencies": {
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.29.7",
+    "@rolldown/plugin-babel": "^0.2.3",
+    "@types/babel__core": "^7.20.5",
+    "@types/micromatch": "^4.0.10",
+    "@types/node": "^24.13.2",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "babel-plugin-react-compiler": "^1.0.0",
+    "micromatch": "^4.0.8",
+    "oxlint": "^1.71.0",
+    "oxlint-tsgolint": "^7.0.2005",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "rollup": "^4.62.2",
+    "typescript": "~6.0.2",
+    "vite": "^8.3.5",
+    "vite-plugin-lib-inject-css": "^2.2.2"
+  }
+}
