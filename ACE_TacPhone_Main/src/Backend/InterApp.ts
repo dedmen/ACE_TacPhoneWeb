@@ -1,10 +1,10 @@
 // Host-side registry of the runtime APIs that apps expose to each other.
 //
 // Apps register a versioned service from their panel lifecycle through
-// `window.AppApi.register(panel, { service, version, api })`; other apps look the
-// service up with `resolve()` (synchronous snapshot) or `resolveAsync()` (routing)
-// and call it. Because one app can be open in several panels, the registry is
-// keyed by panel instance and service, never by service alone.
+// `window.TacPhone.interApp.register(panel, { service, version, api })`; other apps
+// look the service up with `resolve()` (synchronous snapshot) or `resolveAsync()`
+// (routing) and call it. Because one app can be open in several panels, the
+// registry is keyed by panel instance and service, never by service alone.
 //
 // This is page-local plumbing: it never goes through Networking/SQF, the game can
 // never reach it, and it is not a security boundary (every app in the page can
@@ -14,72 +14,25 @@
 // in the background has no registration yet. resolveAsync() therefore activates a
 // candidate and waits for its registration (bounded by waitMs) instead of polling.
 //
-// Host lifecycle: nothing to wire up. The module creates `window.AppApi` at module
-// scope and subscribes to PanelDirectory.onDidChange to drop registrations of
-// panels that are gone.
+// Host lifecycle: nothing to wire up. The module creates the singleton registry
+// at module scope and subscribes to the panel directory's onDidChange to drop
+// registrations of panels that are gone.
 
-import type { PanelInfo, PanelInstance, PanelPlacement } from "./PanelDirectory";
+import type { InterAppRegistration, AppServiceInfo, PanelInfo, PanelInstance, TargetChooser, TargetOptions, TargetPolicy } from "./Types";
+import { panelDirectory } from "./PanelDirectory";
 
 /** Time resolveAsync() waits for a panel to mount and register its API. */
 const DEFAULT_WAIT_MS = 3000;
 /** Hard cap for caller-supplied waits, so a routing call cannot hang forever. */
 const MAX_WAIT_MS = 30000;
 
-/** One service registration of one mounted panel. */
-export interface AppApiRegistration<T = unknown> {
-    /** Stable, app-chosen, lowercase service name: "map", "messenger", ... */
-    service: string;
-    /** Integer major version of the API. */
-    version: number;
-    /** What other apps receive from resolve()/resolveAll()/getApi(). */
-    api: T;
-}
-
-/** One registered provider of a service, with a fresh snapshot of its panel. */
-export interface AppServiceInfo {
-    /** Service name the panel registered. */
-    service: string;
-    /** Version the panel registered. */
-    version: number;
-    /** Fresh PanelInfo of the panel that provides the API. */
-    instance: PanelInfo;
-    /** The api passed to register(). */
-    api: unknown;
-}
-
-/** How resolve()/resolveAsync() pick between several panels of the same service. */
-export type TargetPolicy = "auto" | "focused" | "largest" | "first" | "ask";
-
-/** What to route to: one service, optionally narrowed to a version, panel or instance. */
-export interface TargetOptions {
-    /** Service to find, e.g. "map". */
-    service: string;
-    /** Default "auto": focused panel, then the largest, then the only candidate. */
-    policy?: TargetPolicy;
-    /** Requested major version; without it the highest registered version wins. */
-    version?: number;
-    /** Restrict candidates to one app panel id, e.g. "ACE_TacPhone_Map". */
-    panelId?: string;
-    /** Explicit target; wins over the policy. Accepts an instance id or a tab id. */
-    instanceId?: string;
-    /** Open the app when no panel provides it yet. Needs panelId. */
-    openIfMissing?: boolean;
-    /** Placement used with openIfMissing; default "float" (a floating popup). */
-    placement?: PanelPlacement;
-    /** Activate the target panel before returning and waiting. Default true. */
-    activate?: boolean;
-    /** How long to wait for a panel to mount and register its API. Default 3000. */
-    waitMs?: number;
-}
-
-/**
- * Ask the user (or the host) which panel should receive the request. Return the
- * instanceId (or tabId) of one of the candidates, or undefined to cancel.
- */
-export type TargetChooser = (
-    request: { service: string; candidates: PanelInfo[]; reason?: string }
-) => Promise<string | undefined> | string | undefined;
-
+export type {
+    InterAppRegistration,
+    AppServiceInfo,
+    TargetChooser,
+    TargetOptions,
+    TargetPolicy,
+} from "./Types";
 /** One (panel instance, service) registration. Identity is used to detect stale disposers. */
 interface RegistrationEntry {
     service: string;
@@ -114,11 +67,11 @@ function describeReason(reason: string | undefined): string {
  * Registry of the APIs apps expose to each other, and the target routing that
  * picks the right panel when an app is open more than once.
  *
- * One instance lives at module scope as `window.AppApi`. Every lookup is
- * read-only and safe before a layout is attached; only register() throws, and
- * only for a programming error in the registering app.
+ * One instance lives at module scope and is exposed as `window.TacPhone.interApp`.
+ * Every lookup is read-only and safe before a layout is attached; only register()
+ * throws, and only for a programming error in the registering app.
  */
-export class AppApiRegistry {
+export class InterAppRegistry {
     /** Registrations per panel instance id, then per service name. */
     private readonly registrations = new Map<string, Map<string, RegistrationEntry>>();
     private readonly listeners = new Set<(services: AppServiceInfo[]) => void>();
@@ -157,18 +110,18 @@ export class AppApiRegistry {
      * Throws on a missing instance or an invalid service/version, which are
      * programming errors of the registering app.
      */
-    register(instance: PanelInstance, registration: AppApiRegistration): () => void {
+    register(instance: PanelInstance, registration: InterAppRegistration): () => void {
         const instanceId = instance?.instanceId;
         if (typeof instanceId !== "string" || instanceId.length === 0)
-            throw new Error("TacPhone AppApi.register() needs the panel instance delivered through the panel context.");
+            throw new Error("TacPhone interApp.register() needs the panel instance delivered through the panel context.");
 
         const service = normalizeService(registration?.service);
         if (!service)
-            throw new Error("TacPhone AppApi.register() needs a non-empty \"service\" name.");
+            throw new Error("TacPhone interApp.register() needs a non-empty \"service\" name.");
 
         const version = registration.version;
         if (!Number.isInteger(version) || version < 1)
-            throw new Error(`TacPhone AppApi.register() needs an integer version >= 1 for service "${service}".`);
+            throw new Error(`TacPhone interApp.register() needs an integer version >= 1 for service "${service}".`);
 
         this.ensurePanelSubscription();
 
@@ -179,7 +132,7 @@ export class AppApiRegistry {
             byService = new Map<string, RegistrationEntry>();
             this.registrations.set(instanceId, byService);
         } else if (byService.has(service)) {
-            console.warn(`TacPhone AppApi: panel "${instanceId}" already registered service "${service}"; replacing it.`);
+            console.warn(`TacPhone interApp: panel "${instanceId}" already registered service "${service}"; replacing it.`);
         }
 
         byService.set(service, entry);
@@ -199,7 +152,7 @@ export class AppApiRegistry {
     list(service?: string): AppServiceInfo[] {
         this.ensurePanelSubscription();
 
-        const panels = window.PanelDirectory?.list() ?? [];
+        const panels = panelDirectory.list();
         const byInstance = new Map<string, PanelInfo>();
         for (const panel of panels) {
             if (panel.instanceId)
@@ -236,31 +189,31 @@ export class AppApiRegistry {
             const options: TargetOptions = typeof target === "string" ? { service: target } : target;
             const service = normalizeService(options?.service);
             if (!service) {
-                console.warn("TacPhone AppApi: resolve() needs a non-empty \"service\".");
+                console.warn("TacPhone interApp: resolve() needs a non-empty \"service\".");
                 return undefined;
             }
 
             const candidates = this.registeredCandidates(service, options.version, options.panelId, options.instanceId);
             if (candidates.length === 0) {
-                console.warn(`TacPhone AppApi: no mounted panel provides service "${service}".`);
+                console.warn(`TacPhone interApp: no mounted panel provides service "${service}".`);
                 return undefined;
             }
 
             const policy = options.policy ?? "auto";
             if (policy === "ask" && !this.warnedSyncAsk) {
-                console.warn("TacPhone AppApi: policy \"ask\" needs a user decision and is unavailable synchronously; using \"auto\".");
+                console.warn("TacPhone interApp: policy \"ask\" needs a user decision and is unavailable synchronously; using \"auto\".");
                 this.warnedSyncAsk = true;
             }
 
             const picked = this.pick(candidates, policy === "ask" ? "auto" : policy, true, candidate => candidate.instance);
             if (!picked) {
-                console.warn(`TacPhone AppApi: no panel of service "${service}" matches policy "${policy}".`);
+                console.warn(`TacPhone interApp: no panel of service "${service}" matches policy "${policy}".`);
                 return undefined;
             }
 
             return picked;
         } catch (error) {
-            console.error("TacPhone AppApi: resolve() failed:", error);
+            console.error("TacPhone interApp: resolve() failed:", error);
             return undefined;
         }
     }
@@ -274,13 +227,13 @@ export class AppApiRegistry {
         try {
             const service = normalizeService(target?.service);
             if (!service) {
-                console.warn("TacPhone AppApi: resolveAll() needs a non-empty \"service\".");
+                console.warn("TacPhone interApp: resolveAll() needs a non-empty \"service\".");
                 return [];
             }
 
             return this.registeredCandidates(service, target.version, target.panelId, target.instanceId);
         } catch (error) {
-            console.error("TacPhone AppApi: resolveAll() failed:", error);
+            console.error("TacPhone interApp: resolveAll() failed:", error);
             return [];
         }
     }
@@ -298,7 +251,7 @@ export class AppApiRegistry {
         try {
             const service = normalizeService(target?.service);
             if (!service) {
-                console.warn("TacPhone AppApi: resolveAsync() needs a non-empty \"service\".");
+                console.warn("TacPhone interApp: resolveAsync() needs a non-empty \"service\".");
                 return undefined;
             }
 
@@ -312,7 +265,7 @@ export class AppApiRegistry {
 
                 if (panel) {
                     if (activate)
-                        window.PanelDirectory?.activate(panel.instanceId ?? panel.tabId);
+                        panelDirectory.activate(panel.instanceId ?? panel.tabId);
 
                     const ready = this.registeredForTab(service, panel.tabId, target.version);
                     if (ready)
@@ -323,7 +276,7 @@ export class AppApiRegistry {
                         return waited;
                 }
 
-                console.warn(`TacPhone AppApi: panel "${target.instanceId}" did not provide service "${service}"${context}.`);
+                console.warn(`TacPhone interApp: panel "${target.instanceId}" did not provide service "${service}"${context}.`);
                 return undefined;
             }
 
@@ -333,17 +286,17 @@ export class AppApiRegistry {
             // 3. Open a missing app (a floating popup by default) and wait for it.
             if (candidates.length === 0 && target.openIfMissing) {
                 if (!target.panelId) {
-                    console.warn(`TacPhone AppApi: openIfMissing needs a "panelId", so service "${service}" cannot be opened${context}.`);
+                    console.warn(`TacPhone interApp: openIfMissing needs a "panelId", so service "${service}" cannot be opened${context}.`);
                     return undefined;
                 }
 
-                const opened = window.PanelDirectory?.open(target.panelId, {
+                const opened = panelDirectory.open(target.panelId, {
                     placement: target.placement ?? "float",
                     select: true
                 });
 
                 if (!opened) {
-                    console.warn(`TacPhone AppApi: failed to open panel "${target.panelId}" for service "${service}"${context}.`);
+                    console.warn(`TacPhone interApp: failed to open panel "${target.panelId}" for service "${service}"${context}.`);
                     return undefined;
                 }
 
@@ -353,26 +306,26 @@ export class AppApiRegistry {
                 candidates = this.candidatePanels(service, target.version, target.panelId);
 
                 if (candidates.length === 0) {
-                    console.warn(`TacPhone AppApi: panel "${target.panelId}" did not register service "${service}" within ${waitMs} ms${context}.`);
+                    console.warn(`TacPhone interApp: panel "${target.panelId}" did not register service "${service}" within ${waitMs} ms${context}.`);
                     return undefined;
                 }
             }
 
             if (candidates.length === 0) {
-                console.warn(`TacPhone AppApi: no panel provides service "${service}"${context}.`);
+                console.warn(`TacPhone interApp: no panel provides service "${service}"${context}.`);
                 return undefined;
             }
 
             // 4. Policy.
             const chosen = await this.chooseTarget(service, candidates, target, reason);
             if (!chosen) {
-                console.warn(`TacPhone AppApi: no panel of service "${service}" was selected${context}.`);
+                console.warn(`TacPhone interApp: no panel of service "${service}" was selected${context}.`);
                 return undefined;
             }
 
             // 5. Bring the target to the front, then make sure its API is registered.
             if (activate)
-                window.PanelDirectory?.activate(chosen.instanceId ?? chosen.tabId);
+                panelDirectory.activate(chosen.instanceId ?? chosen.tabId);
 
             const ready = this.registeredForTab(service, chosen.tabId, target.version);
             if (ready)
@@ -386,14 +339,14 @@ export class AppApiRegistry {
             const name = chosen.title || chosen.tabId;
 
             if (available && target.version !== undefined) {
-                console.warn(`TacPhone AppApi: panel "${name}" provides service "${service}" version ${available.version}, but version ${target.version} was requested${context}.`);
+                console.warn(`TacPhone interApp: panel "${name}" provides service "${service}" version ${available.version}, but version ${target.version} was requested${context}.`);
                 return undefined;
             }
 
-            console.warn(`TacPhone AppApi: panel "${name}" did not register service "${service}" within ${waitMs} ms${context}.`);
+            console.warn(`TacPhone interApp: panel "${name}" did not register service "${service}" within ${waitMs} ms${context}.`);
             return undefined;
         } catch (error) {
-            console.error(`TacPhone AppApi: resolving service "${target?.service}" failed:`, error);
+            console.error(`TacPhone interApp: resolving service "${target?.service}" failed:`, error);
             return undefined;
         }
     }
@@ -418,21 +371,21 @@ export class AppApiRegistry {
     async call<T>(service: string, method: string, ...args: unknown[]): Promise<T> {
         const target = await this.resolveAsync({ service });
         if (!target)
-            throw new Error(`TacPhone AppApi: cannot call "${service}.${method}()": no panel provides the service.`);
+            throw new Error(`TacPhone interApp: cannot call "${service}.${method}()": no panel provides the service.`);
 
         const api: unknown = target.api;
         if (api === undefined || api === null)
-            throw new Error(`TacPhone AppApi: service "${service}" did not expose an API.`);
+            throw new Error(`TacPhone interApp: service "${service}" did not expose an API.`);
 
         const fn = (api as Record<string, unknown>)[method];
         if (typeof fn !== "function")
-            throw new Error(`TacPhone AppApi: service "${service}" has no method "${method}".`);
+            throw new Error(`TacPhone interApp: service "${service}" has no method "${method}".`);
 
         try {
             return await (fn as (...parameters: unknown[]) => unknown).apply(api, args) as T;
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
-            throw new Error(`TacPhone AppApi: service "${service}" failed in "${method}": ${message}`, { cause: error });
+            throw new Error(`TacPhone interApp: service "${service}" failed in "${method}": ${message}`, { cause: error });
         }
     }
 
@@ -481,7 +434,7 @@ export class AppApiRegistry {
                 try {
                     listener(services);
                 } catch (error) {
-                    console.error("TacPhone AppApi listener failed:", error);
+                    console.error("TacPhone interApp listener failed:", error);
                 }
             }
         } finally {
@@ -494,11 +447,7 @@ export class AppApiRegistry {
         if (this.unsubscribePanels)
             return;
 
-        const directory = window.PanelDirectory;
-        if (!directory)
-            return;
-
-        this.unsubscribePanels = directory.onDidChange(this.handlePanelsChanged);
+        this.unsubscribePanels = panelDirectory.onDidChange(this.handlePanelsChanged);
     }
 
     /** Registered providers of a service after the panel/version/instance filters. */
@@ -516,7 +465,7 @@ export class AppApiRegistry {
                 if (candidate.version === version)
                     return true;
 
-                console.warn(`TacPhone AppApi: skipping service "${service}" version ${candidate.version}; version ${version} was requested.`);
+                console.warn(`TacPhone interApp: skipping service "${service}" version ${candidate.version}; version ${version} was requested.`);
                 return false;
             });
         }
@@ -536,7 +485,7 @@ export class AppApiRegistry {
      * not mounted (and therefore not registered) yet.
      */
     private candidatePanels(service: string, version: number | undefined, panelId: string | undefined): PanelInfo[] {
-        const panels = window.PanelDirectory?.list() ?? [];
+        const panels = panelDirectory.list();
 
         const candidates = panels.filter(panel => {
             if (panelId !== undefined)
@@ -552,7 +501,7 @@ export class AppApiRegistry {
                 if (!registered || registered.version === version)
                     return true;
 
-                console.warn(`TacPhone AppApi: skipping panel "${panel.title || panel.tabId}" because it provides service "${service}" version ${registered.version}, not ${version}.`);
+                console.warn(`TacPhone interApp: skipping panel "${panel.title || panel.tabId}" because it provides service "${service}" version ${registered.version}, not ${version}.`);
                 return false;
             });
         }
@@ -596,7 +545,7 @@ export class AppApiRegistry {
 
     /** Panel snapshot for an instance id, falling back to a bare tab id. */
     private panelByInstanceOrTab(id: string): PanelInfo | undefined {
-        const panels = window.PanelDirectory?.list() ?? [];
+        const panels = panelDirectory.list();
         return panels.find(panel => panel.instanceId === id) ?? panels.find(panel => panel.tabId === id);
     }
 
@@ -619,7 +568,7 @@ export class AppApiRegistry {
         if (policy === "first")
             return candidates[0];
 
-        const focusedTabId = window.PanelDirectory?.focused()?.tabId;
+        const focusedTabId = panelDirectory.focused()?.tabId;
         const focusedMatch = focusedTabId === undefined
             ? undefined
             : candidates.find(candidate => panelOf(candidate).tabId === focusedTabId);
@@ -627,7 +576,7 @@ export class AppApiRegistry {
         if (policy === "focused")
             return focusedMatch;
 
-        const largestTabId = window.PanelDirectory?.largest()?.tabId;
+        const largestTabId = panelDirectory.largest()?.tabId;
         const largestMatch = largestTabId === undefined
             ? undefined
             : candidates.find(candidate => panelOf(candidate).tabId === largestTabId);
@@ -659,7 +608,7 @@ export class AppApiRegistry {
             try {
                 chosen = await chooser({ service, candidates, reason });
             } catch (error) {
-                console.error(`TacPhone AppApi: the target chooser failed for service "${service}":`, error);
+                console.error(`TacPhone interApp: the target chooser failed for service "${service}":`, error);
                 failed = true;
             }
 
@@ -672,7 +621,7 @@ export class AppApiRegistry {
                 if (match)
                     return match;
 
-                console.warn(`TacPhone AppApi: the target chooser returned unknown panel "${chosen}" for service "${service}"; using the automatic policy.`);
+                console.warn(`TacPhone interApp: the target chooser returned unknown panel "${chosen}" for service "${service}"; using the automatic policy.`);
             }
         }
 
@@ -716,7 +665,7 @@ export class AppApiRegistry {
                 try {
                     value = check();
                 } catch (error) {
-                    console.error("TacPhone AppApi: checking a service while waiting failed:", error);
+                    console.error("TacPhone interApp: checking a service while waiting failed:", error);
                     value = undefined;
                 }
 
@@ -736,11 +685,5 @@ export class AppApiRegistry {
     }
 }
 
-declare global {
-    interface Window {
-        // Inter-app service registry and target routing (see Backend/AppApi.ts).
-        AppApi: AppApiRegistry;
-    }
-}
-
-window.AppApi = new AppApiRegistry();
+/** The one inter-app service registry of this page. */
+export const interApp = new InterAppRegistry();

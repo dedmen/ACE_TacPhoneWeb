@@ -314,7 +314,7 @@ export class MarkerLayerManager {
 
     private loadMarkerConfig(): Promise<void> {
         return requestWithTimeout(
-            window.Networking.Request({a: "ACE_TacPhone_Map", c: "GetMarkerTypes"}),
+            window.TacPhone.networking.Request({a: "ACE_TacPhone_Map", c: "GetMarkerTypes"}),
             'GetMarkerTypes',
         ).then((markerInfo: object | null) => {
             if (this.destroyed || !markerInfo) {
@@ -360,7 +360,7 @@ export class MarkerLayerManager {
 
     private loadInitialMarkers(): Promise<MarkerUpdate[] | null> {
         return requestWithTimeout(
-            window.Networking.Request({a: "ACE_TacPhone_Map", c: "GetAllMarkers"}),
+            window.TacPhone.networking.Request({a: "ACE_TacPhone_Map", c: "GetAllMarkers"}),
             'GetAllMarkers',
         ).then((markerInfo: object | null) => {
             if (this.destroyed || !markerInfo) {
@@ -377,7 +377,7 @@ export class MarkerLayerManager {
 
     private loadPlayerId(): Promise<string | null> {
         return requestWithTimeout(
-            window.Networking.Request({a: "ACE_TacPhone_Map", c: "GetPlayerID"}),
+            window.TacPhone.networking.Request({a: "ACE_TacPhone_Map", c: "GetPlayerID"}),
             'GetPlayerID',
         ).then((playerId: unknown) => {
             if (typeof playerId === 'string' && playerId !== '') {
@@ -458,7 +458,7 @@ export class MarkerLayerManager {
             return cachedTexture;
         }
 
-        const texturePromise = window.Networking.LoadGameFileTexture(iconPath, 64).then((iconData) => {
+        const texturePromise = window.TacPhone.networking.LoadGameFileTexture(iconPath, 64).then((iconData) => {
             // The manager may have been destroyed while the texture was loading.
             if (!this.destroyed) {
                 this.markerTextures.set(iconPath, iconData); // Replace promise with real data, so that others won't wait on it

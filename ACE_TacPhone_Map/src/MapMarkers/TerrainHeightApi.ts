@@ -45,7 +45,7 @@ export function getTerrainHeights(
         requestPositions.push([position[0], position[1]]);
     }
 
-    return window.Networking.Request({
+    return window.TacPhone.networking.Request({
         a: 'ACE_TacPhone_Map',
         c: 'getTerrainHeight',
         positions: requestPositions,

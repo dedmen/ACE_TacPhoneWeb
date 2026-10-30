@@ -22,7 +22,7 @@
 // that follows it, and a rubber-band snap-back never counts as a tap either.
 
 import React from "react";
-import type { TacPhoneNotification } from "../Backend/Notifications";
+import type { TacPhoneNotification } from "@ace-tacphone/api";
 import styles from "./NotificationHost.module.css";
 
 type NotificationHostProps = {
@@ -39,11 +39,11 @@ const SWIPE_THRESHOLD_RATIO = 0.25;
 // Module scope on purpose: `useSyncExternalStore` resubscribes whenever the
 // subscribe function identity changes, so these must not be re-created per render.
 function subscribeToNotifications(listener: () => void): () => void {
-    return window.Notifications.subscribe(listener);
+    return window.TacPhone.notifications.subscribe(listener);
 }
 
 function getNotificationsSnapshot(): readonly TacPhoneNotification[] {
-    return window.Notifications.getSnapshot();
+    return window.TacPhone.notifications.getSnapshot();
 }
 
 type NotificationCardProps = {
@@ -84,7 +84,7 @@ function NotificationCard(props: NotificationCardProps): React.ReactNode {
             return;
 
         onActivate(notification);
-        window.Notifications.dismiss(notification.id);
+        window.TacPhone.notifications.dismiss(notification.id);
     };
 
     const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>): void => {
@@ -139,7 +139,7 @@ function NotificationCard(props: NotificationCardProps): React.ReactNode {
 
         if (Math.abs(distance) >= threshold) {
             // Keep the offset: the card fades out where the finger left it.
-            window.Notifications.dismiss(notification.id);
+            window.TacPhone.notifications.dismiss(notification.id);
             return;
         }
 
@@ -161,7 +161,7 @@ function NotificationCard(props: NotificationCardProps): React.ReactNode {
     const handleCloseClick = (event: React.MouseEvent<HTMLButtonElement>): void => {
         // Do not let the close button also activate the card.
         event.stopPropagation();
-        window.Notifications.dismiss(notification.id);
+        window.TacPhone.notifications.dismiss(notification.id);
     };
 
     /** Keeps the swipe from starting on the close button. */

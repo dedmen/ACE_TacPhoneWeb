@@ -3,10 +3,9 @@ import { defineConfig, type PluginOption } from 'vite'
 import react, { reactCompilerPreset } from '@vitejs/plugin-react'
 import babel from '@rolldown/plugin-babel'
 import { libInjectCss } from 'vite-plugin-lib-inject-css'
-//import { viteSingleFile } from "vite-plugin-singlefile"
-import { viteSingleFile } from "./build/singlefile.ts"
+import { viteSingleFile } from '@ace-tacphone/build/singlefile'
 import Inspect from 'vite-plugin-inspect'
-import { SHARED_MODULE_SPECIFIERS } from '../ACE_TacPhone_Main/shared-modules.js'
+import { SHARED_MODULE_SPECIFIERS } from '@ace-tacphone/build/shared-modules'
 
 // https://vite.dev/config/
 export default defineConfig(({ mode, command }) => {

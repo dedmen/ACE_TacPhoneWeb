@@ -205,16 +205,16 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
 - [ ] **[bug]** The placeholder panel ships: `ACE_TacPhone_Map_Placeholder`
   ("Wololo!", `src/main.tsx:29-41`, documented at `README.md:101`). Panel ids are
   persisted in layouts, so removing it later breaks saved layouts. Remove now.
-- [ ] **[wontfix]** `src/CommandRegistry.ts:1` reads `window.TacPhoneUtils` at
+- [x] **[wontfix]** `src/CommandRegistry.ts:1` reads `window.TacPhone.utils` at
   module scope. Host globals are always present when an app is loaded (apps are
   only loaded through the host; the standalone `preview` path is not supported),
-  so no guard is needed.
+  so no guard is needed; apps use `window.TacPhone.utils`.
 - [x] **[bug]** `dist/ace_tacphone_map.d.ts` is `export { }` (12 bytes) although
-  `package.json` points `types`/`exports` at it. Fixed: the Map build calls the
-  shared `ACE_TacPhone_Main/scripts/bundle-api-types.mjs --app ...` script, which
-  emits a self-contained declaration exporting `MapApi`, `MapViewState`,
-  `MapFlyToOptions`, `MAP_SERVICE`, and `MAP_SERVICE_VERSION`. Apps no longer
-  keep their own copy of that bundler.
+  `package.json` points `types`/`exports` at it. Fixed: the Map build calls
+  `tacphone-build bundle-api-types --app . --entry src/api.ts --name ACE_TacPhone_Map`,
+  which emits a self-contained declaration exporting `MapApi`, `MapViewState`,
+  `MapFlyToOptions`, `MAP_SERVICE`, and `MAP_SERVICE_VERSION`. This now lives in
+  `@ace-tacphone/build`; apps no longer keep their own copy of that bundler.
 - [x] **[cleanup]** Broadcast log spam when no map panel is mounted: marker updates are only sent to interested clients, so no broadcast reaches a page without a Map panel. Log at debug level.
 - [ ] **[cleanup]** `Map.tsx:96` `forceUpdate` hack; a state bump or ref-driven
   redraw would be clearer.
@@ -306,7 +306,7 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
   model instead of ad-hoc state. The selected app is read back from the tab config
   in `componentDidMount()` via `PanelInstance.getConfig()`; the chooser element
   itself is still local component state.
-- [x] **[decision]** Host UI for `AppApi.setTargetChooser(...)`. The
+- [x] **[decision]** Host UI for `window.TacPhone.interApp.setTargetChooser(...)`. The
   user-selection dialog (panel title, panel/app id, instance id or tab id,
   floating badge, area) is implemented in `src/Panels/TargetChooserDialog.tsx`
   and installed once by `ACE_TacPhone_Main/src/App.tsx`, so `policy: "ask"` is a
@@ -320,11 +320,11 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
 - [x] Removed all references to and handling of the legacy `devapps/` folder.
   Discovery now only uses `dev-apps.local.json`, `TACPHONE_DEV_APPS`, or sibling
   folders with the `"tacphone"` marker; `AGENTS.md`, `ACE_TacPhone_Main/README.md`,
-  `dev-apps.js`, `vite.config.ts`, `AppDirectory.ts` and
-  `scripts/sync-api-types.mjs` were updated. The `/devapps/<AppName>/` URL prefix
-  is unchanged.
+  `dev-apps.js`, `vite.config.ts`, and `AppDirectory.ts` were updated. The
+  `/devapps/<AppName>/` URL prefix is unchanged. (The old `scripts/sync-api-types.mjs`
+  script was moved into `@ace-tacphone/build` as `tacphone-build sync-api-types`.)
 
-## Inter-app API (panels and `AppApi`)
+## Inter-app API (panels and `window.TacPhone.interApp`)
 
 - [x] **[decision]** Native window popouts (`PanelInfo.isPoppedOut`,
   `'window'` sub-layouts) need `window.open` and a separate document, so they
@@ -345,7 +345,7 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
   does yet).
 - [ ] **[decision]** Cross-app events/subscriptions beyond method calls (for
   example "markers changed" notifications).
-- [ ] **[cleanup]** `AppApi.waitFor(service, predicate)` lifecycle helper, so
+- [ ] **[cleanup]** `interApp.waitFor(service, predicate)` lifecycle helper, so
   consumers can await a registration instead of choosing a `waitMs` budget.
 - [x] **[decision]** Auth/permissions between apps. **Decision: no permission
   model.** Page-local calls are deliberately unauthenticated; the whole web UI and

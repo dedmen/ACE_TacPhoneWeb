@@ -1,6 +1,10 @@
 /**
  * Map service API for inter-app communication.
- * 
+ *
+ * This is the app's public type surface and the entry point of
+ * `tacphone-build bundle-api-types`, which emits a self-contained
+ * `dist/ace_tacphone_map.d.ts` from it. Keep it free of host imports.
+ *
  * Other apps can use this to move the map view. The implementation is built
  * on OpenLayers but the public interface is framework-free: callbacks and
  * methods close over the component instance.

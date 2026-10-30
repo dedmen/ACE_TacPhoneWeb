@@ -1,10 +1,10 @@
 // Host-side notification stack (phone-style banners).
 //
-// Apps call `window.Notifications.show()` to raise a notification; the host UI
-// (Panels/NotificationHost.tsx) subscribes through `subscribe()` and renders the
-// current snapshot. The store is deliberately React-free: it lives in Backend so
-// it can be used before the UI mounts, and so the snapshot can be consumed with
-// `useSyncExternalStore`.
+// Apps call `window.TacPhone.notifications.show()` to raise a notification; the
+// host UI (Panels/NotificationHost.tsx) subscribes through `subscribe()` and
+// renders the current snapshot. The store is deliberately React-free: it lives in
+// Backend so it can be used before the UI mounts, and so the snapshot can be
+// consumed with `useSyncExternalStore`.
 //
 // Tap actions are resolved by the host, not here: the store only carries the
 // sender-provided `action` on the stored notification. The action is always a
@@ -14,37 +14,20 @@
 // and a dismissal starts the exit animation, which is a second, short timer.
 // `dismiss()` is idempotent: repeated calls return while the removal timer runs.
 
-/** Runs when a notification is tapped; may be async. */
-export type NotificationTapHandler = (
-    notification: TacPhoneNotification
-) => void | Promise<void>;
+import type {
+    NotificationCenterApi,
+    NotificationOptions,
+    TacPhoneNotification,
+} from "./Types";
+import { appDirectory } from "./AppDirectory";
 
-/** The tap action of a notification. */
-export type NotificationAction = NotificationTapHandler;
-
-/** Options accepted by NotificationCenter.show(). */
-export interface NotificationOptions {
-    title: string;
-    body?: string;
-    /** App name, used to resolve the default app icon. */
-    app?: string;
-    /** Explicit icon URL; overrides the app icon. */
-    icon?: string;
-    /** Milliseconds; 0 = permanent until dismissed. Default 15000. */
-    duration?: number;
-    /** Arbitrary payload available to the tap handler on the stored notification. */
-    data?: unknown;
-    /** Runs when the notification is tapped. */
-    action?: NotificationAction;
-}
-
-/** Stored notification; what subscribers render. */
-export interface TacPhoneNotification extends NotificationOptions {
-    id: string;
-    createdAt: number;
-    /** True while the exit animation runs; the store removes it afterwards. */
-    closing?: boolean;
-}
+export type {
+    NotificationAction,
+    NotificationCenterApi,
+    NotificationOptions,
+    NotificationTapHandler,
+    TacPhoneNotification,
+} from "./Types";
 
 /** Default lifetime of a notification, in milliseconds. */
 const DEFAULT_DURATION = 15_000;
@@ -219,14 +202,13 @@ export class NotificationCenter
         }
     }
 
-    /** Default icon of an app: the first panel's GetTacPhoneIcon(). */
+    /** Default icon of an app: the resolved icon of its first panel. */
     private defaultIcon(app: string | undefined): string | undefined {
         if (!app)
             return undefined;
 
         try {
-            const icon = window.AppDirectory?.knownApps?.get(app)?.panels?.[0]?.GetTacPhoneIcon();
-            return typeof icon === "string" && icon.length > 0 ? icon : undefined;
+            return appDirectory.appIcon(app);
         } catch (error) {
             console.warn(`TacPhone failed to resolve the icon of app "${app}":`, error);
             return undefined;
@@ -234,11 +216,5 @@ export class NotificationCenter
     }
 }
 
-declare global {
-    interface Window {
-        // Host notification stack; see Backend/Notifications.ts.
-        Notifications: NotificationCenter;
-    }
-}
-
-window.Notifications = new NotificationCenter();
+/** The one notification stack of this page. */
+export const notificationCenter: NotificationCenterApi = new NotificationCenter();

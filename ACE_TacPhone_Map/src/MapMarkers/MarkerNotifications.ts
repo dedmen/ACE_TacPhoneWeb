@@ -15,8 +15,8 @@
 // the marker is focused in an already open, or newly opened, Map panel.
 
 import { mapCommandRegistry } from '../CommandRegistry';
-import type { MapApi } from '../MapApi';
-import type { TacPhoneNotification } from '../TacPhoneMain';
+import type { TacPhoneNotification } from '@ace-tacphone/api';
+import type { MapApi } from '../api';
 import type { MarkerUpdate } from './MarkerLayer';
 
 /** Marker names the app already knows about; a repeat upsert is only a move. */
@@ -126,7 +126,7 @@ export function notifyMarkerUpsert(marker: MarkerUpdate, localPlayerId?: string)
     const [x, y] = position;
     const label = markerLabel(type, text, shape);
 
-    window.Notifications.show({
+    window.TacPhone.notifications.show({
         title: "New map marker",
         body: label,
         app: "ACE_TacPhone_Map",
@@ -139,7 +139,7 @@ export function notifyMarkerUpsert(marker: MarkerUpdate, localPlayerId?: string)
             try {
                 // "ask" lets the host chooser pick between several open Map panels;
                 // openIfMissing covers a notification tapped with the Map closed.
-                const target = await window.AppApi.resolveAsync(
+                const target = await window.TacPhone.interApp.resolveAsync(
                     {
                         service: "map",
                         panelId: "ACE_TacPhone_Map",

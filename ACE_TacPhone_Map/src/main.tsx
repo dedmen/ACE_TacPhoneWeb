@@ -1,13 +1,19 @@
 import React from 'react';
 import App from './Map.tsx'
-import type { AppPanelInfo } from './TacPhoneMain';
+import {
+    TACPHONE_API_VERSION,
+    type AppPanelInfo,
+    type AppProps,
+} from '@ace-tacphone/api';
 import { mapCommandRegistry } from './CommandRegistry.ts';
 // Registers the module-scope marker notification backup handler, so a marker
 // still notifies while no Map panel (and therefore no marker layer) is mounted.
 import './MapMarkers/MarkerNotifications.ts';
 
+/** Contract version this app was built against; checked by the host. */
+export const apiVersion = TACPHONE_API_VERSION;
 
-class AppPlaceholder extends React.Component<{}, {loading: boolean}> {
+class AppPlaceholder extends React.Component<AppProps, {loading: boolean}> {
     render() {
         return (<><div style={{color: 'red'}}>Wololo!</div></>);
     }

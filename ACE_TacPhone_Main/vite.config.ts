@@ -2,7 +2,6 @@ import { defineConfig, normalizePath, type Plugin, type UserConfig } from 'vite'
 import react, { reactCompilerPreset } from '@vitejs/plugin-react'
 import babel from '@rolldown/plugin-babel'
 import { viteSingleFile } from "vite-plugin-singlefile"
-import dts from 'vite-plugin-dts'
 import { createHash } from 'node:crypto'
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { discoverDevApps } from './dev-apps.js'
@@ -13,7 +12,7 @@ import * as ReactDOM from 'react-dom';
 import * as ReactDOMClient from 'react-dom/client';
 import * as ReactJSXRuntime from 'react/jsx-runtime';
 import * as ReactCompilerRuntime from 'react/compiler-runtime';
-import { SHARED_MODULES } from './shared-modules.js';
+import { SHARED_MODULES } from '@ace-tacphone/build/shared-modules';
 
 // TypeScript checks that this map covers every specifier in SHARED_MODULES.
 const sharedModuleNamespaces: Record<(typeof SHARED_MODULES)[number]['specifier'], object> = {
@@ -182,13 +181,6 @@ export default defineConfig(async ({ mode }): Promise<UserConfig> => {
 
         plugins: [
             react(),
-            // Emit per-file declarations; scripts/bundle-api-types.mjs rolls the
-            // public API entry (src/TacPhoneMain.ts) into dist/TacPhoneMain.d.ts.
-            dts({
-                include: ['src'],
-                entryRoot: 'src',
-                tsconfigPath: './tsconfig.app.json',
-            }),
             babel({ presets: [reactCompilerPreset()] }),
             viteSingleFile(),
             devAppsPlugin(devApps, warnings),

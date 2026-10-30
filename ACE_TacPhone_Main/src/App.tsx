@@ -1,15 +1,9 @@
-// oxlint-disable no-unused-vars
-//import { useState } from 'react'
-//import reactLogo from './assets/react.svg'
-//import viteLogo from './assets/vite.svg'
-//import heroImg from './assets/hero.png'
 import React from 'react';
 import './App.css'
-import './Backend/Networking'
-import './Backend/AppDirectory'
-//import {CreateTacPhoneApp} from '../../ACE_TacPhone_Map'
+// Installs window.TacPhone before the first panel renders.
+import { GetTacPhoneHost } from './Backend/Host'
 
-import { Actions, AddIcon, BorderNode, DockLocation, Layout, Model, TabNode, TabSetNode, type IJsonModel, type ITabSetRenderValues } from 'flexlayout-react';
+import { Actions, AddIcon, BorderNode, DockLocation, Layout, Model, TabNode, TabSetNode, type IJsonModel, type ITabRenderValues, type ITabSetRenderValues } from 'flexlayout-react';
 import 'flexlayout-react/style/dark.css';  
 
 const LAYOUT_STORAGE_KEY = 'tacphone.layout';
@@ -113,55 +107,8 @@ function createLayoutModel(): Model {
     return Model.fromJson(defaultLayout);
 }
 
-//const MyPanel = () => {
-//    return CreateTacPhoneApp();
-//};
-/*
-class PlayerPosPanel extends React.Component<{},{
-    playerPos: Array<number>,
-    time: number
-}> {
-
-    interval: number | undefined;
-
-    constructor(props: {}) {
-        super(props);
-        this.state = {playerPos: [0,0,0], time: 0};  
-    }
-    componentDidMount() {
-        //this.interval = setInterval(() => this.tick(), 2000);
-    }
-
-    componentWillUnmount() {
-        clearInterval(this.interval);
-    }
-
-    
-    tick() {
-        window.Networking.Request({c: "GetPlayerPos"}).then(result => {
-            this.setState(() => ({
-                playerPos: result as Array<number>
-            }));
-        });
-
-        window.Networking.Request({c: "GetTime"}).then(result => {
-            this.setState(() => ({
-                time: result as unknown as number
-            }));
-        });
-    }
-
-
-    render() {
-        return <>
-        <div style={{ padding: 16, height: '50px' }}>Player is: [{this.state.playerPos[0]},{this.state.playerPos[1]},{this.state.playerPos[2]}]</div>
-        <div style={{ padding: 16, height: '50px' }}>Time is: {this.state.time}</div>
-        </>
-        ;
-    }
-};
-*/
-import type {NotificationTapHandler, TacPhoneNotification} from './Backend/Notifications'
+import type { NotificationTapHandler, PanelInstance, TacPhoneNotification } from '@ace-tacphone/api';
+import { panelDirectory } from './Backend/PanelDirectory';
 import {AppChooserPanel} from './Panels/AppChooserPanel'
 import {AppErrorBoundary} from './Panels/AppErrorBoundary'
 import {NotificationHost} from './Panels/NotificationHost'
@@ -173,6 +120,8 @@ class App extends React.Component<{}, {loading: boolean, error: string | undefin
 
     private model = createLayoutModel();
     private mounted = false;
+    /** In-flight app load; reused so StrictMode cannot load the apps twice. */
+    private loadPromise: Promise<void> | undefined;
 
     constructor(props: {})
     {
@@ -181,31 +130,100 @@ class App extends React.Component<{}, {loading: boolean, error: string | undefin
     }
 
     factory = (node: TabNode) => {
-        const component = node.getComponent()!;
+        const component = node.getComponent() ?? "";
         // The tab component is the app panel id, except for the app chooser,
         // which picks an app at runtime and reports it through setApp().
-        const panelId = component === "AppChooser" ? undefined : component;
-
-        let content: React.ReactNode;
-        if (component === "AppChooser"){
-            content = <AppChooserPanel />;
-        } else {
-            const panelInfo = window.AppDirectory.knownPanels.get(component);
-            content = panelInfo
-                ? (
-                    <AppErrorBoundary key={node.getId()} appName={panelInfo.id}>
-                        {React.createElement(panelInfo.appComponent, null)}
-                    </AppErrorBoundary>
-                )
-                : <div>Unknown panel?? {component}/{node.getName()}</div>;
-        }
+        const isChooser = component === "AppChooser";
+        const panelId = isChooser ? undefined : component;
 
         // One panel instance per mounted tab; floating popups use the same factory.
         return (
             <PanelBinding key={node.getId()} tabId={node.getId()} panelId={panelId}>
-                {content}
+                {(panel) => isChooser
+                    ? <AppChooserPanel panel={panel} node={node} model={this.model} />
+                    : this.renderPanelContent(panel, node, component)}
             </PanelBinding>
         );
+    }
+
+    /** Renders one app panel with the full AppProps contract. */
+    private renderPanelContent(panel: PanelInstance, node: TabNode, panelId: string): React.ReactNode {
+        const host = window.TacPhone;
+        const panelInfo = host.apps.knownPanels.get(panelId);
+
+        if (!panelInfo)
+            return <div>Unknown panel?? {panelId}/{node.getName()}</div>;
+
+        const AppComponent = panelInfo.appComponent;
+        const title = host.apps.getPanelMeta(panelId)?.title ?? panelId;
+
+        return (
+            <AppErrorBoundary key={panelId} appName={title}>
+                <AppComponent
+                    appId={host.apps.appNameForPanel(panelId) ?? panelId}
+                    panelId={panelId}
+                    node={node}
+                    model={this.model}
+                    panel={panel}
+                />
+            </AppErrorBoundary>
+        );
+    }
+
+    /**
+     * Draws the panel icon in the tab header. The host stores the resolved icon in
+     * the tab config (see PanelDirectory.setIcon), which flexlayout does not know
+     * about, so the leading slot is filled here. TabNode.getIcon() still wins when
+     * a layout sets the flexlayout icon attribute.
+     */
+    onRenderTab = (node: TabNode, renderValues: ITabRenderValues) => {
+        if (renderValues.leading !== undefined && renderValues.leading !== null)
+            return;
+
+        const icon = this.tabIcon(node);
+        if (icon)
+            renderValues.leading = <img src={icon} alt="" style={{ width: '1em', height: '1em' }} />;
+    }
+
+    /** Icon of the panel a tab runs, as cached by the app directory. */
+    private tabIcon(node: TabNode): string | undefined {
+        const fromAttribute = node.getIcon();
+        if (typeof fromAttribute === "string" && fromAttribute.length > 0)
+            return fromAttribute;
+
+        const config: unknown = node.getConfig();
+        if (typeof config === "object" && config !== null && !Array.isArray(config)) {
+            const fromConfig = (config as { icon?: unknown }).icon;
+            if (typeof fromConfig === "string" && fromConfig.length > 0)
+                return fromConfig;
+        }
+
+        const panelId = this.tabPanelId(node);
+        if (!panelId)
+            return undefined;
+
+        try {
+            return window.TacPhone.apps.getPanelMeta(panelId)?.icon;
+        } catch (error) {
+            console.error(`TacPhone failed to read the icon of panel "${panelId}":`, error);
+            return undefined;
+        }
+    }
+
+    /** App panel id of a tab: its flexlayout component, or the persisted config of a chooser tab. */
+    private tabPanelId(node: TabNode): string | undefined {
+        const component = node.getComponent();
+        if (typeof component === "string" && component.length > 0 && component !== "AppChooser")
+            return component;
+
+        const config: unknown = node.getConfig();
+        if (typeof config === "object" && config !== null && !Array.isArray(config)) {
+            const panelId = (config as { panelId?: unknown }).panelId;
+            if (typeof panelId === "string" && panelId.length > 0)
+                return panelId;
+        }
+
+        return undefined;
     }
 
     private loadLayoutFromGame = async (): Promise<Model | undefined> => {
@@ -214,7 +232,7 @@ class App extends React.Component<{}, {loading: boolean, error: string | undefin
             return undefined;
 
         try {
-            const layout = parseLayout(await window.Networking.Request({a: "main", c: "GetLayout"}));
+            const layout = parseLayout(await window.TacPhone.networking.Request({a: "main", c: "GetLayout"}));
             return createModelFromLayout(layout);
         } catch (error) {
             console.warn("Failed to request the TacPhone layout from the game.", error);
@@ -237,7 +255,7 @@ class App extends React.Component<{}, {loading: boolean, error: string | undefin
 
         // Placeholder: send the layout to the game for persistence. The game currently only
         // acknowledges the request; actually storing it there will be implemented later.
-        void window.Networking.Request({a: "main", c: "SaveLayout", layout}).catch(error => {
+        void window.TacPhone.networking.Request({a: "main", c: "SaveLayout", layout}).catch(error => {
             console.warn("Failed to send the TacPhone layout to the game.", error);
         });
     }
@@ -287,21 +305,32 @@ class App extends React.Component<{}, {loading: boolean, error: string | undefin
     }
 
     private loadApps = async () => {
+        // StrictMode mounts, unmounts and remounts the host in development: reuse
+        // the in-flight load instead of asking the game for the app list twice.
+        if (this.loadPromise)
+            return this.loadPromise;
+
+        this.loadPromise = this.runLoadApps();
+        return this.loadPromise;
+    }
+
+    private runLoadApps = async () => {
         this.setState({ loading: true, error: undefined });
 
         try {
-            await window.Networking.WhenReady();
+            const host = GetTacPhoneHost();
+            await host.networking.WhenReady();
 
             const [layout] = await Promise.all([
                 this.loadLayoutFromGame(),
-                window.AppDirectory.LoadAvailableApps()
+                host.apps.LoadAvailableApps()
             ]);
 
             // The layout from the game replaces the model built in the
             // constructor; the directory must follow it or it reports stale rects.
             if (layout) {
                 this.model = layout;
-                window.PanelDirectory.attach(this.model);
+                panelDirectory.attach(this.model);
             }
 
             if (this.mounted)
@@ -311,20 +340,24 @@ class App extends React.Component<{}, {loading: boolean, error: string | undefin
 
             if (this.mounted)
                 this.setState({ loading: false, error: error instanceof Error ? error.message : String(error) });
+        } finally {
+            // A finished load may be retried from the error screen.
+            this.loadPromise = undefined;
         }
     }
 
     componentDidMount(): void {
         this.mounted = true;
-        // Attach before the layout renders so window.PanelDirectory is populated
-        // as soon as the loading screen disappears.
-        window.PanelDirectory.attach(this.model);
+        // Attach before the layout renders so the panel directory is populated
+        // as soon as the loading screen disappears. attach() is idempotent, so a
+        // StrictMode remount does not add a second listener.
+        panelDirectory.attach(this.model);
         void this.loadApps();
     }
 
     componentWillUnmount(): void {
         this.mounted = false;
-        window.PanelDirectory.detach();
+        panelDirectory.detach();
     }
 
     render() {
@@ -347,13 +380,14 @@ class App extends React.Component<{}, {loading: boolean, error: string | undefin
                     model={this.model}
                     factory={this.factory} 
 
+                    onRenderTab={this.onRenderTab}
                     onRenderTabSet={this.onRenderTabSet}
                     onModelChange={this.onLayoutChanged}
                     realtimeResize={true}
                     supportsPopout={false}
                     />
             </div>  
-            {/* Installs window.AppApi's target chooser; overlays the whole phone. */}
+            {/* Installs the inter-app "ask" target chooser; overlays the whole phone. */}
             <TargetChooserDialog />
             {/* Notification banners are a fixed overlay too, so they sit outside the layout. */}
             <NotificationHost onActivate={this.onNotificationActivate} />

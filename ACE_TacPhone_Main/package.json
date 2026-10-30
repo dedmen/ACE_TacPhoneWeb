@@ -3,25 +3,25 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "types": "./dist/TacPhoneMain.d.ts",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build --mode release && node scripts/bundle-api-types.mjs && node scripts/sync-api-types.mjs && node scripts/check-shared-imports.mjs",
-    "build:debug": "tsc -b && vite build --mode debug && node scripts/bundle-api-types.mjs && node scripts/sync-api-types.mjs && node scripts/check-shared-imports.mjs",
-    "sync:api-types": "node scripts/sync-api-types.mjs",
-    "check:importmap": "node scripts/check-shared-imports.mjs",
+    "build": "tsc -b && vite build --mode release && tacphone-build check-shared-imports",
+    "build:debug": "tsc -b && vite build --mode debug && tacphone-build check-shared-imports",
+    "check:importmap": "tacphone-build check-shared-imports",
+    "check": "tsc -b",
     "lint": "oxlint",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@ace-tacphone/api": "*",
     "dockview-react": "^7.0.3",
     "flexlayout-react": "^0.10.1",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },
   "devDependencies": {
+    "@ace-tacphone/build": "*",
     "@babel/core": "^7.29.7",
-    "@microsoft/api-extractor": "^7.60.0",
     "@rolldown/plugin-babel": "^0.2.3",
     "@types/babel__core": "^7.20.5",
     "@types/node": "^24.13.2",
@@ -34,7 +34,6 @@
     "sass-embedded": "^1.100.0",
     "typescript": "~6.0.2",
     "vite": "^8.3.5",
-    "vite-plugin-dts": "^5.0.3",
     "vite-plugin-singlefile": "^2.3.3"
   }
 }

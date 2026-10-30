@@ -2,7 +2,7 @@ import React, { createRef, type RefObject } from 'react'
 import styles from './styles.module.scss'
 
 import "ol/ol.css";
-import type { PanelInstance } from './TacPhoneMain';
+import type { AppProps } from '@ace-tacphone/api';
 import Map from "ol/Map";
 import { View } from 'ol';
 import type { ViewOptions } from 'ol/View.js';
@@ -31,7 +31,7 @@ import {
     MAP_SERVICE_VERSION,
     type MapApi,
     type MapFlyToOptions,
-} from './MapApi';
+} from './api';
 
 // Game-side data interest for marker updates. Must match INTEREST_MARKERS in
 // addons/tacphone/apps/map/script_component.hpp.
@@ -138,7 +138,7 @@ interface MapState {
   polylineDraw: PolylineDrawState;
 }
 
-class App extends React.Component<{},MapState> {
+class App extends React.Component<AppProps,MapState> {
     // Setup the ref for the map canvas container element
     private mapRef: RefObject<HTMLDivElement | null> = createRef();
     // Keep the map instance directly on the class instance
@@ -151,11 +151,6 @@ class App extends React.Component<{},MapState> {
 
     /** Releases the marker-data interest; set while this panel is mounted. */
     private releaseMarkersInterest: (() => void) | undefined;
-
-    /** Static context type for class components. */
-    static contextType = window.TacPhoneUtils.PanelContext;
-    /** Panel instance from React context, or undefined before mount/context. */
-    declare context: PanelInstance | undefined;
 
     /** Unregister function for the Map API. */
     private unregisterMapApi: (() => void) | undefined;
@@ -192,7 +187,7 @@ class App extends React.Component<{},MapState> {
     };
 
 
-    constructor(props: {}) {
+    constructor(props: AppProps) {
         super(props);
         this.state = {
             layerSwitcherIsOpen: false,
@@ -293,7 +288,7 @@ class App extends React.Component<{},MapState> {
             return;
         }
 
-        this.releaseMarkersInterest = window.InterestRegistry.acquire(MAP_MARKERS_INTEREST);
+        this.releaseMarkersInterest = window.TacPhone.interests.acquire(MAP_MARKERS_INTEREST);
     }
 
     /**
@@ -372,7 +367,7 @@ class App extends React.Component<{},MapState> {
         // Delete key removes the hovered player marker.
         window.addEventListener('keydown', this.handleWindowKeyDown);
 
-        void window.Networking.LoadGameTerrain({ drawTreeObjects: false, layerMountains: true, simpleRoads: true })
+        void window.TacPhone.networking.LoadGameTerrain({ drawTreeObjects: false, layerMountains: true, simpleRoads: true })
             .then((svgString) => {
                 const bytes = new TextEncoder().encode(svgString);
                 return this.applyNewTerrainSVG(bytes);
@@ -391,7 +386,7 @@ class App extends React.Component<{},MapState> {
     }
 
     private buildAndRegisterMapApi(): void {
-        if (this.map === null || !this.context) {
+        if (this.map === null) {
             return;
         }
 
@@ -474,7 +469,7 @@ class App extends React.Component<{},MapState> {
             },
         };
 
-        const registration = window.AppApi.register(this.context, {
+        const registration = window.TacPhone.interApp.register(this.props.panel, {
             service: MAP_SERVICE,
             version: MAP_SERVICE_VERSION,
             api,
@@ -491,7 +486,7 @@ class App extends React.Component<{},MapState> {
         this.releaseMarkersInterestIfHeld();
 
         /**
-         * Unregister the MapApi BEFORE map teardown, so that window.AppApi.list()
+         * Unregister the MapApi BEFORE map teardown, so that window.TacPhone.interApp.list()
          * and other lookups see the cleanup immediately. The pendingFlyTo is now
          * stale (map is null), so we clear it as well.
          */

@@ -1,8 +1,11 @@
 // This is a helper that can be used by other apps
 // Because there is only one OnMessageFromGame() handler per App, there needs to be a way to route messages to the panels that want it
+//
+// Apps construct one through `window.TacPhone.utils.CommandRegistry`.
 
+import type { CommandHandler } from "./Types";
 
-export type CommandHandler = (payload: object) => void;
+export type { CommandHandler } from "./Types";
 
 export class CommandRegistry {
   // Internal map tracking a Set of callbacks for each action string
@@ -62,8 +65,3 @@ export class CommandRegistry {
     this.registry.clear();
   }
 }
-
-
-// The apps don't have access to our code itself, we need to store the prototype globally so they can access it
-
-window.TacPhoneUtils = {...window.TacPhoneUtils, CommandRegistry};

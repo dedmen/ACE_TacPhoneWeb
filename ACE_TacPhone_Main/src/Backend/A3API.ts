@@ -93,8 +93,8 @@ export class A3API {
 
 declare global {
     interface Window {
-        // Internal engine shim. Apps should use window.Networking so they
-        // keep working in external-browser mode.
+        // Internal engine shim. Apps should use window.TacPhone.networking so
+        // they keep working in external-browser mode.
         A3API: A3API;
     }
 }

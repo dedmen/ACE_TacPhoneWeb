@@ -1,24 +1,39 @@
 // Host-side directory of the panels (tabs) that are currently open.
 //
-// Apps use `window.PanelDirectory` to enumerate the open panels, find out which
-// app runs in each of them, activate one, or open a new app panel either as a
-// docked tab or (the default) as a floating popup. The global is also declared
-// in src/TacPhoneMain.ts, which is the source of dist/TacPhoneMain.d.ts.
+// Apps reach it through `window.TacPhone.panels` to enumerate the open panels,
+// find out which app runs in each of them, activate one, or open a new app panel
+// either as a docked tab or (the default) as a floating popup.
 //
 // The exported surface is deliberately panel-library agnostic: no React import,
 // and no flexlayout-react type is part of an exported interface. flexlayout is
 // only used inside the implementation so the panel library can be swapped later
 // without changing app code.
 //
-// Host lifecycle (WP2): App.tsx calls attach(model) with the model it renders
-// and detach() on unmount; Panels/PanelHost.tsx calls createInstance() in the
-// panel binding constructor and disposeInstance() when it unmounts.
+// Host lifecycle: App.tsx calls attach(model) with the model it renders and
+// detach() on unmount; Panels/PanelHost.tsx calls createInstance() in the panel
+// binding constructor and disposeInstance() when it unmounts.
 
 import { Actions, DockLocation, Model, TabNode, TabSetNode } from "flexlayout-react";
 import type { Action, IJsonRowNode, ILayoutType, Node as FlexNode } from "flexlayout-react";
+import type {
+    OpenPanelOptions,
+    OpenPanelResult,
+    PanelDirectoryApi,
+    PanelInfo,
+    PanelInstance,
+    PanelPlacement,
+    PanelRect,
+} from "@ace-tacphone/api";
+
+import { appDirectory } from "./AppDirectory";
+
+export type { OpenPanelOptions, OpenPanelResult, PanelInfo, PanelInstance, PanelPlacement, PanelRect };
 
 /** Tab component used by the app chooser; such a tab has no app of its own. */
 const APP_CHOOSER_COMPONENT = "AppChooser";
+
+/** Config key the host stores the resolved tab icon under. */
+const TAB_ICON_KEY = "icon";
 
 /** Share of the main layout covered by a default floating popup. */
 const FLOAT_SIZE_RATIO = 0.6;
@@ -31,95 +46,6 @@ const FLOAT_CASCADE_STEPS = 10;
 /** Used while the main layout has not been rendered yet (its root rect is empty). */
 const FALLBACK_LAYOUT_WIDTH = 800;
 const FALLBACK_LAYOUT_HEIGHT = 600;
-
-/** Rectangle in the coordinates of the layout that contains the node. */
-export interface PanelRect {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-}
-
-/** How PanelDirectory.open() places a new panel. */
-export type PanelPlacement = "float" | "tab";
-
-/** Options for PanelDirectory.open(). */
-export interface OpenPanelOptions {
-    /** "float" (default) opens a floating popup, "tab" adds a docked tab. */
-    placement?: PanelPlacement;
-    /** Select the new tab. Default true. */
-    select?: boolean;
-    /** "tab" only: target tabset id. Defaults to the active tabset, then the first one. */
-    tabsetId?: string;
-    /** "float" only: popup rectangle; individual fields override the default placement. */
-    rect?: Partial<PanelRect>;
-    /** Stored in the tab config, so it is persisted with the layout. */
-    config?: unknown;
-}
-
-/** Result of a successful PanelDirectory.open(). */
-export interface OpenPanelResult {
-    /** Id of the created tab node. */
-    tabId: string;
-    /** Model.MAIN_LAYOUT_ID for "tab", the sub-layout id for "float". */
-    layoutId: string;
-    /** Id of the tabset that now holds the new tab. */
-    tabSetId: string;
-}
-
-/** Snapshot of one open panel. */
-export interface PanelInfo {
-    /** Present only while the tab content is mounted, i.e. while its app is running. */
-    instanceId?: string;
-    /** Id of the tab node; stable across layout save/load. */
-    tabId: string;
-    /** Id of the tabset that holds the tab; undefined for border tabs. */
-    tabSetId?: string;
-    /** Main layout id or the id of a floating/window sub-layout. */
-    layoutId: string;
-    /** AppPanelInfo.id; undefined for an unassigned app chooser tab. */
-    panelId?: string;
-    /** AppDirectory app name that owns panelId. */
-    appName?: string;
-    /** Tab title (a user rename wins), falling back to the panel default title. */
-    title: string;
-    /** True while a PanelInstance exists for this tab, i.e. its app content is running. */
-    mounted: boolean;
-    /** True when this is the selected tab of its tabset. */
-    isSelected: boolean;
-    /** True when this tab's tabset is the active/focused tabset of its layout. */
-    isActive: boolean;
-    /** True while the tab content is rendered. */
-    isVisible: boolean;
-    /** True when the panel lives in a floating popup sub-layout. */
-    isFloating: boolean;
-    /** True when the panel lives in a native window popout sub-layout (not supported in game). */
-    isPoppedOut: boolean;
-    /** Rect of the tabset in the coordinates of its own layout. */
-    rect: PanelRect;
-    /** rect.width * rect.height. */
-    area: number;
-}
-
-/**
- * Live handle for one mounted app content, delivered to apps through the
- * PanelContext. API registration goes through window.AppApi, not through this
- * handle, to keep the two modules decoupled.
- */
-export interface PanelInstance {
-    /** Host counter id, e.g. "panel-7"; new on every mount. */
-    readonly instanceId: string;
-    /** Tab the content is rendered in. */
-    readonly tabId: string;
-    /** Current snapshot of this panel. */
-    getInfo(): PanelInfo;
-    /** Persisted config of the tab, as stored in the saved layout. */
-    getConfig(): unknown;
-    /** Selects the tab and focuses its tabset (and brings a popup to the front). */
-    activate(): boolean;
-    /** Switches the app shown in the tab; undefined means "no app assigned". */
-    setApp(panelId: string | undefined): void;
-}
 
 interface InstanceRecord {
     instanceId: string;
@@ -148,6 +74,11 @@ function tabTitle(tab: TabNode): string {
     return typeof name === "string" ? name : "";
 }
 
+/** True for a plain object, i.e. a tab config we can merge into. */
+function isConfigObject(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 /**
  * Resolves the app panel id of a tab: the live instance override wins, then the
  * tab component (unless it is the app chooser), then the persisted tab config.
@@ -158,8 +89,8 @@ function tabPanelId(tab: TabNode): string | undefined {
         return component;
 
     const config: unknown = tab.getConfig();
-    if (typeof config === "object" && config !== null && !Array.isArray(config)) {
-        const panelId = (config as { panelId?: unknown }).panelId;
+    if (isConfigObject(config)) {
+        const panelId = config.panelId;
         if (typeof panelId === "string" && panelId.length > 0)
             return panelId;
     }
@@ -230,20 +161,32 @@ class PanelInstanceHandle implements PanelInstance {
     setApp(panelId: string | undefined): void {
         this.directory.setPanelId(this.instanceId, panelId);
     }
+
+    /** Updates the tab title. */
+    setTitle(title: string): void {
+        this.directory.setTitle(this.tabId, title);
+    }
+
+    /** Updates the tab icon. */
+    setIcon(icon: string): void {
+        this.directory.setIcon(this.tabId, icon);
+    }
 }
 
 /**
  * Directory of the open panels of the current layout.
  *
- * One instance lives at module scope as `window.PanelDirectory`; the host
+ * One instance lives at module scope as `window.TacPhone.panels`; the host
  * attaches the flexlayout model it renders to it, and apps read the panel list
  * from it. Every method is safe to call before a model is attached.
  */
-export class PanelDirectory {
+export class PanelDirectory implements PanelDirectoryApi {
     private model: Model | undefined;
     private readonly listeners = new Set<(panels: PanelInfo[]) => void>();
     private readonly instances = new Map<string, InstanceRecord>();
     private readonly instanceByTab = new Map<string, string>();
+    /** Unmount disposals delayed one task so StrictMode's simulated unmount can be undone. */
+    private readonly pendingDisposals = new Map<string, number>();
     private instanceCounter = 0;
     private lastFocusedTabId: string | undefined;
     private subLayoutTypes: Map<string, ILayoutType> | undefined;
@@ -383,8 +326,8 @@ export class PanelDirectory {
 
     /**
      * The biggest panel of the main layout, optionally restricted to one app
-     * panel id. Floating popups are excluded in this pass (D5): areas of separate
-     * layouts are not comparable.
+     * panel id. Floating popups are excluded: areas of separate layouts are not
+     * comparable.
      */
     largest(panelId?: string): PanelInfo | undefined {
         let biggest: PanelInfo | undefined;
@@ -451,20 +394,22 @@ export class PanelDirectory {
             return undefined;
         }
 
-        const panel = window.AppDirectory?.knownPanels?.get(panelId);
-        if (!panel) {
+        if (!appDirectory.knownPanels.has(panelId)) {
             console.warn(`TacPhone cannot open unknown panel "${panelId}".`);
             return undefined;
         }
 
         const title = this.defaultTitle(panelId) || panelId;
         const select = options.select ?? true;
+        // The tab config carries the app panel id and the resolved icon, so a
+        // restored layout shows the same tab before the app is mounted.
+        const config = this.tabConfig(panelId, options.config);
 
         try {
             if ((options.placement ?? "float") === "float")
-                return this.openFloat(model, panelId, title, options, select);
+                return this.openFloat(model, panelId, title, options, config, select);
 
-            return this.openTab(model, panelId, title, options, select);
+            return this.openTab(model, panelId, title, options, config, select);
         } catch (error) {
             console.error(`TacPhone failed to open panel "${panelId}":`, error);
             return undefined;
@@ -481,14 +426,26 @@ export class PanelDirectory {
     }
 
     /**
-     * Creates the runtime instance for a mounting tab and returns its handle.
-     * Called by the host's panel binding, never by apps.
+     * Returns the runtime instance of a mounting tab, creating it on first call.
+     *
+     * Idempotent: a second call for the same tab returns the existing instance
+     * instead of replacing it, so a component that mounts twice (StrictMode, a
+     * re-render of the binding) cannot produce two instances for one tab.
      */
     createInstance(tabId: string, panelId?: string): PanelInstance {
-        const previousInstanceId = this.instanceByTab.get(tabId);
-        if (previousInstanceId) {
-            console.warn(`TacPhone panel tab "${tabId}" already has an instance; replacing it.`);
-            this.disposeInstance(previousInstanceId);
+        const existingId = this.instanceByTab.get(tabId);
+        if (existingId) {
+            const existing = this.instances.get(existingId);
+            if (existing) {
+                this.cancelPendingDisposal(tabId);
+
+                if (panelId !== undefined && existing.panelId !== panelId) {
+                    existing.panelId = panelId;
+                    this.notifyChanged();
+                }
+
+                return existing.handle;
+            }
         }
 
         const instanceId = `panel-${++this.instanceCounter}`;
@@ -501,18 +458,47 @@ export class PanelDirectory {
         return handle;
     }
 
-    /** Removes the runtime instance of an unmounting tab. Unknown ids are ignored. */
+    /**
+     * Removes the runtime instance of an unmounting tab. Unknown ids are ignored.
+     *
+     * Removal is deferred one task: React StrictMode unmounts and remounts a
+     * component in development, and the remount calls createInstance() again for
+     * the same tab. Cancelling the pending removal there keeps the same handle,
+     * so panel registrations and app service registrations survive the double
+     * mount instead of pointing at a dead instance.
+     */
     disposeInstance(instanceId: string): void {
         const record = this.instances.get(instanceId);
         if (!record)
             return;
 
-        this.instances.delete(instanceId);
+        this.cancelPendingDisposal(record.tabId);
 
-        if (this.instanceByTab.get(record.tabId) === instanceId)
-            this.instanceByTab.delete(record.tabId);
+        const tabId = record.tabId;
+        const timer = window.setTimeout(() => {
+            if (this.pendingDisposals.get(tabId) === timer)
+                this.pendingDisposals.delete(tabId);
 
-        this.notifyChanged();
+            // A newer instance for this tab wins; never remove it by mistake.
+            if (this.instanceByTab.get(tabId) !== instanceId)
+                return;
+
+            this.instances.delete(instanceId);
+            this.instanceByTab.delete(tabId);
+            this.notifyChanged();
+        }, 0);
+
+        this.pendingDisposals.set(tabId, timer);
+    }
+
+    /** Cancels a deferred unmount disposal for a tab that mounted again. */
+    private cancelPendingDisposal(tabId: string): void {
+        const timer = this.pendingDisposals.get(tabId);
+        if (timer === undefined)
+            return;
+
+        window.clearTimeout(timer);
+        this.pendingDisposals.delete(tabId);
     }
 
     /** Sets the app panel id an instance shows; used when a tab switches app. */
@@ -538,24 +524,52 @@ export class PanelDirectory {
     }
 
     /**
-     * Stores the config of a tab in the layout model. The host's app chooser uses
-     * this to persist which app its tab runs, so the panel directory can report
-     * (and a restored layout can keep) an app that is not mounted. Unknown tab
-     * ids are ignored.
+     * Merges the given fields into the stored config of a tab. The host's app
+     * chooser uses this to persist which app its tab runs, and an app uses it
+     * through `PanelInstance.setIcon()`; the remaining config keys (its own data,
+     * the icon, ...) are kept.
+     *
+     * Unknown tab ids are ignored.
      */
     setPanelConfig(tabId: string, config: unknown): void {
+        if (!isConfigObject(config))
+            return;
+
+        const current = this.getPanelConfig(tabId);
+        const merged = isConfigObject(current) ? { ...current, ...config } : config;
+
+        this.applyTabConfig(tabId, merged);
+    }
+
+    /** Updates the title of a tab; unknown ids are ignored. */
+    setTitle(tabId: string, title: string): void {
         const model = this.model;
-        if (!model)
+        if (!model || typeof title !== "string" || title.length === 0)
             return;
 
         if (!(model.getNodeById(tabId) instanceof TabNode))
             return;
 
         try {
-            model.doAction(Actions.updateNodeAttributes(tabId, { config }));
+            model.doAction(Actions.updateNodeAttributes(tabId, { name: title }));
         } catch (error) {
-            console.error(`TacPhone failed to update the config of tab "${tabId}":`, error);
+            console.error(`TacPhone failed to set the title of tab "${tabId}":`, error);
+            return;
         }
+
+        this.notifyChanged();
+    }
+
+    /** Updates the icon of a tab, keeping the rest of its config; unknown ids are ignored. */
+    setIcon(tabId: string, icon: string): void {
+        if (typeof icon !== "string")
+            return;
+
+        const current = this.getPanelConfig(tabId);
+        const config = isConfigObject(current) ? { ...current, [TAB_ICON_KEY]: icon } : { [TAB_ICON_KEY]: icon };
+
+        if (this.applyTabConfig(tabId, config))
+            this.notifyChanged();
     }
 
     /** Notifies every listener with a fresh panel list. Listener failures are contained. */
@@ -615,7 +629,7 @@ export class PanelDirectory {
         };
     }
 
-    private openFloat(model: Model, panelId: string, title: string, options: OpenPanelOptions, select: boolean): OpenPanelResult {
+    private openFloat(model: Model, panelId: string, title: string, options: OpenPanelOptions, config: unknown, select: boolean): OpenPanelResult {
         const tabId = newTabId();
         const rect = this.nextFloatRect(model, options.rect);
 
@@ -628,7 +642,7 @@ export class PanelDirectory {
                     id: tabId,
                     component: panelId,
                     name: title,
-                    config: options.config
+                    config
                 }]
             }]
         };
@@ -652,7 +666,7 @@ export class PanelDirectory {
         return { tabId, layoutId, tabSetId };
     }
 
-    private openTab(model: Model, panelId: string, title: string, options: OpenPanelOptions, select: boolean): OpenPanelResult {
+    private openTab(model: Model, panelId: string, title: string, options: OpenPanelOptions, config: unknown, select: boolean): OpenPanelResult {
         const tabId = newTabId();
         const tabSetId = this.resolveTabSetId(model, options.tabsetId);
 
@@ -660,7 +674,7 @@ export class PanelDirectory {
             id: tabId,
             component: panelId,
             name: title,
-            config: options.config
+            config
         }, tabSetId, DockLocation.CENTER, -1, select));
 
         if (select)
@@ -669,6 +683,34 @@ export class PanelDirectory {
         this.notifyChanged();
 
         return { tabId, layoutId: Model.MAIN_LAYOUT_ID, tabSetId };
+    }
+
+    /** Config of a tab opened by the directory: app id, icon, then caller fields. */
+    private tabConfig(panelId: string, extra: unknown): unknown {
+        const config: Record<string, unknown> = { panelId };
+        const icon = appDirectory.getPanelMeta(panelId)?.icon;
+        if (icon)
+            config[TAB_ICON_KEY] = icon;
+
+        return isConfigObject(extra) ? { ...config, ...extra } : config;
+    }
+
+    /** Writes a tab config into the model; returns false for an unknown tab. */
+    private applyTabConfig(tabId: string, config: Record<string, unknown>): boolean {
+        const model = this.model;
+        if (!model)
+            return false;
+
+        if (!(model.getNodeById(tabId) instanceof TabNode))
+            return false;
+
+        try {
+            model.doAction(Actions.updateNodeAttributes(tabId, { config }));
+            return true;
+        } catch (error) {
+            console.error(`TacPhone failed to update the config of tab "${tabId}":`, error);
+            return false;
+        }
     }
 
     private resolveTabSetId(model: Model, requested: string | undefined): string {
@@ -804,28 +846,19 @@ export class PanelDirectory {
 
     private appNameForPanel(panelId: string): string | undefined {
         try {
-            return window.AppDirectory?.appNameForPanel(panelId);
+            return appDirectory.appNameForPanel(panelId);
         } catch (error) {
             console.error(`TacPhone failed to resolve the app of panel "${panelId}":`, error);
             return undefined;
         }
     }
 
+    /** Cached default title of a panel; empty for an unknown panel. */
     private defaultTitle(panelId: string | undefined): string {
         if (!panelId)
             return "";
 
-        const panel = window.AppDirectory?.knownPanels?.get(panelId);
-        if (!panel)
-            return "";
-
-        try {
-            const title: unknown = panel.GetDefaultTitle();
-            return typeof title === "string" ? title : "";
-        } catch (error) {
-            console.error(`TacPhone panel "${panelId}" failed in GetDefaultTitle():`, error);
-            return "";
-        }
+        return appDirectory.getPanelMeta(panelId)?.title ?? "";
     }
 
     /** Model-driven notifications are rAF-throttled so a splitter drag does not spam apps. */
@@ -848,11 +881,5 @@ export class PanelDirectory {
     }
 }
 
-declare global {
-    interface Window {
-        // Panel directory of the current layout. App.tsx attaches the model (WP2).
-        PanelDirectory: PanelDirectory;
-    }
-}
-
-window.PanelDirectory = new PanelDirectory();
+/** The one panel directory of this page. */
+export const panelDirectory = new PanelDirectory();

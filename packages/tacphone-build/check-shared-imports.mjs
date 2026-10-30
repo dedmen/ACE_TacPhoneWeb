@@ -1,20 +1,27 @@
 #!/usr/bin/env node
+// Verifies the host import map and every discovered development app bundle
+// against the shared module list.
+//
+// Invoked from any workspace package: `tacphone-build check-shared-imports`.
+// The workspace root and host package are located automatically.
+
 import { existsSync } from 'node:fs'
 import { readFile, readdir } from 'node:fs/promises'
-import { dirname, join, relative, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 import {
     SHARED_MODULES,
     SHARED_MODULE_SPECIFIERS,
-} from '../shared-modules.js'
-import { discoverDevApps } from '../dev-apps.js'
+} from './shared-modules.js'
+import { displayPath, findWorkspaceRoot, hostDirFor, importDevApps } from './paths.mjs'
 
-const mainDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const hostHtmlPath = join(mainDir, 'dist', 'index.html')
-
-function displayPath(path) {
-    return relative(mainDir, path).replaceAll('\\', '/')
-}
+/** Exports apps actually rely on; a namespace that was tree-shaken away fails here. */
+const REQUIRED_EXPORTS = {
+    'react': ['createElement', 'useState', 'Component'],
+    'react-dom': ['createPortal', 'flushSync'],
+    'react-dom/client': ['createRoot', 'hydrateRoot'],
+    'react/jsx-runtime': ['jsx', 'jsxs'],
+    'react/compiler-runtime': ['c'],
+};
 
 function isBareSpecifier(specifier) {
     return !specifier.startsWith('.')
@@ -83,18 +90,18 @@ function collectBareSpecifiers(source) {
     return specifiers
 }
 
-async function checkHostImportMap() {
+async function checkHostImportMap(rootDir, hostHtmlPath) {
     const html = await readFile(hostHtmlPath, 'utf8')
     const match = html.match(/<script\s+type=["']importmap["']\s*>([\s\S]*?)<\/script>/i)
     if (!match) {
-        throw new Error(`${displayPath(hostHtmlPath)} has no <script type="importmap"> block.`)
+        throw new Error(`${displayPath(rootDir, hostHtmlPath)} has no <script type="importmap"> block.`)
     }
 
     let importMap
     try {
         importMap = JSON.parse(match[1])
     } catch (error) {
-        throw new Error(`${displayPath(hostHtmlPath)} contains an invalid import map: ${error.message}`)
+        throw new Error(`${displayPath(rootDir, hostHtmlPath)} contains an invalid import map: ${error.message}`)
     }
 
     const imports = importMap.imports ?? {}
@@ -106,13 +113,13 @@ async function checkHostImportMap() {
 
     if (missing.length > 0) {
         throw new Error(
-            `${displayPath(hostHtmlPath)} is missing import map entries: ${missing.join(', ')}. `
+            `${displayPath(rootDir, hostHtmlPath)} is missing import map entries: ${missing.join(', ')}. `
             + 'The host import map and shared-modules.js are out of sync.',
         )
     }
     if (unexpected.length > 0) {
         throw new Error(
-            `${displayPath(hostHtmlPath)} has import map entries not declared in shared-modules.js: `
+            `${displayPath(rootDir, hostHtmlPath)} has import map entries not declared in shared-modules.js: `
             + `${unexpected.join(', ')}.`,
         )
     }
@@ -125,16 +132,26 @@ async function checkHostImportMap() {
         if (!value.includes(`window.${global}`)) {
             throw new Error(
                 `Import map entry "${specifier}" does not read window.${global}. `
-                + 'Check the namespaces in vite.config.ts.',
+                + 'Check the namespaces in the host vite.config.ts.',
             )
+        }
+
+        for (const name of REQUIRED_EXPORTS[specifier] ?? []) {
+            if (!value.includes(`export const ${name} =`)) {
+                throw new Error(
+                    `Import map entry "${specifier}" is missing the required export "${name}". `
+                    + 'The host namespace was tree-shaken or the shared module list is wrong.',
+                )
+            }
         }
     }
 
     return Object.keys(imports).length
 }
 
-async function findAppBundles() {
-    const { apps, warnings } = await discoverDevApps(mainDir)
+async function findAppBundles(hostDir) {
+    const { discoverDevApps } = await importDevApps(hostDir)
+    const { apps, warnings } = await discoverDevApps(hostDir)
     for (const warning of warnings) console.warn(`WARN ${warning}`)
 
     const bundles = []
@@ -150,7 +167,7 @@ async function findAppBundles() {
     return bundles.sort((a, b) => a.localeCompare(b))
 }
 
-async function checkAppBundle(path) {
+async function checkAppBundle(rootDir, path) {
     const source = await readFile(path, 'utf8')
     const bareSpecifiers = collectBareSpecifiers(source)
     const provided = new Set(SHARED_MODULE_SPECIFIERS)
@@ -160,7 +177,7 @@ async function checkAppBundle(path) {
 
     if (missing.length > 0) {
         throw new Error(
-            `${displayPath(path)} imports modules that the host import map does not provide: `
+            `${displayPath(rootDir, path)} imports modules that the host import map does not provide: `
             + `${missing.join(', ')}. Add them to shared-modules.js (and the host globals), `
             + 'or bundle them into the app.',
         )
@@ -169,34 +186,35 @@ async function checkAppBundle(path) {
     return bareSpecifiers.size
 }
 
-try {
+export async function runCheckSharedImports() {
+    const rootDir = findWorkspaceRoot()
+    const hostDir = hostDirFor(rootDir)
+    const hostHtmlPath = join(hostDir, 'dist', 'index.html')
+
     let checks = 0
 
     if (existsSync(hostHtmlPath)) {
-        const entries = await checkHostImportMap()
+        const entries = await checkHostImportMap(rootDir, hostHtmlPath)
         console.log(`OK  host import map (${entries} entries)`)
         checks++
     } else {
         console.log('SKIP host import map (dist/index.html is not built)')
     }
 
-    const bundles = await findAppBundles()
+    const bundles = await findAppBundles(hostDir)
     if (bundles.length === 0) {
         console.log('SKIP app bundles (no development app dist/*.js files found)')
     } else {
         for (const bundle of bundles) {
-            const imports = await checkAppBundle(bundle)
-            console.log(`OK  ${displayPath(bundle)} (${imports} bare imports)`)
+            const imports = await checkAppBundle(rootDir, bundle)
+            console.log(`OK  ${displayPath(rootDir, bundle)} (${imports} bare imports)`)
             checks++
         }
     }
 
     if (checks === 0) {
         throw new Error(
-            'Nothing to check. Build the host (npm run build) or an app before running this script.',
+            'Nothing to check. Build the host (npm run build) or an app before running this command.',
         )
     }
-} catch (error) {
-    console.error(`FAIL ${error.message}`)
-    process.exitCode = 1
 }

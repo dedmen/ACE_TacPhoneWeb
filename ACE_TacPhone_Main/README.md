@@ -17,12 +17,12 @@ Arma client through the `ArmaWebHost` extension over a WebSocket.
 
 The in-game browser runs local content in a sandbox. It has no `fetch` /
 `XMLHttpRequest`, `localStorage`, or `IndexedDB`. Code that runs in both modes
-must not depend on those APIs. Bundle assets inline; use `window.Networking` to
-load files from the game.
+must not depend on those APIs. Bundle assets inline; use `window.TacPhone.networking`
+to load files from the game.
 
 ## Quick start
 
-Run these commands in `ACE_TacPhone_Main`:
+Install once at the workspace root (`websource`), then run the host:
 
 ```powershell
 npm install
@@ -126,17 +126,18 @@ defaulting to `src/main.tsx`:
 /devapps/<AppName>/src/main.tsx
 ```
 
-Install the app's own dependencies in its directory (`npm install` inside the
-app folder), then start the host with `npm run dev`. Vite serves the app through
+Install the workspace dependencies once at the repository root (`npm install` in
+`websource`), then start the host with `npm run dev`. Vite serves the app through
 the host dev server, so edits to the app hot-reload. Running the app's own Vite
-dev server is not enough: it does not provide the TacPhone globals, networking,
-or host import map. Restart the host after changing `dev-apps.local.json` or the
-environment variable.
+dev server is not enough: it does not provide the TacPhone host object
+(`window.TacPhone`), networking, or the host import map. Restart the host after
+changing `dev-apps.local.json` or the environment variable.
 
-Apps keep their own `node_modules`; the host deduplicates every package in
-[`shared-modules.js`](shared-modules.js) to its own copies. The host's
-`server.fs.allow` list is generated from the discovered app folders, so an app
-outside the host root can still be served.
+Dependencies are hoisted to the root `node_modules` by the npm workspace. The host
+deduplicates every package in
+[`shared-modules.js`](../packages/tacphone-build/shared-modules.js) to its own
+copies. The host's `server.fs.allow` list is generated from the discovered app
+folders, so an app outside the host root can still be served.
 Requests to an undiscovered app return a 404 with a short explanation.
 
 ## App contract
@@ -149,7 +150,7 @@ Register the app in the addon config (or in `description.ext`):
 class ace_tacphone_apps {
     class ACE_TacPhone_MyApp {
         scope = 2;
-        icon = "\A3\ui_f\data\map\markers\nato\c_ship.paa"; // optional/reserved
+        icon = "\A3\ui_f\data\map\markers\nato\c_ship.paa"; // optional default panel icon
         ace_tacphone_file = QPATHTOF(data\ace_tacphone_myapp.js);
         ace_tacphone_devFile = "src\main.tsx";
         ace_tacphone_requestProcessor = QFUNC(processBrowserRequest);
@@ -163,18 +164,22 @@ class ace_tacphone_apps {
 | `ace_tacphone_file` | Yes, except `main` | Path to the production ES module entry in the game filesystem. It is read with `LoadGameFileText` and imported from a blob URL. |
 | `ace_tacphone_devFile` | Recommended | Entry point relative to the app folder, for example `src\main.tsx`. The development loader imports this path from `/devapps/<AppName>/`; if omitted it falls back to `src/main.tsx`. |
 | `ace_tacphone_requestProcessor` | For app requests | Name of the SQF function that handles requests sent with `a: "<AppName>"`. It receives the request hashmap and the requesting client id (`"local"` for the in-game browser, otherwise the websocket connection id), and may return any JSON-serializable value or a promise. |
-| `icon` | No | Currently reserved; panel icons come from `GetTacPhoneIcon()`. |
+| `icon` | No | Default panel icon: a game texture path, data URL, or `GetTacPhoneIcon()`-style value. Outside Arma (external/local dev browser), `http:`, `https:`, and protocol-relative (`//`) URLs are allowed; inside Arma's sandboxed browser, use only `data:`, `blob:`, or a game texture path for in-game apps. `GetTacPhoneIcon()` on the panel takes precedence; `PanelInstance.setIcon()` overrides both at runtime. |
 
 `<AppName>` is also the routing key. It is the `a` field in requests and is the
 folder name used by the development loader.
 
 ### Module exports
 
-The entry module must export:
+The entry module is an `AppModule`. Import the contract from `@ace-tacphone/api`;
+never import host code:
 
 ```ts
 import React from 'react';
-import type { AppPanelInfo } from './TacPhoneMain';
+import type { AppPanelInfo } from '@ace-tacphone/api';
+
+// Required. Must equal TACPHONE_API_VERSION (1); a mismatch becomes a failed app.
+export const apiVersion = 1;
 
 export function GetTacPhoneApps(): AppPanelInfo[] {
     return [{
@@ -190,30 +195,40 @@ export function OnMessageFromGame(message: object): void | Promise<void> {
 }
 ```
 
-`AppPanelInfo` is part of the host API declarations. The host build generates
-`dist/TacPhoneMain.d.ts` from [`src/TacPhoneMain.ts`](src/TacPhoneMain.ts) and
-syncs it to the `src` directory of every discovered development app. For an app
-that is not discovered yet, copy the generated file into the app's `src`
-directory, or run `npm run sync:api-types -- <path-to-app-src>`. Do not edit the
-copied file by hand; change the host API source instead.
+`AppModule` may also export `init()`, which runs once before `GetTacPhoneApps()`.
+`GetTacPhoneApps` may be async (`Promise<AppPanelInfo[]>` is accepted; the host
+uses `Promise.allSettled`, so one broken app does not block the others). Apps read
+the host directly from `window.TacPhone`; it is not passed as an argument or prop.
+
+The contract types (`AppModule`, `AppPanelInfo`, `AppProps`, `PanelInstance`,
+`TacPhoneHost`, and the networking/panel/API types) are exported by
+[`@ace-tacphone/api`](../packages/tacphone-api/src/index.ts). Apps import them with
+`import type`; at runtime the host object is `window.TacPhone`. The host does not
+generate or sync any `TacPhoneMain.d.ts` file any more, and apps must not contain
+a copy of the host contract.
+
+Each app also exports its inter-app service contract from `src/api.ts` and builds a
+self-contained `dist/<name>.d.ts` with
+`tacphone-build bundle-api-types --app . --entry src/api.ts --name <Name>`
+(see [`packages/tacphone-build/README.md`](../packages/tacphone-build/README.md)).
 
 | Panel field | Contract |
 | --- | --- |
-| `id` | Globally unique across all apps. It is used as the panel key and in saved layouts; do not use `AppChooser`. |
-| `appComponent` | A React class or function component. The host creates it with `React.createElement(component, null)`, so it receives no props. |
-| `GetDefaultTitle()` | Returns the tab title. Must return a string. |
-| `GetTacPhoneIcon()` | Returns an image URL. Data URLs and blob URLs work best because the in-game browser cannot load external files. |
+| `id` | Required. Globally unique across all apps. It is used as the panel key and in saved layouts; do not use `AppChooser`. |
+| `appComponent` | Required. A React component of type `ComponentType<AppProps>`. The host renders it as `React.createElement(component, props)` with `AppProps`: `appId`, `panelId`, `node`, `model`, `panel`. Apps use the global `window.TacPhone` for host services. |
+| `GetDefaultTitle()` | Optional. Returns the default tab title. The live title can be changed later with `PanelInstance.setTitle(title)`. |
+| `GetTacPhoneIcon()` | Optional. Returns an image URL or a `Promise<string>` for one. Async results are cached once per panel. Data URLs and blob URLs work best because the in-game browser cannot load external files. Outside Arma (external/local dev browser), `http:`, `https:`, and protocol-relative (`//`) URLs are allowed; inside Arma's sandboxed browser, use only `data:`, `blob:`, or a game texture path for in-game apps. `PanelInstance.setIcon(icon)` overrides it for the live tab. |
 
 The host wraps app components in an error boundary. A broken app is recorded in
-`window.AppDirectory.failedApps` and does not prevent the other apps from
-loading.
+`window.TacPhone.apps.failedApps` and does not prevent the other apps from
+loading. A panel with a version-mismatched app is reported the same way.
 
 ### Requests and messages
 
-App code talks to the game through `window.Networking.Request`:
+App code talks to the game through `window.TacPhone.networking.Request`:
 
 ```ts
-const result = await window.Networking.Request({
+const result = await window.TacPhone.networking.Request({
     a: 'ACE_TacPhone_MyApp', // registered app name
     c: 'GetSomething',       // command understood by the SQF request processor
     // ...additional JSON-serializable fields
@@ -229,7 +244,7 @@ Messages pushed from the game to a browser arrive at `OnMessageFromGame`. The
 single app handler to individual panels:
 
 ```ts
-const registry = new window.TacPhoneUtils.CommandRegistry();
+const registry = new window.TacPhone.utils.CommandRegistry();
 
 const unregister = registry.register('SomeCommand', payload => {
     // handle payload
@@ -246,40 +261,49 @@ handler per panel.
 
 ### Globals available to apps
 
-The host exposes these before loading apps:
+The host exposes one object before loading apps:
 
-| Global | Purpose |
+```ts
+window.TacPhone: TacPhoneHost
+```
+
+| Member | Purpose |
 | --- | --- |
-| `window.Networking` | `WhenReady()`, `Request()`, `LoadGameFileText()`, `LoadGameFileTexture()`, `LoadGameTerrain()`. |
-| `window.AppDirectory` | Read-only view of `knownApps`, `knownPanels`, and `failedApps`. Do not modify it. |
-| `window.TacPhoneUtils.CommandRegistry` | Message router helper shown above. |
-| `window.PanelDirectory` | Enumerate, focus, activate, and open panels. See [Inter-app API](#inter-app-api). |
-| `window.AppApi` | Register an app's API and resolve or call another app's. See [Inter-app API](#inter-app-api). |
-| `window.InterestRegistry` | Acquire and release named data interests so the game only sends what the page needs. See [Data interests](#data-interests). |
-| `window.TacPhoneUtils.PanelContext` | React context with the live `PanelInstance` of the panel an app is rendered in. |
-| `window.TacPhoneUtils.usePanel()` | Hook form of `PanelContext` for function components. |
+| `apiVersion` | Contract version of this host. |
+| `reactVersion` | React version the host loaded, for diagnostics. |
+| `networking` | `WhenReady()`, `Request()`, `OnConnectionChange()`, `LoadGameFileText()`, `LoadGameFileTexture()`, `LoadGameTerrain()`. |
+| `apps` | Read-only catalog: `knownApps`, `knownPanels`, `failedApps`, `appNameForPanel()`, `getPanelMeta()`, `listPanels()`, `LoadAvailableApps()`. Do not modify it. |
+| `panels` | Enumerate, focus, activate, and open panels. See [Inter-app API](#inter-app-api). |
+| `interApp` | Register an app's service and resolve or call another app's. See [Inter-app API](#inter-app-api). |
+| `interests` | Acquire and release named data interests so the game only sends what the page needs. See [Data interests](#data-interests). |
+| `notifications` | Toast banners. See [Notifications](#notifications). |
+| `utils.CommandRegistry` | Message router helper shown above. |
+| `utils.PanelContext` | React context with the live `PanelInstance` of the panel an app is rendered in. |
+| `utils.usePanel()` | Hook form of `PanelContext` for function components. |
 
-Tooling types for these are generated into `dist/TacPhoneMain.d.ts` and synced
-into the development apps by the host build.
+`window.TacPhone` is the only app-facing global.
 
-The public API source is [`src/TacPhoneMain.ts`](src/TacPhoneMain.ts). Add
-app-facing classes, types, and `window` globals there; the build bundles them
-with the host declarations and updates the app copies. Never edit a synced
-`TacPhoneMain.d.ts` directly. Import these declarations with `import type`;
-at runtime the host API is accessed through `window`. The bundle also types the
-shared module globals (`window.React`, `window.ReactDOM`, and so on).
+The contract lives in
+[`packages/tacphone-api/src/index.ts`](../packages/tacphone-api/src/index.ts),
+with the `Window.TacPhone` augmentation in `src/globals.ts` of the same package.
+Add app-facing classes, types, and host members there and in the host runtime
+([`src/Backend/Host.ts`](src/Backend/Host.ts)); there is no generated declaration
+copy in any app. Import these declarations with `import type`; at runtime the
+host API is accessed through `window.TacPhone`.
+The package also types the shared module globals (`window.React`,
+`window.ReactDOM`, and so on).
 
 ## Inter-app API
 
-Apps can expose a versioned runtime API to other apps through `window.AppApi`,
-and can enumerate, activate, and open panels through `window.PanelDirectory`.
-Both are page-local: they never pass through `window.Networking` or SQF, the game
-cannot call them, and there is no permission model. The whole web UI and every
-app loaded in it are one trust domain: any app can call any registered API, and
-apps are not isolated from each other.
-The public types are exported from [`src/TacPhoneMain.ts`](src/TacPhoneMain.ts)
-and arrive in an app with the generated `TacPhoneMain.d.ts` like the rest of the
-API.
+Apps can expose a versioned runtime API to other apps through
+`window.TacPhone.interApp`, and can enumerate, activate, and open panels through
+`window.TacPhone.panels`. Both are page-local: they never pass through
+`window.TacPhone.networking` or SQF, the game cannot call them, and there is no
+permission model. The whole web UI and every app loaded in it are one trust
+domain: any app can call any registered API, and apps are not isolated from each
+other. The public types come from `@ace-tacphone/api` like the rest of the
+contract; an app's own service types come from its `src/api.ts`, bundled into
+`dist/*.d.ts` by `tacphone-build bundle-api-types`.
 
 ### Identity model
 
@@ -301,7 +325,7 @@ selected tab of a tabset, so a panel that is open in the background has no
 waits for its registration; see
 [Routing to a Map instance](#routing-to-a-map-instance).
 
-### `window.PanelDirectory`
+### `window.TacPhone.panels`
 
 | Method | Returns | Notes |
 | --- | --- | --- |
@@ -342,10 +366,10 @@ popup. Floats are persisted by the panel library under the model's `subLayouts`,
 so a popup opened for routing survives a layout save and restore. `open()`
 returns
 `{ tabId, layoutId, tabSetId }`, or `undefined` with a warning for an unknown
-panel id. Routing through `AppApi.resolveAsync()` is the supported way to open a
-missing app; call `open()` directly only for UI work.
+panel id. Routing through `window.TacPhone.interApp.resolveAsync()` is the supported
+way to open a missing app; call `open()` directly only for UI work.
 
-### `window.AppApi`
+### `window.TacPhone.interApp`
 
 | Method | Returns | Notes |
 | --- | --- | --- |
@@ -359,17 +383,18 @@ missing app; call `open()` directly only for UI work.
 | `setTargetChooser(chooser)` | `void` | Installs the handler for `policy: 'ask'`; pass `undefined` to remove it. |
 | `onDidChange(listener)` | `() => void` | Calls `listener(services)` on registration and panel changes. |
 
-`register()` is called from the app lifecycle with the panel instance from the
-context, and the returned function from the unmount path:
+`register()` is called from the app lifecycle with the panel instance from
+`AppProps.panel` (or `window.TacPhone.utils.usePanel()`), and the returned
+function from the unmount path:
 
 ```ts
-const panel = window.TacPhoneUtils.usePanel();
+const panel = window.TacPhone.utils.usePanel();
 
 React.useEffect(() => {
     if (!panel)
         return;
 
-    return window.AppApi.register(panel, {
+    return window.TacPhone.interApp.register(panel, {
         service: 'myapp',
         version: 1,
         api: { doSomething: () => { /* ... */ } },
@@ -415,26 +440,28 @@ picker once (see [Routing to a Map instance](#routing-to-a-map-instance)).
 
 ### Using the panel context
 
-Apps still receive no props. The host passes the live `PanelInstance` through
-`window.TacPhoneUtils.PanelContext`:
+Every app panel component receives `AppProps`, so `props.panel` is the live
+`PanelInstance` of the panel it is rendered in. The host is the global
+`window.TacPhone`. A deeper child that has no props can use
+`window.TacPhone.utils.PanelContext` instead:
 
-- Function components: `window.TacPhoneUtils.usePanel()`.
-- Class components: `static contextType = window.TacPhoneUtils.PanelContext;`
+- Function components: `window.TacPhone.utils.usePanel()`.
+- Class components: `static contextType = window.TacPhone.utils.PanelContext;`
   and `declare context: PanelInstance | undefined;`, then `this.context`.
 
 ```tsx
-import type { PanelInstance } from './TacPhoneMain';
+import type { AppProps, PanelInstance } from '@ace-tacphone/api';
 
-export class MyPanel extends React.Component<{}, {}> {
-    static contextType = window.TacPhoneUtils.PanelContext;
+export class MyPanel extends React.Component<AppProps> {
+    static contextType = window.TacPhone.utils.PanelContext;
     declare context: PanelInstance | undefined;
 
     private unregister: (() => void) | undefined;
 
     componentDidMount(): void {
-        const panel = this.context;
+        const panel = this.props.panel ?? this.context;
         if (panel)
-            this.unregister = window.AppApi.register(panel, {
+            this.unregister = window.TacPhone.interApp.register(panel, {
                 service: 'myapp',
                 version: 1,
                 api: { doSomething: () => { /* ... */ } },
@@ -447,9 +474,9 @@ export class MyPanel extends React.Component<{}, {}> {
 }
 ```
 
-The handle exposes `instanceId`, `tabId`, `getInfo()`, `activate()`, and
-`setApp(panelId)`. API registration goes through `window.AppApi`, not through the
-handle.
+The handle exposes `instanceId`, `tabId`, `getInfo()`, `getConfig()`,
+`activate()`, `setApp(panelId)`, `setTitle(title)`, and `setIcon(icon)`. API
+registration goes through `window.TacPhone.interApp`, not through the handle.
 
 ### Routing to a Map instance
 
@@ -458,7 +485,7 @@ this:
 
 ```ts
 async function showOnMap(x: number, y: number): Promise<void> {
-    const target = await window.AppApi.resolveAsync({
+    const target = await window.TacPhone.interApp.resolveAsync({
         service: 'map',
         panelId: 'ACE_TacPhone_Map',
         policy: 'ask',              // focused -> largest -> user choice
@@ -511,9 +538,10 @@ on the resolved `api`. Its generated `dist/ace_tacphone_map.d.ts` exports the
 `MapApi`, `MapViewState`, `MapFlyToOptions`, `MAP_SERVICE`, and
 `MAP_SERVICE_VERSION` declarations, so another app can import the types from the
 Map package and cast the resolved API without depending on OpenLayers. That
-declaration is produced by the shared
-`scripts/bundle-api-types.mjs --app` script in this host package; apps do not
-ship their own bundler.
+declaration is produced by
+`tacphone-build bundle-api-types --app . --entry src/api.ts --name ACE_TacPhone_Map`
+in the Map's build script; apps do not keep their own declaration bundler. See
+[`packages/tacphone-build/README.md`](../packages/tacphone-build/README.md).
 
 ### Limitations
 
@@ -539,16 +567,18 @@ Names are opaque strings namespaced by app (`<AppName>.<feature>`), for example
 anything else is rejected with a console warning.
 
 ```ts
-export class MyPanel extends React.Component<{}, {}> {
+import type { AppProps } from '@ace-tacphone/api';
+
+export class MyPanel extends React.Component<AppProps> {
     private releaseInterest: (() => void) | undefined;
 
     componentDidMount(): void {
         // Reference counted per page: two panels of this app share one game interest.
-        this.releaseInterest = window.InterestRegistry.acquire('ACE_TacPhone_MyApp.updates');
+        this.releaseInterest = window.TacPhone.interests.acquire('ACE_TacPhone_MyApp.updates');
 
         // Requests keep their order, so a snapshot requested after this line
         // cannot miss an update and does not need to await an acknowledgement.
-        window.Networking.Request({ a: 'ACE_TacPhone_MyApp', c: 'GetSnapshot' });
+        window.TacPhone.networking.Request({ a: 'ACE_TacPhone_MyApp', c: 'GetSnapshot' });
     }
 
     componentWillUnmount(): void {
@@ -556,6 +586,8 @@ export class MyPanel extends React.Component<{}, {}> {
     }
 }
 ```
+
+`window.TacPhone.interests` methods:
 
 | Method | Returns | Notes |
 | --- | --- | --- |
@@ -601,8 +633,10 @@ module specifiers:
 The generated modules re-export the values that `src/main.tsx` assigns to
 `window.React`, `window.ReactDOM`, `window.ReactDOMClient`,
 `window.ReactJSXRuntime`, and `window.ReactCompilerRuntime`. The specifier and
-global names live in one list, [`shared-modules.js`](shared-modules.js), which
-drives the host import map, `src/main.tsx`, and the app build externals.
+global names live in one list,
+[`packages/tacphone-build/shared-modules.js`](../packages/tacphone-build/shared-modules.js)
+(imported as `@ace-tacphone/build/shared-modules`), which drives the host import
+map, `src/main.tsx`, and the app build externals.
 
 Rules for app builds:
 
@@ -616,17 +650,18 @@ Rules for app builds:
   through the host document's import map. Do not rewrite these specifiers to
   file paths.
 - If another shared dependency is needed, it must either be bundled or added to
-  [`shared-modules.js`](shared-modules.js) and assigned in `src/main.tsx`; apps
-  cannot add mappings themselves.
+  [`packages/tacphone-build/shared-modules.js`](../packages/tacphone-build/shared-modules.js)
+  and assigned in `src/main.tsx`; apps cannot add mappings themselves.
 - React Compiler users: keep `react/compiler-runtime` external as well; the host
   maps it to the compiler runtime that belongs to the same React instance.
 
 In development Vite resolves the bare imports for you. The import map matters
 most for a prebuilt app bundle loaded with `import()` from a blob URL.
 
-`npm run check:importmap` verifies the built host import map and every discovered
-development app's `dist/*.js` bundle against `shared-modules.js`. The host and
-app build scripts run the same check automatically.
+`tacphone-build check-shared-imports` (`npm run check:importmap`) verifies the
+built host import map and every discovered development app's `dist/*.js` bundle
+against `shared-modules.js`. The host and app build scripts run the same check
+automatically.
 
 ## Production packaging: one ESM entry file per app
 
@@ -634,7 +669,7 @@ The production loader in `src/Backend/AppDirectory.ts` reads
 `ace_tacphone_file` with `LoadGameFileText`, creates a `Blob`, and imports it:
 
 ```ts
-const content = await window.Networking.LoadGameFileText(appInfo.file);
+const content = await window.TacPhone.networking.LoadGameFileText(appInfo.file);
 const url = URL.createObjectURL(
     new Blob([content], { type: 'application/javascript' })
 );
@@ -671,16 +706,18 @@ build: {
 }
 ```
 
-Inline CSS and assets in the bundle. The Map app's custom
-[`build/singlefile.ts`](../ACE_TacPhone_Map/build/singlefile.ts) inlines CSS as a
-`data:` URL; the host itself uses `vite-plugin-singlefile`. Keep assets as data
-URLs rather than separate files.
+Inline CSS and assets in the bundle. Every app imports the single shared plugin
+from [`packages/tacphone-build/singlefile.ts`](../packages/tacphone-build/singlefile.ts)
+as `@ace-tacphone/build/singlefile` (`viteSingleFile`); it inlines CSS and assets
+as `data:` URLs. The host itself uses `vite-plugin-singlefile`, which is a
+different HTML-oriented plugin. Keep assets as data URLs rather than separate
+files.
 
 ### Loading additional files manually
 
 Dynamic loading and CSS splitting are still possible. The difference is that
 you cannot rely on a relative chunk URL; explicitly read the extra game file
-through `window.Networking.LoadGameFileText`, then import it or attach it:
+through `window.TacPhone.networking.LoadGameFileText`, then import it or attach it:
 
 ```ts
 const moduleCache = new Map<string, Promise<unknown>>();
@@ -689,7 +726,7 @@ export function loadGameModule(path: string): Promise<unknown> {
     let promise = moduleCache.get(path);
     if (!promise) {
         promise = (async () => {
-            const source = await window.Networking.LoadGameFileText(path);
+            const source = await window.TacPhone.networking.LoadGameFileText(path);
             const url = URL.createObjectURL(
                 new Blob([source], { type: 'text/javascript' }),
             );
@@ -714,7 +751,7 @@ export function loadGameStylesheet(path: string): Promise<void> {
     let promise = stylesheetCache.get(path);
     if (!promise) {
         promise = (async () => {
-            const css = await window.Networking.LoadGameFileText(path);
+            const css = await window.TacPhone.networking.LoadGameFileText(path);
             const url = URL.createObjectURL(
                 new Blob([css], { type: 'text/css' }),
             );
@@ -792,16 +829,17 @@ Do not use a bundle-relative dynamic import in the production entry module; use
 
 ## Notifications
 
-Apps raise toast-style banners through `window.Notifications`. The host UI renders
-them with automatic fade-out removal (exit animation). Each notification has an
-id returned by `show()` which can be used to dismiss it explicitly.
+Apps raise toast-style banners through `window.TacPhone.notifications`. The host
+UI renders them with automatic fade-out removal (exit animation). Each
+notification has an id returned by `show()` which can be used to dismiss it
+explicitly.
 
 ### API
 
 **Show a notification:**
 
 ```ts
-const id = window.Notifications.show({
+const id = window.TacPhone.notifications.show({
     title: "My notification",
     body: "This is the message text.",
     app: "ACE_TacPhone_Map",          // optional; uses the app's default icon
@@ -818,7 +856,7 @@ const id = window.Notifications.show({
 **Dismiss a notification:**
 
 ```ts
-window.Notifications.dismiss(id);
+window.TacPhone.notifications.dismiss(id);
 ```
 
 ### Options
@@ -842,19 +880,19 @@ action: (notification: TacPhoneNotification) => void | Promise<void>
 ```
 
 The function runs when the notification is tapped. It can open/focus panels with
-`window.PanelDirectory`, resolve another app's service with `window.AppApi`, or
-send data with `window.Networking`; the notification system does not prescribe any
-of that.
+`window.TacPhone.panels`, resolve another app's service with
+`window.TacPhone.interApp`, or send data with `window.TacPhone.networking`; the
+notification system does not prescribe any of that.
 
 ```ts
-window.Notifications.show({
+window.TacPhone.notifications.show({
     title: "New message",
     body: "From Alice",
     app: "Messenger",
     data: { conversationId: 42 },
     action: async (notification) => {
         const { conversationId } = notification.data as { conversationId: number };
-        window.PanelDirectory.open("Messenger", {
+        window.TacPhone.panels.open("Messenger", {
             placement: "tab",
             config: { conversationId },
         });
@@ -865,7 +903,7 @@ window.Notifications.show({
 ### Limitations
 
 - Notification actions are page-local functions. Notifications are not sent from
-  the game, and the host does not forward them through `Networking`.
+  the game, and the host does not forward them through `window.TacPhone.networking`.
 - The notification stack is transient: there is no persistent history or center screen.
 - When more than [`MAX_NOTIFICATIONS`](src/Backend/Notifications.ts) (5) are shown,
   the oldest are dropped silently without animation.
@@ -874,3 +912,7 @@ window.Notifications.show({
 
 - [`../ACE_TacPhone_Map/README.md`](../ACE_TacPhone_Map/README.md) —
   the reference app and its build.
+- [`../packages/tacphone-build/README.md`](../packages/tacphone-build/README.md) —
+  shared build tooling: `tacphone-build` CLI, `shared-modules.js`, `singlefile.ts`.
+- [`../PLAN_API_REWORK.md`](../PLAN_API_REWORK.md) — the API/build rework plan,
+  now implemented.

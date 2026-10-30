@@ -2,23 +2,23 @@
 //
 // Messages look like `{a:"<AppName>", c:"<Command>", ...}`; `a` is the app name
 // (the config class and the routing key), and the app handles the command in its
-// module-level OnMessageFromGame() through window.TacPhoneUtils.CommandRegistry.
+// module-level OnMessageFromGame() through `window.TacPhone.utils.CommandRegistry`.
 //
 // This lives in its own module because both networking implementations (A3API in
 // game, websocket in the dev browser) forward game messages this way, and host
 // features that are not the game (for example notification actions) deliver
 // messages through the same path.
 //
-// The app directory is read from `window` at call time instead of being imported,
-// which keeps this module free of load-order assumptions: an app may be loaded
-// (or replaced) long after this module was evaluated.
+// The app directory is read at call time instead of at module scope, which keeps
+// this module free of load-order assumptions: the transport and the directory
+// import each other, and an app may be loaded (or replaced) long after both were
+// evaluated.
+
+import type { AppModule } from "./Types";
+import { appDirectory } from "./AppDirectory";
 
 interface AppMessageTarget {
     a?: unknown;
-}
-
-interface AppMessageHandler {
-    OnMessageFromGame?(message: object): unknown;
 }
 
 /**
@@ -33,7 +33,7 @@ export function SendMessageToApp(message: object): void {
         return;
     }
 
-    const appModule = window.AppDirectory?.knownApps.get(a)?.module as AppMessageHandler | undefined;
+    const appModule: AppModule | undefined = appDirectory.knownApps.get(a)?.module;
     if (!appModule || typeof appModule.OnMessageFromGame !== "function") {
         console.warn(`No loaded TacPhone app can handle a message for "${a}"`, message);
         return;

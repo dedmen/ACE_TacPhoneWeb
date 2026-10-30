@@ -44,7 +44,7 @@ export interface MarkerCreationData {
  * updated later.
  */
 export function createMarker(marker: MarkerCreationData): Promise<{ name: string }> {
-    return window.Networking.Request({
+    return window.TacPhone.networking.Request({
         a: 'ACE_TacPhone_Map',
         c: 'CreateMarker',
         marker: {
@@ -130,7 +130,7 @@ export function updateMarker(
     name: string,
     changes: Omit<Partial<MarkerCreationData>, 'name'>,
 ): Promise<void> {
-    return window.Networking.Request({
+    return window.TacPhone.networking.Request({
         a: 'ACE_TacPhone_Map',
         c: 'CreateMarker',
         marker: {
@@ -156,7 +156,7 @@ export function updateMarkerPosition(name: string, position: [number, number]): 
  * `createMarker`, not the user-visible label.
  */
 export function deleteMarker(name: string): Promise<void> {
-    return window.Networking.Request({
+    return window.TacPhone.networking.Request({
         a: 'ACE_TacPhone_Map',
         c: 'DeleteMarker',
         marker: name,

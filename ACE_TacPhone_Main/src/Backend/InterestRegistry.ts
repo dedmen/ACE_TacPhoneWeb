@@ -1,7 +1,7 @@
 // Host-side registry of the game data interests this page currently needs.
 //
 // An app announces that it needs a named "information interest" (for example
-// "ACE_TacPhone_Map.markers") with `window.InterestRegistry.acquire()`. The host
+// "ACE_TacPhone_Map.markers") with `window.TacPhone.interests.acquire()`. The host
 // turns that into an `Interest.Set` request to the game, which then does the
 // expensive work and only targets the clients that asked for it. `acquire()` is
 // reference counted, so several panels of the same app (or several apps that
@@ -24,6 +24,9 @@
 // Nothing here throws on a runtime path: an invalid name is rejected with a
 // warning, and a failed request is logged (a lost announcement is retried by the
 // next flush or reconnect), because a lost interest must never break an app.
+
+import type { InterestRegistryApi } from "./Types";
+import { networking } from "./Networking";
 
 /** Longest accepted interest name; longer names are rejected. */
 const MAX_INTEREST_LENGTH = 128;
@@ -56,11 +59,11 @@ function normalizeInterest(interest: unknown): string | undefined {
 /**
  * Reference-counted registry of the data interests of one page.
  *
- * One instance lives at module scope as `window.InterestRegistry`. Apps acquire
- * an interest for as long as they need its data and release it otherwise; see
- * the README section "Data interests".
+ * One instance lives at module scope and is exposed as
+ * `window.TacPhone.interests`. Apps acquire an interest for as long as they need
+ * its data and release it otherwise; see the README section "Data interests".
  */
-export class InterestRegistry {
+export class InterestRegistry implements InterestRegistryApi {
     /** References per desired interest. Only interests with a positive count are kept. */
     private readonly references = new Map<string, number>();
     /** Interests the game was already told about; emptied when the transport drops. */
@@ -182,13 +185,6 @@ export class InterestRegistry {
 
     /** Sends one interest request; failures are logged, never thrown. */
     private post(request: object, onFailure?: () => void): void {
-        const networking = window.Networking;
-        if (!networking) {
-            console.warn("TacPhone InterestRegistry: the transport is missing; interest request dropped:", request);
-            onFailure?.();
-            return;
-        }
-
         try {
             // Promise.resolve keeps a transport that answers synchronously (or not
             // at all) from throwing here, and still reports a rejection.
@@ -228,15 +224,8 @@ export class InterestRegistry {
 
     /** Connects to the transport and the page lifecycle once, on first use. */
     private ensureSubscriptions(): void {
-        if (this.unsubscribeConnection === undefined) {
-            const networking = window.Networking;
-            if (!networking) {
-                // Retried on the next acquire: the transport may not exist yet.
-                console.warn("TacPhone InterestRegistry: the transport is missing; interests are only tracked locally.");
-            } else {
-                this.unsubscribeConnection = networking.OnConnectionChange(this.handleConnectionChange);
-            }
-        }
+        if (this.unsubscribeConnection === undefined)
+            this.unsubscribeConnection = networking.OnConnectionChange(this.handleConnectionChange);
 
         if (this.pagehideInstalled)
             return;
@@ -269,11 +258,5 @@ export class InterestRegistry {
     }
 }
 
-declare global {
-    interface Window {
-        // Demand-driven game data: acquire/release named data interests (see Backend/InterestRegistry.ts).
-        InterestRegistry: InterestRegistry;
-    }
-}
-
-window.InterestRegistry = new InterestRegistry();
+/** The one interest registry of this page. */
+export const interestRegistry: InterestRegistryApi = new InterestRegistry();

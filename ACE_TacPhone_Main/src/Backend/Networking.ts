@@ -1,34 +1,6 @@
 import "./A3API";
 import { SendMessageToApp } from "./AppMessaging";
-
-export interface Networking {
- WhenReady(): Promise<void>;
- Request(params:object): Promise<object>;
- /**
-  * Subscribes to the connectivity of the transport.
-  *
-  * The listener is called with `true` whenever the transport became usable and
-  * with `false` whenever it went away, so a caller that mirrors state in the
-  * game through requests can re-send it after a reconnect. A subscriber that
-  * arrives while the transport is already connected is told `true` right away;
-  * the in-game transport is always connected and reports `true` once. The
-  * returned function unsubscribes and is a no-op for the in-game transport.
-  */
- OnConnectionChange(listener: (connected: boolean) => void): () => void;
- /** Loads a text file from the game filesystem. */
- LoadGameFileText(path: string): Promise<string>;
- /** Loads a texture from the game filesystem and returns it as a data URL. */
- LoadGameFileTexture(path: string, maxSize: number): Promise<string>;
- /**
-  * Loads and preprocesses file from game filesystem.
-  *
-  * @param config - JSON object of bool true/false entries: { drawTreeObjects, layerTerrain, layerCountlines, layerAir, layerTownNames, layerMountains, layerGrid, layerForest, layerRock, layerRoads, layerObjects, simpleRoads }
-  * @returns The terrain as SVG image
-  */
- LoadGameTerrain(config: object): Promise<string>;
-
- OnMessageFromGame(message: object): void;
-}
+import type { Networking } from "./Types";
 
 class NetworkingA3 implements Networking {
     requestCounter: number = 0;
@@ -429,6 +401,9 @@ export function IsLocalDev()
     return window.location.href.startsWith("http://localhost"); // non-dev webbrowser will be https (for now..)
 }
 
-
-// Its a global, accessible to everyone
-window.Networking = window.Networking || (IsArma() ? new NetworkingA3() : new NetworkingWebsocket());
+/**
+ * The one transport of this page, in-game or websocket.
+ *
+ * Apps reach it through `window.TacPhone.networking`; host modules import it.
+ */
+export const networking: Networking = IsArma() ? new NetworkingA3() : new NetworkingWebsocket();

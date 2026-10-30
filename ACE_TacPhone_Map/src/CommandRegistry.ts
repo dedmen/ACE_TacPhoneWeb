@@ -1,1 +1,1 @@
-export const mapCommandRegistry = new window.TacPhoneUtils.CommandRegistry();
+export const mapCommandRegistry = new window.TacPhone.utils.CommandRegistry();

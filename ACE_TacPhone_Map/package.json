@@ -24,9 +24,10 @@
   },
   "scripts": {
     "dev": "npm --prefix ../ACE_TacPhone_Main run dev --",
-    "build": "tsc -b && vite build --mode release && node ../ACE_TacPhone_Main/scripts/check-shared-imports.mjs && node ../ACE_TacPhone_Main/scripts/bundle-api-types.mjs --app . --entry src/MapApi.ts --output dist/ace_tacphone_map.d.ts --name ACE_TacPhone_Map",
-    "build:debug": "tsc -b && vite build --mode debug && node ../ACE_TacPhone_Main/scripts/check-shared-imports.mjs && node ../ACE_TacPhone_Main/scripts/bundle-api-types.mjs --app . --entry src/MapApi.ts --output dist/ace_tacphone_map.d.ts --name ACE_TacPhone_Map",
-    "check:importmap": "node ../ACE_TacPhone_Main/scripts/check-shared-imports.mjs",
+    "build": "tsc -b && vite build --mode release && tacphone-build check-shared-imports && tacphone-build bundle-api-types --app . --entry src/api.ts --name ACE_TacPhone_Map",
+    "build:debug": "tsc -b && vite build --mode debug && tacphone-build check-shared-imports && tacphone-build bundle-api-types --app . --entry src/api.ts --name ACE_TacPhone_Map",
+    "check:importmap": "tacphone-build check-shared-imports",
+    "check": "tsc -b",
     "lint": "oxlint",
     "preview": "vite preview"
   },
@@ -35,8 +36,9 @@
     "react-dom": "^19.2.7"
   },
   "devDependencies": {
+    "@ace-tacphone/api": "*",
+    "@ace-tacphone/build": "*",
     "@babel/core": "^7.29.7",
-    "@microsoft/api-extractor": "^7.60.0",
     "@rolldown/plugin-babel": "^0.2.3",
     "@types/babel__core": "^7.20.5",
     "@types/micromatch": "^4.0.10",
@@ -54,10 +56,8 @@
     "sass-embedded": "^1.100.0",
     "typescript": "~6.0.2",
     "vite": "^8.3.5",
-    "vite-plugin-dts": "^5.0.3",
     "vite-plugin-inspect": "^12.0.2",
-    "vite-plugin-lib-inject-css": "^2.2.2",
-    "vite-plugin-singlefile": "^2.3.3"
+    "vite-plugin-lib-inject-css": "^2.2.2"
   },
   "dependencies": {
     "ol": "^10.9.0"

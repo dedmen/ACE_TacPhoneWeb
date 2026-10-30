@@ -7,11 +7,21 @@
     "app": "SampleApp"
   },
   "main": "./dist/ace_tacphone_sampleapp.js",
+  "types": "./dist/ace_tacphone_sampleapp.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/ace_tacphone_sampleapp.d.ts",
+        "default": "./dist/ace_tacphone_sampleapp.js"
+      }
+    }
+  },
   "scripts": {
     "dev": "npm --prefix ../ACE_TacPhone_Main run dev --",
-    "build": "tsc -b && vite build --mode release && node ../ACE_TacPhone_Main/scripts/check-shared-imports.mjs",
-    "build:debug": "tsc -b && vite build --mode debug && node ../ACE_TacPhone_Main/scripts/check-shared-imports.mjs",
-    "check:importmap": "node ../ACE_TacPhone_Main/scripts/check-shared-imports.mjs",
+    "build": "tsc -b && vite build --mode release && tacphone-build check-shared-imports && tacphone-build bundle-api-types --app . --entry src/api.ts --name SampleApp",
+    "build:debug": "tsc -b && vite build --mode debug && tacphone-build check-shared-imports && tacphone-build bundle-api-types --app . --entry src/api.ts --name SampleApp",
+    "check:importmap": "tacphone-build check-shared-imports",
+    "check": "tsc -b",
     "lint": "oxlint",
     "preview": "vite preview"
   },
@@ -20,6 +30,8 @@
     "react-dom": "^19.2.7"
   },
   "devDependencies": {
+    "@ace-tacphone/api": "*",
+    "@ace-tacphone/build": "*",
     "@babel/core": "^7.29.7",
     "@rolldown/plugin-babel": "^0.2.3",
     "@types/babel__core": "^7.20.5",

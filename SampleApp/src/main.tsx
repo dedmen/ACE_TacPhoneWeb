@@ -1,5 +1,10 @@
-import type { AppPanelInfo } from './TacPhoneMain';
+import type { AppPanelInfo } from '@ace-tacphone/api';
+import { TACPHONE_API_VERSION } from '@ace-tacphone/api';
+
 import { SampleApp } from './SampleApp';
+
+/** Version of the host contract this app was built against. */
+export const apiVersion = TACPHONE_API_VERSION;
 
 export function GetTacPhoneApps(): Array<AppPanelInfo> {
     return [

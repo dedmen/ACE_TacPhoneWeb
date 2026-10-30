@@ -1,0 +1,21 @@
+{
+  "name": "ace-tacphone-workspace",
+  "private": true,
+  "version": "0.0.0",
+  "workspaces": [
+    "packages/*",
+    "ACE_TacPhone_Main",
+    "ACE_TacPhone_Map",
+    "SampleApp"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w ace-tacphone-main",
+    "build": "npm run build -w ace-tacphone-main && npm run build -w ace-tacphone-map && npm run build -w ace-tacphone-sampleapp",
+    "build:host": "npm run build -w ace-tacphone-main",
+    "build:apps": "npm run build -w ace-tacphone-map && npm run build -w ace-tacphone-sampleapp",
+    "check": "npm run check --workspaces --if-present",
+    "check:importmap": "tacphone-build check-shared-imports",
+    "lint": "npm run lint --workspaces --if-present",
+    "sync:api-types": "tacphone-build sync-api-types"
+  }
+}

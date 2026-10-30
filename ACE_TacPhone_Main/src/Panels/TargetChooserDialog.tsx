@@ -1,9 +1,9 @@
 // Host UI for the "ask" target policy of the inter-app API.
 //
-// AppApi.resolveAsync() only calls the installed chooser when there are several
+// interApp.resolveAsync() only calls the installed chooser when there are several
 // candidate panels for a service (opening a missing app and waiting for its
 // registration is resolveAsync's own job, not this dialog's). The chooser returns
-// the id of the chosen candidate, or undefined when the user cancels; AppApi then
+// the id of the chosen candidate, or undefined when the user cancels; interApp then
 // reports "no panel was selected" to the calling app.
 //
 // The dialog is installed once by App.tsx and lives outside the layout, so a
@@ -18,8 +18,7 @@
 //   runs, so a stray click on the closing dialog cannot answer twice.
 
 import React from "react";
-import type { AppApiRegistry, TargetChooser } from "../Backend/AppApi";
-import type { PanelInfo } from "../Backend/PanelDirectory";
+import type { InterAppRegistry, PanelInfo, TargetChooser } from "@ace-tacphone/api";
 import styles from "./TargetChooserDialog.module.css";
 
 /** One routing request waiting for a user decision. */
@@ -58,8 +57,8 @@ function describeCandidate(candidate: PanelInfo): string {
 /**
  * Modal panel picker for `policy: "ask"`.
  *
- * Renders nothing until AppApi hands it a request. Mount it once; it installs its
- * chooser with `window.AppApi.setTargetChooser()` in componentDidMount and clears
+ * Renders nothing until interApp hands it a request. Mount it once; it installs its
+ * chooser with `window.TacPhone.interApp.setTargetChooser()` in componentDidMount and clears
  * it again on unmount, resolving whatever is still pending with undefined.
  */
 export class TargetChooserDialog extends React.Component<{}, TargetChooserDialogState> {
@@ -74,11 +73,11 @@ export class TargetChooserDialog extends React.Component<{}, TargetChooserDialog
     }
 
     componentDidMount(): void {
-        // main.tsx always imports Backend/AppApi, but fail soft instead of taking
+        // main.tsx always imports Backend/InterApp, but fail soft instead of taking
         // the host UI down when the registry is somehow missing.
-        const api: AppApiRegistry | undefined = window.AppApi;
+        const api: InterAppRegistry | undefined = window.TacPhone?.interApp;
         if (!api) {
-            console.warn("TacPhone TargetChooserDialog: window.AppApi is missing, so policy \"ask\" falls back to \"auto\".");
+            console.warn("TacPhone TargetChooserDialog: window.TacPhone.interApp is missing, so policy \"ask\" falls back to \"auto\".");
             return;
         }
 
@@ -99,7 +98,7 @@ export class TargetChooserDialog extends React.Component<{}, TargetChooserDialog
 
     componentWillUnmount(): void {
         if (this.installed) {
-            window.AppApi?.setTargetChooser(undefined);
+            window.TacPhone.interApp.setTargetChooser(undefined);
             this.installed = false;
         }
 
