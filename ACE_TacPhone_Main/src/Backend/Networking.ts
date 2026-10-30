@@ -1,5 +1,6 @@
 import "./A3API";
 import { SendMessageToApp } from "./AppMessaging";
+import { decompressFromBase64 } from "./Compression";
 import { decodeGameText, decodeGameTextDeep } from "./GameText";
 import type { Networking } from "./Types";
 
@@ -78,35 +79,6 @@ class NetworkingA3 implements Networking {
     }
 
 };
-
-// 2. Decompress a Base64 string back to the original string
-async function decompressFromBase64(base64Input: string): Promise<string> {
-  // Reconstruct a full Data URL from the Base64 string
-  const dataUrl = `data:application/octet-stream;base64,${base64Input}`;
-  
-  // Use fetch ONLY to convert the data URL into a Blob (this does not hit the network)
-  const blob = await fetch(dataUrl).then(res => res.blob());
-
-  // Use FileReader to safely read the blob as an ArrayBuffer
-  const buffer = await new Promise<ArrayBuffer>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => resolve(reader.result as ArrayBuffer);
-    reader.onerror = reject;
-    reader.readAsArrayBuffer(blob);
-  });
-  
-  // Create a decompression stream using 'gzip'
-  const stream = new Blob([buffer]).stream();
-  const decompressionStream = new DecompressionStream("gzip");
-  const decompressedStream = stream.pipeThrough(decompressionStream);
-  
-  // Read the decompressed stream into an ArrayBuffer
-  const response = new Response(decompressedStream);
-  const decompressedBuffer = await response.arrayBuffer();
-  
-  // Decode the ArrayBuffer back to a string
-  return new TextDecoder().decode(decompressedBuffer);
-}
 
 type PendingRequest = {
     resolve: (_: object) => void;

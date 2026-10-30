@@ -272,6 +272,10 @@ export interface TacPhoneUtils {
     PanelContext: Context<PanelInstance | undefined>;
     /** Hook that returns the panel the calling component is rendered in. */
     usePanel(): PanelInstance | undefined;
+    /** Gzip-compresses a string and returns it as base64. */
+    compressAndToBase64(text: string): Promise<string>;
+    /** Decompresses base64 produced by compressAndToBase64. */
+    decompressFromBase64(base64: string): Promise<string>;
 }
 
 // ---------------------------------------------------------------------------

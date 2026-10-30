@@ -49,7 +49,7 @@ boundary. Neither stops the other apps from loading.
 | `interApp` | Register and resolve app services. |
 | `interests` | Acquire/release demand-driven data interests. |
 | `notifications` | Toast banners. |
-| `utils` | `CommandRegistry`, `PanelContext`, `usePanel()`. |
+| `utils` | `CommandRegistry`, `PanelContext`, `usePanel()`, `compressAndToBase64`, `decompressFromBase64`. |
 
 Panel components receive the live instance as `props.panel`; deeper components
 can use `window.TacPhone.utils.usePanel()` or `PanelContext`.

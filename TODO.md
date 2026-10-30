@@ -300,8 +300,9 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
   (`Networking.ts:394`), so `npm run preview` uses dev app URLs while the
   `/devapps/` middleware is `apply: 'serve'` and 404s. Detect the dev server
   explicitly.
-- [ ] **[cleanup]** `src/MainApps/main.tsx:12` TODO: move the compression helpers
-  out of the app entry.
+- [x] **[cleanup]** `src/MainApps/main.tsx:12` TODO: move the compression helpers
+  out of the app entry. Moved to `Backend/Compression.ts` and exposed as
+  `window.TacPhone.utils.compressAndToBase64` / `decompressFromBase64`.
 - [x] **[cleanup]** `AppChooserPanel.tsx:56` TODO: load panel state from the
   model instead of ad-hoc state. The selected app is read back from the tab config
   in `componentDidMount()` via `PanelInstance.getConfig()`; the chooser element

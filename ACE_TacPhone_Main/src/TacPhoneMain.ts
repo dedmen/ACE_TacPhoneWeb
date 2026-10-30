@@ -20,3 +20,4 @@ export { NotificationCenter, notificationCenter } from "./Backend/Notifications"
 export { PanelDirectory, panelDirectory } from "./Backend/PanelDirectory";
 export { networking, IsArma, IsLocalDev } from "./Backend/Networking";
 export { SendMessageToApp } from "./Backend/AppMessaging";
+export { compressAndToBase64, decompressFromBase64 } from "./Backend/Compression";

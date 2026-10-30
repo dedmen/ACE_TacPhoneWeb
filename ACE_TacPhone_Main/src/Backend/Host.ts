@@ -22,6 +22,7 @@ import { interestRegistry } from "./InterestRegistry";
 import { notificationCenter } from "./Notifications";
 import { CommandRegistry } from "./MessageRouter";
 import { PanelContext, usePanel } from "../Panels/PanelContext";
+import { compressAndToBase64, decompressFromBase64 } from "./Compression";
 
 /** The host object, once it was built. */
 let host: TacPhoneHost | undefined;
@@ -47,7 +48,9 @@ function createHost(): TacPhoneHost {
         utils: {
             CommandRegistry,
             PanelContext,
-            usePanel
+            usePanel,
+            compressAndToBase64,
+            decompressFromBase64
         }
     };
 }

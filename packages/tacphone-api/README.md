@@ -28,7 +28,7 @@ consumed through the workspace's TypeScript build, not prebuilt `.d.ts` files.
 | `InterAppRegistry`, `AppServiceInfo`, `InterAppRegistration`, `TargetOptions`, `TargetPolicy`, `TargetChooser` | Inter-app services and routing. |
 | `InterestRegistryApi` | Reference-counted data interests. |
 | `NotificationCenterApi`, `NotificationOptions`, `TacPhoneNotification`, `NotificationTapHandler`, `NotificationAction` | Toast banners. |
-| `TacPhoneUtils`, `CommandRegistry`, `CommandRegistryConstructor`, `CommandHandler` | `CommandRegistry`, `PanelContext`, and `usePanel()`. |
+| `TacPhoneUtils`, `CommandRegistry`, `CommandRegistryConstructor`, `CommandHandler` | `CommandRegistry`, `PanelContext`, `usePanel()`, and the gzip/base64 helpers `compressAndToBase64` and `decompressFromBase64`. |
 
 ## App module contract
 

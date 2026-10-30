@@ -280,6 +280,8 @@ window.TacPhone: TacPhoneHost
 | `utils.CommandRegistry` | Message router helper shown above. |
 | `utils.PanelContext` | React context with the live `PanelInstance` of the panel an app is rendered in. |
 | `utils.usePanel()` | Hook form of `PanelContext` for function components. |
+| `utils.compressAndToBase64()` | Gzip-compress a string to base64 before sending it over the game bridge. |
+| `utils.decompressFromBase64()` | Reverse of `utils.compressAndToBase64()`. |
 
 `window.TacPhone` is the only app-facing global.
 
