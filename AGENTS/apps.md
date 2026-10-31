@@ -146,6 +146,13 @@ so it must be one self-contained ES module:
   non-ASCII code unit to `\uXXXX`: the in-game loader's `A3API.RequestFile`
   mis-decodes UTF-8 (emoji arrive as mojibake), so an app bundle must stay pure
   ASCII. Keep literal emoji/accents in source; do not add a separate escape step.
+- The plugin then stores the bundle as one ASCII line,
+  `TACPHONE-BUNDLE:1:gzip:<base64>`, in both release and debug builds.
+  `loadFile` and `A3API.RequestFile` pass file text through C strings, so raw
+  gzip would be cut at its first NUL byte; base64 also keeps the payload ASCII.
+  `AppDirectory` unpacks it before importing. There is no plain-bundle fallback
+  and no sidecar artifact: an app file without the header fails with a rebuild
+  message. Extra files loaded through `LoadGameFileText` are still plain text.
 - Keep `react`, `react-dom`, `react-dom/client`, `react/jsx-runtime`, and
   `react/compiler-runtime` external. The host import map provides them. A second
   React copy breaks hooks/context.

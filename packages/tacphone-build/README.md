@@ -83,9 +83,17 @@ Checks:
 - `ACE_TacPhone_Main/dist/index.html` (skipped when the host is not built) has an
   import map with exactly the shared specifiers, each a `data:text/javascript,`
   URL that reads the matching `window.<global>`.
-- Every discovered app's `dist/*.js` has no bare import outside the shared list,
-  scanning only the top-level import prologue so example imports in comments do
-  not cause false positives.
+- Every discovered app's `dist/*.js` is decoded from its
+  `TACPHONE-BUNDLE:<version>:<codec>:<base64>` container and has no bare import
+  outside the shared list, scanning only the top-level import prologue so example
+  imports in comments do not cause false positives.
+
+A bundle without the header is a hard failure when it belongs to the package that
+is being built (an app's own bundle must be compressed), and a `WARN ... rebuild`
+for the other apps, so building one app never fails because another app's `dist/`
+is stale. Running the command from the workspace root checks every bundle
+strictly. The game also rejects an uncompressed bundle at load time with the same
+rebuild hint, so a stale artifact cannot be shipped silently.
 
 The command fails when nothing could be checked, which usually means neither the
 host nor an app has been built yet.
@@ -133,8 +141,43 @@ or accents arrive as mojibake. Keeping the bundle ASCII makes the text invariant
 under that conversion; the JS parser restores the characters at runtime, so
 source files can keep literal emoji.
 
+Finally, in `writeBundle` (after Rollup wrote the file, so inlined CSS, escaping
+and the inline source map of a debug build are already in it), the plugin
+rewrites the single emitted `.js` as `TACPHONE-BUNDLE:1:gzip:<base64>` and logs
+the size ratio. Every app bundle is compressed; there is no option to disable it
+and no plain variant. Gzip output contains NUL bytes and the game moves file text
+through C strings, so base64 is what makes a compressed bundle loadable at all.
+
 The host is different: it builds an HTML page and uses
 `vite-plugin-singlefile` instead. Do not swap them.
+
+## `bundle-format.js`
+
+The on-disk app bundle format, shared by the build and the host loader:
+
+```
+TACPHONE-BUNDLE:<version>:<codec>:<base64>
+```
+
+| Export | Meaning |
+| --- | --- |
+| `APP_BUNDLE_MARKER` | `TACPHONE-BUNDLE:`, the start of every bundle regardless of version or codec. |
+| `APP_BUNDLE_VERSION` | Container version the build writes (`1`). |
+| `APP_BUNDLE_CODEC_GZIP` | The only codec the build writes and the reader accepts. |
+| `formatAppBundleHeader(version?, codec?)` | Builds the header line. |
+| `parseAppBundleHeader(text)` | Returns `{ version, codec, payload }`, or `{ error }` when the text is not a bundle. |
+
+Version and codec are separate fields so brotli can become
+`TACPHONE-BUNDLE:1:brotli:<base64>` without changing the header shape; an old
+host then reports the codec instead of trying to parse it as JavaScript.
+
+`bundle-format.js` is browser-safe and imports nothing, because
+`ACE_TacPhone_Main/src/Backend/AppDirectory.ts` imports the header helpers to
+unpack an app before importing it from a blob URL. The Node half,
+`@ace-tacphone/build/bundle-format/node`, exports `encodeAppBundle(code)` and
+`decodeAppBundle(text)` and is what `singlefile.ts` and `check-shared-imports`
+use. Keep the two in sync through this module; never inline a copy of the header
+string elsewhere.
 
 ## Notes
 

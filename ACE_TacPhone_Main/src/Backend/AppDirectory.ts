@@ -14,8 +14,14 @@
 
 import { TACPHONE_API_VERSION } from "@ace-tacphone/api";
 import type { AppCatalog, AppInfo, AppModule, AppPanelInfo, PanelMeta } from "@ace-tacphone/api";
+import {
+    APP_BUNDLE_CODEC_GZIP,
+    APP_BUNDLE_VERSION,
+    parseAppBundleHeader,
+} from "@ace-tacphone/build/bundle-format";
 
 import { IsLocalDev, networking, IsArma } from "./Networking";
+import { decompressFromBase64 } from "./Compression";
 import { GetTacPhoneHost } from "./Host";
 
 /**
@@ -48,6 +54,39 @@ type AppInfoSource = Pick<AppInfo, "devfile" | "file">;
 
 function errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Unpacks a packaged app bundle.
+ *
+ * Release and debug builds both store the module as one ASCII line,
+ * `TACPHONE-BUNDLE:<version>:<codec>:<base64>`, because SQF `loadFile` and
+ * `A3API.RequestFile` move text through C strings and cannot carry the NUL bytes
+ * of raw gzip. There is no plain-JavaScript fallback: an app whose file does not
+ * start with a header was built for a different loader and has to be rebuilt.
+ */
+async function decodeAppBundleSource(content: string, name: string, file: string): Promise<string> {
+    const header = parseAppBundleHeader(content);
+
+    if ("error" in header)
+        throw new Error(
+            `App "${name}" file "${file}" is not a TacPhone app bundle (${header.error}). `
+            + "Rebuild the app with the current @ace-tacphone/build.",
+        );
+
+    if (header.version !== APP_BUNDLE_VERSION)
+        throw new Error(
+            `App "${name}" file "${file}" uses bundle format version ${header.version}, `
+            + `but this host reads version ${APP_BUNDLE_VERSION}. Rebuild the app, or update the host.`,
+        );
+
+    if (header.codec !== APP_BUNDLE_CODEC_GZIP)
+        throw new Error(
+            `App "${name}" file "${file}" uses bundle codec "${header.codec}", `
+            + `but this host only reads "${APP_BUNDLE_CODEC_GZIP}".`,
+        );
+
+    return decompressFromBase64(header.payload);
 }
 
 /**
@@ -136,8 +175,9 @@ export class AppDirectory implements AppCatalog {
 
         //#TODO we need a global module/app directory, where we can look up from classname to in-game path
         const content = await networking.LoadGameFileText(appInfo.file); //  `/z/ace/addons/tacphone/apps/${name}.js`
+        const source = await decodeAppBundleSource(content, name, appInfo.file);
         // Store it in a blob url and then return it
-        const url = URL.createObjectURL(new Blob([content], {type: 'application/javascript'}));
+        const url = URL.createObjectURL(new Blob([source], {type: 'application/javascript'}));
         return import(/* @vite-ignore */ url);
     }
 

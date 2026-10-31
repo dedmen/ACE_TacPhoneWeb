@@ -2,16 +2,23 @@
 // Verifies the host import map and every discovered development app bundle
 // against the shared module list.
 //
+// App bundles are stored as `TACPHONE-BUNDLE:<version>:<codec>:<base64>`; they
+// are decoded before scanning. A bundle that is not compressed is a hard error
+// for the package that owns it (an app's own build must produce one) and a
+// warning elsewhere, so building one app does not fail because another app's
+// `dist/` is stale. The workspace-wide run treats every bundle as its own.
+//
 // Invoked from any workspace package: `tacphone-build check-shared-imports`.
 // The workspace root and host package are located automatically.
 
 import { existsSync } from 'node:fs'
 import { readFile, readdir } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import {
     SHARED_MODULES,
     SHARED_MODULE_SPECIFIERS,
 } from './shared-modules.js'
+import { decodeAppBundle } from './bundle-format.node.mjs'
 import { displayPath, findWorkspaceRoot, hostDirFor, importDevApps } from './paths.mjs'
 
 /** Exports apps actually rely on; a namespace that was tree-shaken away fails here. */
@@ -167,8 +174,43 @@ async function findAppBundles(hostDir) {
     return bundles.sort((a, b) => a.localeCompare(b))
 }
 
+/**
+ * True when the bundle belongs to the package whose build is running.
+ *
+ * `npm run build -w <app>` runs this command with the app folder as cwd, so its
+ * own `dist/` is checked strictly while other apps may still hold stale
+ * artifacts. Running the command from the workspace root checks every bundle
+ * strictly.
+ */
+function isOwnBundle(rootDir, path) {
+    const cwd = process.cwd()
+    if (cwd === rootDir) return true
+    return dirname(path) === join(cwd, 'dist')
+}
+
+/**
+ * Checks one app bundle and returns the number of bare imports it declares.
+ * Returns `null` after warning when the bundle is not a TacPhone bundle and does
+ * not belong to the current package, because the shared-import check cannot say
+ * anything about it.
+ */
 async function checkAppBundle(rootDir, path) {
-    const source = await readFile(path, 'utf8')
+    const encoded = await readFile(path, 'utf8')
+
+    // Every app bundle is stored as `TACPHONE-BUNDLE:<version>:<codec>:<base64>`
+    // so it can travel through SQF string file loading. Decode it before scanning;
+    // a plain JavaScript build here means a stale artifact or a broken build.
+    let source
+    try {
+        source = decodeAppBundle(encoded)
+    } catch (error) {
+        const message = `${displayPath(rootDir, path)} is not a compressed TacPhone app bundle (${error.message}). `
+            + 'Rebuild the app with the current @ace-tacphone/build.'
+        if (isOwnBundle(rootDir, path)) throw new Error(message)
+        console.warn(`WARN ${message}`)
+        return null
+    }
+
     const bareSpecifiers = collectBareSpecifiers(source)
     const provided = new Set(SHARED_MODULE_SPECIFIERS)
     const missing = [...bareSpecifiers]
@@ -207,7 +249,9 @@ export async function runCheckSharedImports() {
     } else {
         for (const bundle of bundles) {
             const imports = await checkAppBundle(rootDir, bundle)
-            console.log(`OK  ${displayPath(rootDir, bundle)} (${imports} bare imports)`)
+            if (imports !== null) {
+                console.log(`OK  ${displayPath(rootDir, bundle)} (${imports} bare imports)`)
+            }
             checks++
         }
     }

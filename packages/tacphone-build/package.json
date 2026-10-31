@@ -9,6 +9,8 @@
   "main": "./index.js",
   "exports": {
     ".": "./index.js",
+    "./bundle-format": "./bundle-format.js",
+    "./bundle-format/node": "./bundle-format.node.mjs",
     "./shared-modules": "./shared-modules.js",
     "./singlefile": "./singlefile.ts"
   },

@@ -210,7 +210,7 @@ class ace_tacphone_apps {
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `scope` | Yes | Must be greater than `0`; use `2`. |
-| `ace_tacphone_file` | Yes, except `main` | Path to the production ES module entry in the game filesystem. It is read with `LoadGameFileText` and imported from a blob URL. |
+| `ace_tacphone_file` | Yes, except `main` | Path to the packaged app bundle in the game filesystem. It is read with `LoadGameFileText`, unpacked from its gzip+base64 container (see [Production packaging](#production-packaging-one-esm-entry-file-per-app)), and imported from a blob URL. |
 | `ace_tacphone_devFile` | Recommended | Entry point relative to the app folder, for example `src\main.tsx`. The development loader imports this path from `/devapps/<AppName>/`; if omitted it falls back to `src/main.tsx`. |
 | `ace_tacphone_requestProcessor` | For app requests | Name of the SQF function that handles requests sent with `a: "<AppName>"`. It receives the request hashmap and the requesting client id (`"local"` for the in-game browser, otherwise the websocket connection id), and may return any JSON-serializable value or a promise. |
 | `icon` | No | Default panel icon: a game texture path, data URL, or `GetTacPhoneIcon()`-style value. Outside Arma (external/local dev browser), `http:`, `https:`, and protocol-relative (`//`) URLs are allowed; inside Arma's sandboxed browser, use only `data:`, `blob:`, or a game texture path for in-game apps. `GetTacPhoneIcon()` on the panel takes precedence; `PanelInstance.setIcon()` overrides both at runtime. |
@@ -729,23 +729,48 @@ Rules for app builds:
 In development Vite resolves the bare imports for you. The import map matters
 most for a prebuilt app bundle loaded with `import()` from a blob URL.
 
-`tacphone-build check-shared-imports` (`npm run check:importmap`) verifies the
-built host import map and every discovered development app's `dist/*.js` bundle
-against `shared-modules.js`. The host and app build scripts run the same check
-automatically.
+`tacphone-build check-shared-imports` (`npm run check:importmap`) unpacks every
+app's `dist/*.js` bundle and verifies its decoded imports plus the built host
+import map against `shared-modules.js`. The host and app build scripts run the
+same check automatically.
 
 ## Production packaging: one ESM entry file per app
 
 The production loader in `src/Backend/AppDirectory.ts` reads
-`ace_tacphone_file` with `LoadGameFileText`, creates a `Blob`, and imports it:
+`ace_tacphone_file` with `LoadGameFileText`, unpacks it, creates a `Blob`, and
+imports it:
 
 ```ts
 const content = await window.TacPhone.networking.LoadGameFileText(appInfo.file);
+const source = await decodeAppBundleSource(content, name, appInfo.file); // header + gzip + base64
 const url = URL.createObjectURL(
-    new Blob([content], { type: 'application/javascript' })
+    new Blob([source], { type: 'application/javascript' })
 );
 return import(/* @vite-ignore */ url);
 ```
+
+The packaged file is **not** plain JavaScript. Every app build, release and
+debug, writes exactly one ASCII line:
+
+```text
+TACPHONE-BUNDLE:1:gzip:<base64 of the gzipped ES module>
+```
+
+SQF `loadFile` and `A3API.RequestFile` hand file text to the page through C
+strings, so raw gzip would be cut at its first NUL byte; base64 keeps the payload
+ASCII and shrinks a release bundle to roughly a third of its size. The header
+also makes a wrong or stale build obvious: a missing header, an unknown version,
+or an unsupported codec fails with a message that says to rebuild the app. There
+is deliberately no plain-bundle fallback and no sidecar file.
+
+`@ace-tacphone/build/singlefile` applies this automatically in `writeBundle`,
+after CSS inlining, `\uXXXX` escaping, and (for debug builds) the inline source
+map are in the file. `npm run build:debug` therefore still gives a fully
+debuggable bundle: the developer console sees the decompressed module with its
+inline source map and shows the original `.tsx` frames.
+
+Additional files loaded through `LoadGameFileText` are not compressed; only the
+`ace_tacphone_file` entry is.
 
 The entry file must be one self-contained ES module. A normal bundle-relative
 `import('./chunk.js')`, `React.lazy(() => import(...))`, CSS code splitting, or

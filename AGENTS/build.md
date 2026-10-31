@@ -25,14 +25,24 @@ From this directory (workspace root):
 ```powershell
 npm install            # one root lockfile, hoisted workspace deps
 npm run dev            # host Vite server; open the printed URL
-npm run build          # host + Map + SampleApp + Messaging
+npm run build          # release: host + Map + SampleApp + Messaging
+npm run build:debug    # debug: host + every app
 npm run build:host
 npm run build:apps
+npm run build:apps:debug
 npm run check          # tsc -b in every workspace package
 npm run lint
 npm run check:importmap
 npm run sync:api-types -- <source.d.ts> <target-dir-or-file>...
 ```
+
+**While developing, always build with `npm run build:debug` (or an app's
+`build:debug`), never `npm run build`.** Debug output is unminified, keeps
+`console.log`, and carries an inline source map, so the in-game developer
+console maps the blob-imported bundle back to the original `.tsx`. Run the
+release `npm run build` and re-copy the outputs only when the artifact is meant
+to ship: a debug bundle is several times larger because the source map is
+embedded, and it must not end up in `apps/*/data/`.
 
 Host (`ACE_TacPhone_Main`):
 
@@ -96,12 +106,22 @@ DLL, then replace that file. The game only picks it up on restart.
   `console.log/debug/info` calls are removed. `console.warn` and `console.error`
   stay in both modes; keep them useful.
 - `npm run build:debug` is unminified with an inline source map.
+- An app bundle is never stored as plain JavaScript. Both modes write one ASCII
+  line, `TACPHONE-BUNDLE:1:gzip:<base64>`, because `loadFile` and
+  `A3API.RequestFile` pass text through C strings and would truncate raw gzip at
+  its first NUL byte. The single-file plugin does this after the inline source
+  map is attached, so debugging still works. `AppDirectory` unpacks it; there is
+  no plain-bundle fallback. See `packages/tacphone-build/README.md`.
 - The host produces one self-contained `dist/index.html` (inline script and
-  import map) for the in-game `CT_WEBBROWSER`.
+  import map) for the in-game `CT_WEBBROWSER`. The host is not compressed this
+  way; only app bundles are.
 - An app produces one self-contained ESM bundle plus a self-contained
   declaration file. See [`apps.md`](apps.md) for the packaging rules.
 - There are no tests. `npm run check` is the typecheck; builds run the
-  shared-import checker automatically.
+  shared-import checker automatically. That checker decodes the bundle first; a
+  bundle without the header fails the build of its own package and only warns
+  while another package is built, so a stale `dist/` cannot block unrelated
+  builds.
 
 ## `@ace-tacphone/api`
 

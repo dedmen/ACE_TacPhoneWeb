@@ -1,6 +1,10 @@
 import { type UserConfig, type PluginOption } from "vite"
 import type { OutputChunk, OutputAsset } from "rollup"
+import { readFile, writeFile } from "node:fs/promises"
+import { join } from "node:path"
 import micromatch from "micromatch"
+import { encodeAppBundle } from "./bundle-format.node.mjs"
+import { APP_BUNDLE_MARKER } from "./bundle-format.js"
 
 // This is a modified variant of https://www.npmjs.com/package/vite-plugin-singlefile
 // Instead of merging into a .html, we merge into a .js
@@ -123,10 +127,17 @@ export function viteSingleFile({
 		Object.assign(config, overrideConfig)
 	}
 
+	// Resolved output directory, captured so `writeBundle` can rewrite the
+	// emitted bundle in place once Rollup has finished writing it.
+	let outDir = ""
+
 	return {
 		name: "vite:singlefile",
 		config: useRecommendedBuildConfig ? _useRecommendedBuildConfig : undefined,
 		enforce: "post",
+		configResolved(config) {
+			outDir = config.build.outDir
+		},
 
         //async configResolved(config) {
         //    const resolvedNames = config.plugins.map(p => p.name)
@@ -199,6 +210,39 @@ export function viteSingleFile({
 			}
 			for (const name of files.other) {
 				warnNotInlined(name)
+			}
+		},
+
+		// App bundles are never stored as plain JavaScript: `loadFile` in SQF and
+		// `A3API.RequestFile` in the page hand text through C strings, so binary
+		// gzip would be truncated at its first NUL byte. Base64 keeps the payload
+		// ASCII while still shrinking it to roughly a third of the source.
+		//
+		// This runs after Rollup wrote the file, so everything the earlier hooks
+		// produced (inlined CSS, escaped non-ASCII, and the inline source map of a
+		// debug build) is part of the bytes that get compressed.
+		async writeBundle(_options, bundle) {
+			const jsFiles = Object.keys(bundle).filter(name => isJsFile.test(name))
+
+			if (jsFiles.length !== 1) {
+				this.error(`vite:singlefile expects a single JavaScript chunk to compress, but ${jsFiles.length} were written: ${jsFiles.join(", ")}`)
+			}
+
+			for (const fileName of jsFiles) {
+				const path = join(outDir, fileName)
+				const source = await readFile(path, "utf8")
+
+				// Defensive: never encode an already encoded bundle twice.
+				if (source.startsWith(APP_BUNDLE_MARKER)) continue
+
+				const encoded = encodeAppBundle(source)
+				await writeFile(path, encoded, "utf8")
+
+				const ratio = source.length > 0 ? (encoded.length / source.length) * 100 : 0
+				this.info(
+					`Compressing ${fileName}: ${source.length} B -> ${encoded.length} B base64 gzip `
+					+ `(${ratio.toFixed(1)}% of the source)`,
+				)
 			}
 		},
 	}

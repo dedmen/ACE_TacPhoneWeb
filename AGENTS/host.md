@@ -127,6 +127,12 @@ web build, so the diagnostic uses `console.warn` (release builds strip
 `console.log`). Release game builds or `allowDebug = false` skip it. The app
 contract version is `2`.
 
+App bundles loaded through `LoadGameFileText` are not plain JavaScript:
+`Backend/AppDirectory.ts` unpacks the `TACPHONE-BUNDLE:<version>:<codec>:<base64>`
+line (gzip, base64) before creating the blob URL, and fails with a rebuild
+message for anything without a supported header. See
+[`apps.md`](apps.md#packaging-rules).
+
 The engine moves `ExecJS` sources through base64 and decodes them with `atob`,
 so non-ASCII text in in-game replies and pushes arrives as a UTF-8 byte string
 (`"Кa32"` → `"Ð\u009aa32"`). The helpers in

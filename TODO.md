@@ -12,8 +12,8 @@ needs a product decision before coding, **[wontfix]** deliberately left as is.
 - [x] Implement `GetLayout` and `SaveLayout` in
   `addons/tacphone/functions/fnc_processBrowserRequest.sqf`.
   - `SaveLayout` stores the gzipped/base64 `layout` string in `profileNamespace`
-    under `ace_tacphone_layout`, rejects empty/oversized/non-string values, and
-    skips the profile write when the layout did not change.
+    under `ace_tacphone_layout`, rejects only oversized values, and skips the
+    profile write when the layout did not change.
   - `GetLayout` returns that string, or `""` when nothing was saved yet.
 - [x] Keep `localStorage` as the external-browser persistence path and use the
   SQF path when `localStorage` is unavailable (the in-game browser).
@@ -375,6 +375,12 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
 ## Tooling and dependencies
 
 - [ ] **[cleanup]** rerun `npm audit`, both builds, and `check:importmap`.
+- [ ] **[enhancement]** Brotli app bundles. The container header already carries
+  the codec (`TACPHONE-BUNDLE:<version>:<codec>:<base64>`), so the build only has
+  to emit `brotli` (`zlib.brotliCompressSync`), add the codec to the Node half,
+  and teach the host loader to decode it with `DecompressionStream` once the
+  in-game Chromium exposes brotli. Until then the loader reports the codec
+  instead of failing to parse it.
 
 ## Messenger app (`MessagingApp`)
 
