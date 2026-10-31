@@ -21,23 +21,17 @@ interface AppMessageTarget {
     a?: unknown;
 }
 
-/**
- * Forwards a message to the OnMessageFromGame() of the app named by its `a`.
- * Unknown or unloaded apps are logged and skipped; app failures never throw.
- */
-export function SendMessageToApp(message: object): void {
-    const { a } = message as AppMessageTarget;
+/** Messages that arrived before their app finished loading. */
+const pendingByApp = new Map<string, object[]>();
+/** Keep one broken/missing app from growing the queue without bound. */
+const MAX_PENDING_PER_APP = 100;
+let watchingDirectory = false;
 
-    if (typeof a !== "string" || a.length === 0) {
-        console.warn("Message from game has no app target", message);
-        return;
-    }
-
+/** Delivers one message when the target app is loaded; returns false otherwise. */
+function deliver(a: string, message: object): boolean {
     const appModule: AppModule | undefined = appDirectory.knownApps.get(a)?.module;
-    if (!appModule || typeof appModule.OnMessageFromGame !== "function") {
-        console.warn(`No loaded TacPhone app can handle a message for "${a}"`, message);
-        return;
-    }
+    if (!appModule || typeof appModule.OnMessageFromGame !== "function")
+        return false;
 
     try {
         const result = appModule.OnMessageFromGame(message);
@@ -50,4 +44,57 @@ export function SendMessageToApp(message: object): void {
     } catch (error) {
         console.error(`TacPhone app "${a}" failed to handle a message:`, error);
     }
+
+    return true;
+}
+
+/** Flushes queued messages whose app has just become available. */
+function flushPending(): void {
+    for (const [app, messages] of [...pendingByApp]) {
+        if (messages.length === 0) {
+            pendingByApp.delete(app);
+            continue;
+        }
+
+        if (!appDirectory.knownApps.has(app))
+            continue;
+
+        pendingByApp.delete(app);
+        for (const message of messages)
+            deliver(app, message);
+    }
+}
+
+/**
+ * Forwards a message to the OnMessageFromGame() of the app named by its `a`.
+ *
+ * A message can arrive while an app is still loading (especially during a page
+ * reload, when the game answers a request from the previous page). Those are
+ * queued briefly and delivered once the app directory reports the app, instead
+ * of being logged as "no loaded app can handle" and lost.
+ */
+export function SendMessageToApp(message: object): void {
+    const { a } = message as AppMessageTarget;
+
+    if (typeof a !== "string" || a.length === 0) {
+        console.warn("Message from game has no app target", message);
+        return;
+    }
+
+    if (deliver(a, message))
+        return;
+
+    if (!watchingDirectory) {
+        watchingDirectory = true;
+        appDirectory.onDidChange(() => flushPending());
+    }
+
+    const queued = pendingByApp.get(a) ?? [];
+    if (queued.length >= MAX_PENDING_PER_APP) {
+        console.warn(`Dropping a message for unloaded TacPhone app "${a}"; its pending queue is full.`, message);
+        return;
+    }
+
+    queued.push(message);
+    pendingByApp.set(a, queued);
 }
