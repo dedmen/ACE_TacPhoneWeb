@@ -9,7 +9,7 @@ import './globals';
 import type { ComponentType, Context } from 'react';
 
 /** Version of the app-facing contract. Every app must export the same value. */
-export const TACPHONE_API_VERSION = 1;
+export const TACPHONE_API_VERSION = 2;
 
 /** React component type used for panels. */
 export type AppComponent = ComponentType<AppProps>;
@@ -222,6 +222,24 @@ export interface PanelDirectoryApi {
 // Networking
 // ---------------------------------------------------------------------------
 
+/** One rendered terrain layer, serialized as a standalone SVG document. */
+export interface TerrainLayer {
+    /** Layer title from the SVG layer id, or `Layer N` when it has none. */
+    name: string;
+    /** Self-contained SVG text that includes the root attributes, defs and this layer. */
+    svg: string;
+}
+
+/** Terrain returned by Networking.LoadGameTerrain(). */
+export interface TerrainData {
+    /** Terrain width in metres. */
+    width: number;
+    /** Terrain height in metres. */
+    height: number;
+    /** Layers in document order. */
+    layers: TerrainLayer[];
+}
+
 /** Transport between the page and the game. */
 export interface Networking {
     WhenReady(): Promise<void>;
@@ -236,8 +254,17 @@ export interface Networking {
     LoadGameFileText(path: string): Promise<string>;
     /** Loads a texture from the game filesystem and returns it as a data URL. */
     LoadGameFileTexture(path: string, maxSize: number): Promise<string>;
-    /** Loads and preprocesses terrain data from the game filesystem as SVG. */
-    LoadGameTerrain(config: object): Promise<string>;
+    /**
+     * Loads and preprocesses terrain data from the game filesystem, split into
+     * standalone per-layer SVG documents.
+     */
+    LoadGameTerrain(config: object): Promise<TerrainData>;
+    /**
+     * Loads the terrain and streams it back to the game as compressed layer
+     * chunks. Host-internal producer path used by the built-in main app; only
+     * the in-game transport implements it.
+     */
+    ReplyTerrainSVG(uid: string | number, config: object): Promise<void>;
     OnMessageFromGame(message: object): void;
 }
 

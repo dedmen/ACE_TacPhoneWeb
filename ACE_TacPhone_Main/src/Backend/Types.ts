@@ -37,6 +37,8 @@ export type {
     TargetChooser,
     TargetOptions,
     TargetPolicy,
+    TerrainData,
+    TerrainLayer,
 } from "@ace-tacphone/api";
 
 export { TACPHONE_API_VERSION } from "@ace-tacphone/api";

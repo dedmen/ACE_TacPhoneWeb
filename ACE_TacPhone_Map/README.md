@@ -160,8 +160,12 @@ reply and rejects on invalid data.
 The map is always north-up. The view is created with `enableRotation: false`
 (so the rotation constraint clamps to 0), and the `DragRotate` and `PinchRotate`
 interactions are removed when the map is created. Two-finger touch gestures
-therefore only pan and zoom; `Shift`+`Alt`+drag does not rotate either. The
-terrain view is rebuilt when the terrain SVG arrives, and `createTerrainView()`
+therefore only pan and zoom; `Shift`+`Alt`+drag does not rotate either. Terrain is
+requested through `window.TacPhone.networking.LoadGameTerrain(...)`, which now
+resolves to a `TerrainData` (`{ width, height, layers: [{ name, svg }] }`) instead
+of one raw SVG string: the host splits and compresses the layers, and the Map only
+turns each `layer.svg` into a Blob URL and an OpenLayers tile source. The
+terrain view is rebuilt when the terrain layers arrive, and `createTerrainView()`
 reapplies the same option, so a reload cannot reintroduce rotation.
 When replacing terrain layers, the old layers are detached, their renderer and
 source are disposed, and the layer object itself is not disposed: OpenLayers

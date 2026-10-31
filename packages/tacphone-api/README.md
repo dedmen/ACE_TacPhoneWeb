@@ -18,11 +18,12 @@ consumed through the workspace's TypeScript build, not prebuilt `.d.ts` files.
 
 | Export | Purpose |
 | --- | --- |
-| `TACPHONE_API_VERSION` | Contract version (`1`). Every app module must export the same `apiVersion`. |
+| `TACPHONE_API_VERSION` | Contract version (`2`). Every app module must export the same `apiVersion`. |
 | `AppProps` | Props of every panel component: `appId`, `panelId`, `node`, `model`, `panel`. The host is the global `window.TacPhone`. |
 | `AppModule`, `AppPanelInfo`, `AppComponent` | App entry module and panel registration. |
 | `TacPhoneHost` | The `window.TacPhone` object: `apiVersion`, `reactVersion`, `networking`, `apps`, `panels`, `interApp`, `interests`, `notifications`, `utils`. |
-| `Networking` | `WhenReady`, `Request`, `OnConnectionChange`, `LoadGameFileText`, `LoadGameFileTexture`, `LoadGameTerrain`, `OnMessageFromGame`. |
+| `Networking` | `WhenReady`, `Request`, `OnConnectionChange`, `LoadGameFileText`, `LoadGameFileTexture`, `LoadGameTerrain`, `ReplyTerrainSVG`, `OnMessageFromGame`. |
+| `TerrainData`, `TerrainLayer` | Return type of `LoadGameTerrain()`: terrain `width`/`height` and standalone per-layer SVG documents. |
 | `AppCatalog`, `AppInfo`, `PanelMeta` | Read-only app and panel catalog (`window.TacPhone.apps`). |
 | `PanelDirectoryApi`, `PanelInfo`, `PanelInstance`, `OpenPanelOptions`, `OpenPanelResult`, `PanelRect`, `PanelPlacement` | Panel enumeration and control. |
 | `InterAppRegistry`, `AppServiceInfo`, `InterAppRegistration`, `TargetOptions`, `TargetPolicy`, `TargetChooser` | Inter-app services and routing. |
@@ -35,7 +36,7 @@ consumed through the workspace's TypeScript build, not prebuilt `.d.ts` files.
 ```ts
 import type { AppModule, AppPanelInfo } from '@ace-tacphone/api';
 
-export const apiVersion = 1; // required, must equal TACPHONE_API_VERSION
+export const apiVersion = 2; // required, must equal TACPHONE_API_VERSION
 
 export function GetTacPhoneApps(): AppPanelInfo[] { /* ... */ }
 export function OnMessageFromGame(message: object): void { /* optional */ }
@@ -48,6 +49,12 @@ entry in `window.TacPhone.apps.failedApps` with a clear message.
 
 ## Notes
 
+- `LoadGameTerrain()` resolves to a `TerrainData` (`width`, `height`, `layers`)
+  instead of a raw SVG string. The in-game transport splits the SVG into
+  standalone per-layer documents and streams compressed chunks; the browser
+  transport reassembles them (and still accepts the legacy whole-SVG reply).
+- `ReplyTerrainSVG(uid, config)` is the host-internal producer path used by the
+  built-in main app; only the in-game transport implements it.
 - Apps should also expose their inter-app service types from `src/api.ts`; that is
   bundled into `dist/*.d.ts` by `@ace-tacphone/build`, not by this package.
 - There is no `TacPhoneMain.d.ts` any more. `ACE_TacPhone_Main/src/TacPhoneMain.ts`

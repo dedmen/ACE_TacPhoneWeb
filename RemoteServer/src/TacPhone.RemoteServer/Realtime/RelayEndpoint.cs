@@ -44,6 +44,7 @@ public sealed class RelayEndpoint
     private readonly HostRegistry _registry;
     private readonly AttachRateLimiters _limiters;
     private readonly TerrainCache _terrainCache;
+    private readonly TextureCache _textureCache;
     private readonly TimeProvider _time;
     private readonly ILogger<RelayEndpoint> _logger;
 
@@ -55,6 +56,7 @@ public sealed class RelayEndpoint
         HostRegistry registry,
         AttachRateLimiters limiters,
         TerrainCache terrainCache,
+        TextureCache textureCache,
         TimeProvider time,
         ILogger<RelayEndpoint> logger)
     {
@@ -63,6 +65,7 @@ public sealed class RelayEndpoint
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _limiters = limiters ?? throw new ArgumentNullException(nameof(limiters));
         _terrainCache = terrainCache ?? throw new ArgumentNullException(nameof(terrainCache));
+        _textureCache = textureCache ?? throw new ArgumentNullException(nameof(textureCache));
         _time = time ?? throw new ArgumentNullException(nameof(time));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -387,24 +390,72 @@ public sealed class RelayEndpoint
 
     private void ForwardToClient(HostSession session, string peerId, ReadOnlyMemory<byte> payload)
     {
-        // Terrain replies are large; only look inside a frame while a forwarded
-        // terrain request is actually outstanding. TakePending runs only after a
-        // successful parse so a coincidental key cannot consume an entry.
-        if (_terrainCache.Enabled &&
-            _terrainCache.HasPending &&
-            TerrainRequest.TryReadReply(payload.Span, out var replyKey, out var terrainData) &&
-            _terrainCache.TakePending(peerId, replyKey, out var hostId, out var configHash) &&
-            !string.IsNullOrEmpty(terrainData))
-        {
-            var contentHash = TerrainCache.ComputeContentHash(terrainData);
-            _terrainCache.Pin(hostId, configHash, contentHash, terrainData);
-        }
-
         if (!session.Clients.TryGetValue(peerId, out var client))
         {
-            // Unknown peers are dropped: the browser may have just closed.
+            // Unknown peers are dropped: the browser may have just closed. Nothing
+            // is cached for a peer that is no longer there.
             _logger.LogDebug("Dropping an application frame for an unknown peer");
             return;
+        }
+
+        // Terrain replies are large; only look inside a frame while a forwarded
+        // request is actually outstanding. Routing is by frame shape so the
+        // legacy terrain parser never consumes a texture reply.
+        if (_terrainCache.Enabled &&
+            _terrainCache.HasPending &&
+            TerrainRequest.TryReadChunk(payload.Span, out var chunkKey, out var chunk))
+        {
+            var result = _terrainCache.TryAddChunk(
+                peerId, chunkKey, chunk, out var completed, out var hostId, out var configHash);
+
+            switch (result)
+            {
+                case ChunkResult.Buffered:
+                    // Part of a transfer: hold it until every layer part arrived.
+                    return;
+
+                case ChunkResult.Completed when completed is not null:
+                {
+                    var contentHash = TerrainCache.ComputeContentHash(completed.Data);
+                    _terrainCache.Pin(hostId, configHash, contentHash, completed.Data);
+
+                    foreach (var frame in TerrainRequest.BuildLayerFrames(
+                                 chunkKey, completed, TerrainRequest.MaxTerrainChunkChars))
+                    {
+                        client.Socket.TryEnqueueBinary(frame);
+                    }
+
+                    return;
+                }
+
+                case ChunkResult.Completed:
+                    return;
+
+                default:
+                    // Not pending, an error chunk or an inconsistent transfer:
+                    // forward the frame untouched (and never cache it).
+                    break;
+            }
+        }
+
+        if (_textureCache.Enabled &&
+            _textureCache.HasPending &&
+            TextureRequest.TryReadReply(payload.Span, out var textureKey, out var textureData) &&
+            _textureCache.TakePending(peerId, textureKey, out var textureCacheKey))
+        {
+            if (!string.IsNullOrEmpty(textureData))
+            {
+                _textureCache.Store(textureCacheKey, textureData);
+            }
+        }
+        else if (_terrainCache.Enabled &&
+                 _terrainCache.HasPending &&
+                 TerrainRequest.TryReadReply(payload.Span, out var replyKey, out var terrainData) &&
+                 _terrainCache.TakePending(peerId, replyKey, out var terrainHostId, out var terrainConfigHash) &&
+                 !string.IsNullOrEmpty(terrainData))
+        {
+            var contentHash = TerrainCache.ComputeContentHash(terrainData);
+            _terrainCache.Pin(terrainHostId, terrainConfigHash, contentHash, terrainData);
         }
 
         // A full queue aborts the peer; its receive loop then detaches it.
@@ -892,20 +943,64 @@ public sealed class RelayEndpoint
                 }
 
                 // Browsers send the raw application JSON; text is accepted as well.
-                // Terrain SVGs are cached per host: a matching pin answers the
-                // browser directly and never reaches the game.
-                if (_terrainCache.Enabled &&
-                    TerrainRequest.TryParse(frame.Payload, out var requestKey, out var configHash))
+                // Terrain SVGs are cached per host and textures globally: a matching
+                // entry answers the browser directly and never reaches the game.
+                if (TerrainRequest.TryParse(frame.Payload, out var requestKey, out var configHash))
                 {
-                    _terrainCache.SweepPending(_options.TerrainCache.PendingTimeout());
-
-                    if (_terrainCache.TryGetPin(host.HostId, configHash, out var pinned))
+                    if (!_terrainCache.Enabled)
                     {
-                        client.Socket.TryEnqueueBinary(TerrainRequest.BuildReply(requestKey, pinned));
-                        continue;
+                        _logger.LogInformation(
+                            "Terrain cache miss for host {HostId}: TacPhone:TerrainCache:Enabled is false",
+                            host.HostId);
+                    }
+                    else
+                    {
+                        _terrainCache.SweepPending(_options.TerrainCache.PendingTimeout());
+
+                        if (_terrainCache.TryGetPin(host.HostId, configHash, out var pinned))
+                        {
+                            if (TerrainRequest.TryBuildLayerFrames(
+                                    requestKey, pinned, TerrainRequest.MaxTerrainChunkChars, out var frames))
+                            {
+                                foreach (var cachedFrame in frames)
+                                {
+                                    client.Socket.TryEnqueueBinary(cachedFrame);
+                                }
+                            }
+                            else
+                            {
+                                client.Socket.TryEnqueueBinary(TerrainRequest.BuildReply(requestKey, pinned));
+                            }
+
+                            continue; // instant, no game round-trip
+                        }
+
+                        // A reused request key would corrupt an existing correlation;
+                        // forward it uncached instead.
+                        if (!_textureCache.IsPending(client.PeerId, requestKey) &&
+                            !_terrainCache.IsPending(client.PeerId, requestKey))
+                        {
+                            _terrainCache.AddPending(client.PeerId, requestKey, host.HostId, configHash);
+                        }
+                    }
+                }
+
+                if (_textureCache.Enabled &&
+                    TextureRequest.TryParse(frame.Payload, out var textureKey, out var textureCacheKey))
+                {
+                    _textureCache.SweepPending(_options.TextureCache.PendingTimeout());
+
+                    if (_textureCache.TryGet(textureCacheKey, out var cachedTexture))
+                    {
+                        client.Socket.TryEnqueueBinary(TextureRequest.BuildReply(textureKey, cachedTexture));
+                        continue; // instant, never reaches the game
                     }
 
-                    _terrainCache.AddPending(client.PeerId, requestKey, host.HostId, configHash);
+                    if (!_terrainCache.IsPending(client.PeerId, textureKey) &&
+                        !_textureCache.IsPending(client.PeerId, textureKey))
+                    {
+                        _textureCache.AddPending(client.PeerId, textureKey, textureCacheKey);
+                    }
                 }
 
                 var envelope = FrameCodec.EncodeGameFrame(client.PeerId, frame.Payload);
@@ -918,6 +1013,11 @@ public sealed class RelayEndpoint
         }
         finally
         {
+            // Pending correlations belong to the browser; cached texture entries do
+            // not, so only the pending maps are dropped here.
+            _terrainCache.DropPeer(client.PeerId);
+            _textureCache.DropPeer(client.PeerId);
+
             if (host.Clients.TryRemove(client.PeerId, out _))
             {
                 host.Game.TryEnqueueText(ServerFrames.PeerLeft(client.PeerId, reason));
@@ -936,6 +1036,10 @@ public sealed class RelayEndpoint
         var now = _time.GetUtcNow();
         var nowUnix = now.ToUnixTimeSeconds();
         var idleTimeout = TimeSpan.FromSeconds(_options.Limits.IdleTimeoutSeconds);
+
+        // Abandoned transfers expire even when no new request arrives.
+        _terrainCache.SweepPending(_options.TerrainCache.PendingTimeout());
+        _textureCache.SweepPending(_options.TextureCache.PendingTimeout());
 
         foreach (var host in _registry.Snapshot())
         {

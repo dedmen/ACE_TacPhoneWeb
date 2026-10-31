@@ -26,6 +26,12 @@ The map panel reads its live handle from `this.props.panel` and the host from
 and acquires the marker interest in its lifecycle; release the interest and
 unregister the service on unmount, including when map creation failed part-way.
 
+Terrain is loaded with `window.TacPhone.networking.LoadGameTerrain(...)`, which
+resolves to a `TerrainData` (`{ width, height, layers: [{ name, svg }] }`).
+`applyTerrainLayers()` uses `width`/`height` for the extent and tile resolutions
+and turns each layer's `svg` into a Blob URL/`Image`; the Map never parses or
+splits the raw terrain SVG itself (the host producer does that before sending).
+
 ## Requests and game pushes
 
 Web → game (all through `window.TacPhone.networking.Request`, `a:

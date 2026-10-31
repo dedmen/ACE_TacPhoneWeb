@@ -189,21 +189,10 @@ export async function OnMessageFromGame(message: object): Promise<void> {
     }
 
     if (c == "RequestTerrainSVG") {
-        // Game would like to get SVG image sent back to it
+        // Game would like to get the terrain sent back to it as layer chunks.
+        const { config, uid } = message as { config: object, uid: string | number };
 
-        const { config, uid } = message as { config: object, uid: string };
-
-        var terrainData = await window.TacPhone.networking.LoadGameTerrain(config);
-        // terrainData is a raw several MB large SVG image
-        // We need to reduce the size to transfer it
-
-        console.log("Terrain data pre compress", terrainData.length);
-        terrainData = await compressAndToBase64(terrainData);
-        console.log("Terrain data compressed", terrainData.length);
-
-        // Now we can send it back, we do that by sending a request to the game
-
-        await window.TacPhone.networking.Request({ a: "main", c: "ReplyRequestTerrainSVG", uid: uid, data: terrainData });
+        await window.TacPhone.networking.ReplyTerrainSVG(uid, config);
     }
 
     if (c == "RequestTexture") {

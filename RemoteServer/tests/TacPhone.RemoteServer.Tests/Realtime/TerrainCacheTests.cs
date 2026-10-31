@@ -366,6 +366,224 @@ public sealed class TerrainCacheTests
         Assert.Equal(0, stats.Misses);
     }
 
+    // --------------------------------------------------------- chunk assembly
+
+    [Fact]
+    public void TryAddChunk_BuffersThenCompletesOutOfOrder()
+    {
+        var cache = Create();
+        cache.AddPending("p_1", "nr1", "host-a", ConfigHashA);
+
+        Assert.Equal(
+            ChunkResult.Buffered,
+            cache.TryAddChunk("p_1", "nr1", Chunk(1, 2, data: "BBBB"), out var incomplete, out _, out _));
+        Assert.Null(incomplete);
+        Assert.Equal(1, cache.Snapshot().Pending);
+        Assert.Equal(4, cache.Snapshot().PendingBytes);
+
+        var result = cache.TryAddChunk(
+            "p_1", "nr1", Chunk(0, 2, data: "AAAA"), out var completed, out var hostId, out var configHash);
+
+        Assert.Equal(ChunkResult.Completed, result);
+        Assert.NotNull(completed);
+        Assert.Equal("host-a", hostId);
+        Assert.Equal(ConfigHashA, configHash);
+        Assert.Equal(16, completed!.Width);
+        Assert.Equal(16, completed.Height);
+        Assert.Equal(["Layer 1", "Layer 1"], completed.Layers.Select(layer => layer.Name).ToArray());
+        Assert.Equal(["AAAA", "BBBB"], completed.Layers.Select(layer => layer.Data).ToArray());
+        Assert.Equal(
+            """{"width":16,"height":16,"layers":[{"name":"Layer 1","data":"AAAA"},{"name":"Layer 1","data":"BBBB"}]}""",
+            completed.Data);
+
+        var stats = cache.Snapshot();
+        Assert.Equal(0, stats.Pending);
+        Assert.Equal(0, stats.PendingBytes);
+        Assert.False(cache.HasPending);
+    }
+
+    [Fact]
+    public void TryAddChunk_CombinesLayerPartsInOrder()
+    {
+        var cache = Create();
+        cache.AddPending("p_1", "nr1", "host-a", ConfigHashA);
+
+        Assert.Equal(ChunkResult.Buffered,
+            cache.TryAddChunk("p_1", "nr1", Chunk(0, 1, part: 2, parts: 3, data: "cc"), out _, out _, out _));
+        Assert.Equal(ChunkResult.Buffered,
+            cache.TryAddChunk("p_1", "nr1", Chunk(0, 1, part: 0, parts: 3, data: "aa"), out _, out _, out _));
+
+        Assert.Equal(ChunkResult.Completed,
+            cache.TryAddChunk("p_1", "nr1", Chunk(0, 1, part: 1, parts: 3, data: "bb"), out var completed, out _, out _));
+        Assert.Equal("aabbcc", completed!.Layers[0].Data);
+    }
+
+    [Fact]
+    public void TryAddChunk_DuplicatePartReplacesTheValue()
+    {
+        var cache = Create();
+        cache.AddPending("p_1", "nr1", "host-a", ConfigHashA);
+
+        Assert.Equal(ChunkResult.Buffered,
+            cache.TryAddChunk("p_1", "nr1", Chunk(0, 2, data: "old"), out _, out _, out _));
+        Assert.Equal(ChunkResult.Buffered,
+            cache.TryAddChunk("p_1", "nr1", Chunk(0, 2, data: "newer"), out _, out _, out _));
+        Assert.Equal(5, cache.Snapshot().PendingBytes);
+
+        Assert.Equal(ChunkResult.Completed,
+            cache.TryAddChunk("p_1", "nr1", Chunk(1, 2, data: "second"), out var completed, out _, out _));
+        Assert.Equal(["newer", "second"], completed!.Layers.Select(layer => layer.Data).ToArray());
+    }
+
+    [Fact]
+    public void TryAddChunk_WithoutAPendingTransferIsNotPending()
+    {
+        var cache = Create();
+
+        Assert.Equal(
+            ChunkResult.NotPending,
+            cache.TryAddChunk("p_1", "nr1", Chunk(0, 1), out _, out _, out _));
+    }
+
+    [Fact]
+    public void TryAddChunk_CountMismatchDropsTheTransfer()
+    {
+        var cache = Create();
+        cache.AddPending("p_1", "nr1", "host-a", ConfigHashA);
+
+        Assert.Equal(ChunkResult.Buffered,
+            cache.TryAddChunk("p_1", "nr1", Chunk(0, 2), out _, out _, out _));
+        Assert.Equal(ChunkResult.Failed,
+            cache.TryAddChunk("p_1", "nr1", Chunk(1, 3), out _, out _, out _));
+
+        Assert.False(cache.HasPending);
+        Assert.Equal(0, cache.Snapshot().PendingBytes);
+    }
+
+    [Fact]
+    public void TryAddChunk_DimensionOrPartsMismatchDropsTheTransfer()
+    {
+        var cache = Create();
+
+        cache.AddPending("p_1", "nr1", "host-a", ConfigHashA);
+        Assert.Equal(ChunkResult.Buffered,
+            cache.TryAddChunk("p_1", "nr1", Chunk(0, 2, width: 16), out _, out _, out _));
+        Assert.Equal(ChunkResult.Failed,
+            cache.TryAddChunk("p_1", "nr1", Chunk(0, 2, width: 32), out _, out _, out _));
+
+        cache.AddPending("p_2", "nr2", "host-a", ConfigHashA);
+        Assert.Equal(ChunkResult.Buffered,
+            cache.TryAddChunk("p_2", "nr2", Chunk(0, 2, parts: 1), out _, out _, out _));
+        Assert.Equal(ChunkResult.Failed,
+            cache.TryAddChunk("p_2", "nr2", Chunk(0, 2, parts: 2), out _, out _, out _));
+    }
+
+    [Fact]
+    public void TryAddChunk_ErrorDropsTheTransfer()
+    {
+        var cache = Create();
+        cache.AddPending("p_1", "nr1", "host-a", ConfigHashA);
+
+        Assert.Equal(ChunkResult.Buffered,
+            cache.TryAddChunk("p_1", "nr1", Chunk(0, 2), out _, out _, out _));
+
+        var result = cache.TryAddChunk(
+            "p_1", "nr1", Chunk(0, 2, data: null, error: "boom"), out _, out _, out _);
+
+        Assert.Equal(ChunkResult.Failed, result);
+        Assert.False(cache.HasPending);
+    }
+
+    [Fact]
+    public void TryAddChunk_ExceedingMaxTotalBytesDropsTheTransfer()
+    {
+        var cache = Create(maxBytes: 4);
+        cache.AddPending("p_1", "nr1", "host-a", ConfigHashA);
+
+        var result = cache.TryAddChunk(
+            "p_1", "nr1", Chunk(0, 1, data: "too-large"), out var completed, out _, out _);
+
+        Assert.Equal(ChunkResult.Failed, result);
+        Assert.Null(completed);
+        Assert.False(cache.HasPending);
+        Assert.Equal(0, cache.Snapshot().PendingBytes);
+    }
+
+    [Fact]
+    public void DropPeer_RemovesOnlyThatPeersTransfers()
+    {
+        var cache = Create();
+        cache.AddPending("p_1", "nr1", "host-a", ConfigHashA);
+        cache.AddPending("p_2", "nr2", "host-a", ConfigHashA);
+        cache.TryAddChunk("p_1", "nr1", Chunk(0, 2), out _, out _, out _);
+        cache.TryAddChunk("p_2", "nr2", Chunk(0, 2), out _, out _, out _);
+
+        cache.DropPeer("p_1");
+
+        Assert.True(cache.HasPending);
+        Assert.Equal(1, cache.Snapshot().Pending);
+        Assert.Equal(ChunkResult.NotPending,
+            cache.TryAddChunk("p_1", "nr1", Chunk(1, 2), out _, out _, out _));
+        Assert.Equal(ChunkResult.Completed,
+            cache.TryAddChunk("p_2", "nr2", Chunk(1, 2), out _, out _, out _));
+    }
+
+    [Fact]
+    public void Unpin_ClearsThatHostsBufferedTransfers()
+    {
+        var cache = Create();
+        cache.AddPending("p_1", "nr1", "host-a", ConfigHashA);
+        cache.AddPending("p_2", "nr2", "host-b", ConfigHashA);
+        cache.TryAddChunk("p_1", "nr1", Chunk(0, 2), out _, out _, out _);
+        cache.TryAddChunk("p_2", "nr2", Chunk(0, 2), out _, out _, out _);
+
+        cache.Unpin("host-a");
+
+        Assert.Equal(ChunkResult.NotPending,
+            cache.TryAddChunk("p_1", "nr1", Chunk(1, 2), out _, out _, out _));
+        Assert.Equal(ChunkResult.Completed,
+            cache.TryAddChunk("p_2", "nr2", Chunk(1, 2), out _, out _, out _));
+    }
+
+    [Fact]
+    public void SweepPending_ReleasesBufferedChunks()
+    {
+        var cache = Create();
+        cache.AddPending("p_1", "nr1", "host-a", ConfigHashA);
+        cache.TryAddChunk("p_1", "nr1", Chunk(0, 2, data: "AAAA"), out _, out _, out _);
+
+        Assert.Equal(4, cache.Snapshot().PendingBytes);
+
+        cache.SweepPending(TimeSpan.Zero);
+
+        Assert.False(cache.HasPending);
+        Assert.Equal(0, cache.Snapshot().Pending);
+        Assert.Equal(0, cache.Snapshot().PendingBytes);
+    }
+
+    [Fact]
+    public void IsPending_SeesATransferUnderTheKeyOnly()
+    {
+        var cache = Create();
+        cache.AddPending("p_1", "nr1", "host-a", ConfigHashA);
+
+        Assert.True(cache.IsPending("p_1", "nr1"));
+        Assert.False(cache.IsPending("p_1", "nr2"));
+        Assert.False(cache.IsPending("p_2", "nr1"));
+    }
+
+    private static TerrainChunk Chunk(
+        int index,
+        int count,
+        int part = 0,
+        int parts = 1,
+        string? data = "data",
+        string? error = null,
+        string name = "Layer 1",
+        int width = 16,
+        int height = 16) =>
+        new(index, count, part, parts, width, height, name, data, error);
+
     private static TerrainCache Create(
         bool enabled = true,
         long maxBytes = DefaultMaxBytes,

@@ -2,7 +2,7 @@ import React, { createRef, type RefObject } from 'react'
 import styles from './styles.module.scss'
 
 import "ol/ol.css";
-import type { AppProps } from '@ace-tacphone/api';
+import type { AppProps, TerrainData, TerrainLayer } from '@ace-tacphone/api';
 import Map from "ol/Map";
 import { View } from 'ol';
 import type { ViewOptions } from 'ol/View.js';
@@ -51,7 +51,7 @@ const MARKER_MENU_MARGIN_PX = 8;
 const TERRAIN_TILE_SIZE = 256;
 const TERRAIN_MIN_RESOLUTION = 0.2;
 const TERRAIN_TILE_CACHE_SIZE = 48;
-// Placeholder size until the terrain SVG reports the real one.
+// Placeholder size until the terrain layers report the real one.
 const INITIAL_TERRAIN_EXTENT: [number, number, number, number] = [0, 0, 30720, 30720];
 
 // Freehand strokes only record a vertex after the pointer moved this far, in
@@ -385,11 +385,9 @@ class App extends React.Component<AppProps,MapState> {
         // Delete key removes the hovered player marker.
         window.addEventListener('keydown', this.handleWindowKeyDown);
 
-        void window.TacPhone.networking.LoadGameTerrain({ drawTreeObjects: false, layerMountains: true, simpleRoads: true })
-            .then((svgString) => {
-                const bytes = new TextEncoder().encode(svgString);
-                return this.applyNewTerrainSVG(bytes);
-            })
+        void window.TacPhone.networking
+            .LoadGameTerrain({ drawTreeObjects: false, layerMountains: true, simpleRoads: true })
+            .then((terrain) => this.applyTerrainLayers(terrain))
             .catch((error: unknown) => {
                 console.error('Failed to load map terrain', error);
                 this.showTerrainError(error);
@@ -398,7 +396,7 @@ class App extends React.Component<AppProps,MapState> {
         /**
          * Build and register the MapApi when the map instance exists.
          * Registration happens here; flyTo requests before registration will be handled
-         * by applyNewTerrainSVG when terrainViewReady becomes true.
+         * by applyTerrainLayers when terrainViewReady becomes true.
          */
         this.buildAndRegisterMapApi();
     }
@@ -1820,22 +1818,25 @@ class App extends React.Component<AppProps,MapState> {
         };
     }
 
-    private loadTerrainLayerImage(layer: { name: string; imageUrl: string }): Promise<{ name: string; image: HTMLImageElement }> {
+    private loadTerrainLayerImage(layer: TerrainLayer): Promise<{ name: string; image: HTMLImageElement }> {
         return new Promise((resolve, reject) => {
             const image = new Image();
+            const imageUrl = URL.createObjectURL(
+                new Blob([layer.svg], { type: "image/svg+xml;charset=utf-8" }),
+            );
 
             image.onload = () => {
                 // The browser no longer needs the blob URL once the image is decoded.
-                URL.revokeObjectURL(layer.imageUrl);
+                URL.revokeObjectURL(imageUrl);
                 resolve({ name: layer.name, image });
             };
 
             image.onerror = () => {
-                URL.revokeObjectURL(layer.imageUrl);
+                URL.revokeObjectURL(imageUrl);
                 reject(new Error(`Failed to load terrain layer "${layer.name}".`));
             };
 
-            image.src = layer.imageUrl;
+            image.src = imageUrl;
         });
     }
 
@@ -1861,7 +1862,7 @@ class App extends React.Component<AppProps,MapState> {
         }
     }
 
-    private async applyNewTerrainSVG(bytes: Uint8Array<ArrayBuffer>): Promise<void> {
+    private async applyTerrainLayers(terrain: TerrainData): Promise<void> {
         const map = this.map;
         if (!map) {
             return;
@@ -1870,11 +1871,9 @@ class App extends React.Component<AppProps,MapState> {
         const loadToken = ++this.terrainLoadToken;
         this.setState({ terrainError: null });
 
-        const svgData = this.splitSVGIntoLayers(bytes);
-
-        // Base measurements of your standalone SVG artwork blueprint
-        const svgBaseWidth = svgData.width;
-        const svgBaseHeight = svgData.height;
+        // Base measurements reported by the terrain producer.
+        const svgBaseWidth = terrain.width;
+        const svgBaseHeight = terrain.height;
         const tileSize = TERRAIN_TILE_SIZE; // Standard map grid slice dimension
 
         // 1. Establish the boundary coordinate limits matching the SVG native dimensions
@@ -1899,10 +1898,10 @@ class App extends React.Component<AppProps,MapState> {
             tileSize: tileSize,
         });
 
-        // Load every split SVG image first, so a failure cannot leave half-created
-        // tile sources behind.
+        // Load every terrain layer image first, so a failure cannot leave
+        // half-created tile sources behind.
         const loadedLayers = await Promise.all(
-            svgData.layers.map((layer) => this.loadTerrainLayerImage(layer))
+            terrain.layers.map((layer) => this.loadTerrainLayerImage(layer))
         ).catch((error: unknown) => {
             // Ignore failures from a load that has already been superseded.
             if (this.map === map && loadToken === this.terrainLoadToken) {

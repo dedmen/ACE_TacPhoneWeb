@@ -125,13 +125,26 @@ host.
   devices behind one NAT share the 10/min budget.
 - Bounded graceful closes take up to ~2 s per peer so `peer-kicked` /
   `host-offline` are not lost to a TCP reset.
-- The relay caches the game's `RequestTerrainSVG` reply (gzip+base64 string) in
-  memory as one pin per game host session plus a global payload pool keyed by the
-  SHA-256 of the payload content. The request config is not a cache key; the pin
-  stores its hash only to decide whether a request matches. A hit is answered by
-  the relay and never reaches the game; the pin is dropped on host disconnect so
-  a reconnect re-renders its own terrain. `TacPhone:TerrainCache:*` bounds memory;
-  `/health` reports `terrainCacheEntries/Bytes/Hosts/Hits/Misses`.
+- The relay caches the game's `RequestTerrainSVG` reply in memory as one pin per
+  game host session plus a global payload pool keyed by the SHA-256 of the
+  combined payload content. A current host streams one frame per compressed layer
+  part (`ReplyRequestTerrainSVG`, indexed by `index`/`part`); the relay buffers
+  them per `(peer, request key)`, combines them into one canonical
+  `{width,height,layers:[{name,data}]}` entry, pins the host and re-emits the
+  layer frames. Legacy whole-SVG string replies are still cached and forwarded as
+  one frame. The request config is not a cache key; the pin stores its hash only to
+  decide whether a request matches. A hit is answered by the relay and never
+  reaches the game; the pin and buffered transfers are dropped on host disconnect
+  so a reconnect re-renders its own terrain. `TacPhone:TerrainCache:*` bounds
+  memory; `/health` reports `terrainCacheEntries/Bytes/Hosts/Hits/Misses` plus
+  `terrainCachePending/PendingBytes`.
+- The relay also keeps a **global** texture cache for `RequestTexture` replies,
+  keyed by normalized `path` + `maxSize` (replace `/` with `\`, strip the leading
+  `\`, lowercase). Unlike terrain there is no per-host pin and host disconnect
+  does not clear it; entries survive host and browser sessions until the relay
+  restarts or LRU eviction. `TacPhone:TextureCache:*` bounds entries/bytes/entry
+  size; only non-empty string replies are stored. `/health` reports
+  `textureCacheEntries/Bytes/Hits/Misses/Evictions/Pending`.
 - The relay writes a rolling log file as well as console/journald:
   `TacPhone:LogFile` (default `logs/tacphone-remote.log`), 10 MiB per file,
   5 rotated files, configurable level. Fatal startup failures are written as
@@ -157,8 +170,8 @@ host.
 ## Known follow-ups
 
 - Device labels come from `User-Agent`; a rename UI is a TODO.
-- No chunking: very large messages (terrain SVG) rely on the relay/server frame
-  cap. The future SQF client caps at 10 MB; split the SVG on the sending side if
-  needed.
+- Terrain is chunked per layer part (each part caps at 6 MiB of base64), but SQF
+  still forwards every frame as a JSON string; measure a large map and record the
+  worst frame. Texture replies are single strings and are not chunked.
 - No `GetFile` allowlist (decision).
 - The server does not terminate TLS; run it behind nginx.

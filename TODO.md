@@ -366,10 +366,19 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
   marker/header from the relay server instead.
 - [ ] **[decision]** Device labels come from `User-Agent`. Add a rename UI and
   persist the label server-side.
-- [ ] **[decision]** No message chunking anywhere. Terrain SVGs and app bundles
-  are sent as one frame, bounded by the relay's 32 MiB cap. The future SQF client
-  is limited to 10 MB; if a terrain SVG exceeds it, split it on the sending side
-  (the Map app already splits it after receiving).
+- [x] **[decision]** Terrain SVG chunking. The in-game `Networking` producer
+  splits the SVG into layers, compresses each layer, and sends one frame per
+  layer part; SQF forwards every chunk; the relay assembles one combined cache
+  entry and re-emits the layers; the browser `Networking` reassembles them. See
+  `tacphone-terrain-chunking.md`. App bundles are still sent as one frame,
+  bounded by the relay's 32 MiB cap.
+- [x] **[decision]** Relay texture cache. `RequestTexture` replies are cached
+  globally by normalized path + `maxSize`, LRU-bounded by
+  `TacPhone:TextureCache:*`. The cache is not per-host and is not cleared on
+  host disconnect; a mod update at the same path is not detected until eviction
+  or relay restart (documented in `RemoteServer/README.md`).
+- [ ] **[cleanup]** Measure the largest individual terrain layer/part on the
+  biggest maps and record the margin under the future 10 MB SQF message limit.
 - [x] **[wontfix]** No `GetFile` allowlist. Only packed game/mod files are
   readable and they are public; access is gated by pairing codes/share links.
 - [ ] **[cleanup]** Relay traffic is plaintext at the server (TLS ends in nginx).

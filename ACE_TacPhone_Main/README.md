@@ -212,8 +212,8 @@ never import host code:
 import React from 'react';
 import type { AppPanelInfo } from '@ace-tacphone/api';
 
-// Required. Must equal TACPHONE_API_VERSION (1); a mismatch becomes a failed app.
-export const apiVersion = 1;
+// Required. Must equal TACPHONE_API_VERSION (2); a mismatch becomes a failed app.
+export const apiVersion = 2;
 
 export function GetTacPhoneApps(): AppPanelInfo[] {
     return [{
@@ -305,7 +305,7 @@ window.TacPhone: TacPhoneHost
 | --- | --- |
 | `apiVersion` | Contract version of this host. |
 | `reactVersion` | React version the host loaded, for diagnostics. |
-| `networking` | `WhenReady()`, `Request()`, `OnConnectionChange()`, `LoadGameFileText()`, `LoadGameFileTexture()`, `LoadGameTerrain()`. |
+| `networking` | `WhenReady()`, `Request()`, `OnConnectionChange()`, `LoadGameFileText()`, `LoadGameFileTexture()`, `LoadGameTerrain()`, `ReplyTerrainSVG()`. |
 | `apps` | Read-only catalog: `knownApps`, `knownPanels`, `failedApps`, `appNameForPanel()`, `getPanelMeta()`, `listPanels()`, `LoadAvailableApps()`. Do not modify it. |
 | `panels` | Enumerate, focus, activate, and open panels. See [Inter-app API](#inter-app-api). |
 | `interApp` | Register an app's service and resolve or call another app's. See [Inter-app API](#inter-app-api). |
@@ -316,6 +316,16 @@ window.TacPhone: TacPhoneHost
 | `utils.usePanel()` | Hook form of `PanelContext` for function components. |
 | `utils.compressAndToBase64()` | Gzip-compress a string to base64 before sending it over the game bridge. |
 | `utils.decompressFromBase64()` | Reverse of `utils.compressAndToBase64()`. |
+
+`LoadGameTerrain()` returns a `TerrainData` object (`width`, `height`, `layers`
+with `{ name, svg }`) instead of one SVG string. The in-game producer splits the
+SVG, compresses each layer and streams it back as `ReplyRequestTerrainSVG`
+chunks; the split/chunk helpers are private to `src/Backend/Networking.ts`. The
+built-in `main` app only calls `networking.ReplyTerrainSVG(uid, config)`.
+`ReplyTerrainSVG()` is host-internal and is not implemented by the browser
+transport. In dev and `build:debug`, it logs each layer's raw SVG size, gzip
+size, base64 size, chunk count and compression ratio to the browser console;
+release builds drop the diagnostic. The app contract version is `2`.
 
 `window.TacPhone` is the only app-facing global.
 

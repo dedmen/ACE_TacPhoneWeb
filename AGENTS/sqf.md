@@ -18,6 +18,7 @@ authors.
 | `CfgWeapons.hpp`, `CfgUIGrids.hpp`, `gui.hpp`, `initKeybinds.inc.sqf`, `initSettings.inc.sqf` | Phone item, UI, HUD/layout, keybinds, settings. |
 | `functions/fnc_dispatchRequest.sqf` | Resolves `a` and calls the app's request processor. |
 | `functions/fnc_processBrowserRequest.sqf` | Built-in `main` app: `GetFile`, layout, interests, proxy, etc. |
+| `functions/fnc_terrainRequestCleanup.sqf` | Drops stale/abandoned pending terrain transfers. |
 | `functions/fnc_sendCommandToPhone.sqf` | Game → web push, with target routing. |
 | `functions/fnc_loadPhoneBackground.sqf` | Hidden background browser and the in-game request bridge. |
 | `functions/fnc_openDisplay.sqf`, `fnc_loadPhoneHud.sqf`, `fnc_loadPhoneForeground.sqf`, `fnc_canShow.sqf` | Display modes and the phone UI. |
@@ -29,7 +30,8 @@ authors.
 ## Lifecycle
 
 - `preStart` / `preInit`: compile and prepare functions, install settings, create
-  `GVAR(AppInfo)` and `GVAR(AppDataInterests)`, and register the built-in `main`
+  `GVAR(AppInfo)`, `GVAR(AppDataInterests)`, `GVAR(pendingTerrainRequest)` (empty
+  map) and `GVAR(terrainRequestCounter)` (`0`), and register the built-in `main`
   app (`requestprocessor` = `fnc_processBrowserRequest`).
 - `postInit`: collect every `scope > 0` class under `ace_tacphone_apps` from
   `configFile` and `missionConfigFile`, build `GVAR(AppInfo)` entries, start the
@@ -61,9 +63,70 @@ External browser (WebSocket):
    `SendTo` for that client id.
 
 `fnc_dispatchRequest` looks up `a` in `GVAR(AppInfo)`, calls the app's
-`requestprocessor` with `[request, clientId]`, and handles a promise return via
-`continueWith`. `clientId` is `"local"` in-game and the WebSocket connection id
-remotely. Web code validates data; do not repeat type checks in SQF.
+`requestprocessor` with `[request, clientId, callback, callbackArgs]`, and handles
+a promise return via `continueWith`. `clientId` is `"local"` in-game and the
+WebSocket connection id remotely. Web code validates data; do not repeat type
+checks in SQF.
+
+### Processor contract
+
+A request processor may declare only the arguments it needs:
+
+```sqf
+params ["_request"];                            // most app processors
+params ["_request", "_clientId"];               // needs the requester
+params ["_request", "_clientId", "_callback", "_callbackArgs"]; // replies itself
+```
+
+The last two are optional for the processor but are now always passed by
+`dispatchRequest`:
+
+- `_callback` — the reply callback `dispatchRequest` would normally call with
+  `[_result, _callbackArgs]`. In-game it base64-encodes the result into
+  `A3API._response`; over the WebSocket it wraps it as `{k, d: _result}`.
+- `_callbackArgs` — the opaque arguments for that callback (for WebSocket
+  requests the sender id and the original `{k, d}` envelope).
+
+A processor that answers on its own (streaming, multiple replies, replies from a
+later request) returns the sentinel hashmap:
+
+```sqf
+createHashMapFromArray [["__tacphone_stream", true]]
+```
+
+`dispatchRequest` then sends no reply of its own. Without the sentinel it calls
+`[_result, _callbackArgs] call _callback` exactly once, as before.
+
+### Terrain chunks
+
+Terrain is the streaming case. One `RequestTerrainSVG` produces **many**
+`ReplyRequestTerrainSVG` chunks, each arriving as a separate, ordinary request
+from the local page:
+
+1. `RequestTerrainSVG` (remote client) sweeps stale contexts
+   (`["", 60] call FUNC(terrainRequestCleanup)`), takes a transfer id from
+   `GVAR(terrainRequestCounter)` (monotonic, so it cannot collide), and stores a
+   context in `GVAR(pendingTerrainRequest)` keyed by that id:
+   `{ clientId, callback, callbackArgs, created: diag_tickTime }`. The context is
+   registered **before** the command is sent to `"local"`, so the first chunk
+   cannot arrive unregistered.
+2. If `sendCommandToPhone` returns `false` (in-game phone closed) the context is
+   removed and the callback is invoked once with
+   `{a: "main", c: "ReplyRequestTerrainSVG", uid, error: "in-game phone not open"}`.
+   The handler returns the streaming sentinel either way.
+3. Each `ReplyRequestTerrainSVG` looks the context up by `uid` and calls the
+   stored `[_request, callbackArgs] call callback` — the chunk hashmap itself is
+   the reply (`{a, c, uid, index, count, part, parts, name, width, height, data,
+   last}`). SQF does not assemble or reorder chunks; the browser and the relay do.
+4. The context is deleted when the chunk carries `error` or `last`. An unknown
+   `uid` only logs, so a late chunk after cleanup is harmless.
+5. `fnc_terrainRequestCleanup` removes contexts older than the given age and all
+   contexts of a client. It runs on every new terrain request (60 s) and on the
+   WebSocket `Disconnect` callback for that client. It only inspects hashmap
+   entries — the texture proxy stores promises in the same map.
+
+Add new streaming commands this way instead of returning a promise: a promise can
+resolve only once and would have to buffer every chunk.
 
 Built-in `main` commands include `GetAvailableApps`, `GetFile`, `GetPlayerPos`,
 `GetTime`, `Interest.Set`, `Interest.Clear`, `GetLayout`, `SaveLayout`, and the
@@ -166,8 +229,8 @@ Pattern for an app:
    keep them small and do no data assembly there.
 3. In each data handler, get the target clients first and early-out on `[]`
    before building data. Send only to those clients.
-4. On disconnect, the extension callback clears the client's interests; no app
-   action is needed.
+4. On disconnect, the extension callback clears the client's interests and any
+   pending terrain transfer of that client; no app action is needed.
 
 ## SQF rules
 
@@ -188,7 +251,9 @@ Pattern for an app:
 
 - **New request command**: add a branch to the app's
   `fnc_processBrowserRequest.sqf`, return a hashmap (or a promise), and call it
-  from the app with `Request({ a, c, ... })`.
+  from the app with `Request({ a, c, ... })`. For a multi-part reply that arrives
+  as several later requests, use the callback/sentinel pattern described in
+  [processor contract](#processor-contract).
 - **Push to the page**: build `{a, c, ...}` and call `sendCommandToPhone` with the
   narrowest target list.
 - **New interest**: define the name in the app's `script_component.hpp` and as a

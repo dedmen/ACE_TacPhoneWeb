@@ -96,3 +96,5 @@ WebHostExtension_FeatureFlagsExport/x64/
 WebServerExtension/.vs/
 WebServerExtension/bin/
 WebServerExtension/obj/
+
+RemoteServer/src/TacPhone.RemoteServer/wwwroot/index.html

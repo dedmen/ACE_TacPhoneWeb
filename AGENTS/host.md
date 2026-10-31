@@ -88,7 +88,8 @@ The transport is chosen once at module load:
 - `IsArma()` is true when the page URL starts with `blob:` (the sandboxed in-game
   browser) → `NetworkingA3`.
 - Otherwise → `NetworkingWebsocket`, which connects to `wss://localhost:8001/ws`.
-  Requests are queued until open and time out after 30 seconds.
+  Requests are queued until open and time out after 30 seconds (60 seconds for
+  `LoadGameTerrain`, which streams multiple layer chunks).
 
 In-game requests leave through `window.A3API.SendAlert`; the hidden background
 browser receives them as a `JSDialog` in
@@ -100,8 +101,18 @@ injects the sender as `s` on the extension side.
 
 `LoadGameFileText`, `LoadGameFileTexture`, and `LoadGameTerrain` use the game
 filesystem through the transport. The built-in `main` app
-(`src/MainApps/main.tsx`) handles game requests for terrain/texture, compresses
-them, and replies with `ReplyRequestTerrainSVG` / `ReplyRequestTexture`.
+(`src/MainApps/main.tsx`) handles game requests for terrain/texture. For terrain
+it only calls `networking.ReplyTerrainSVG(uid, config)`; the private helpers in
+`Backend/Networking.ts` split the SVG into standalone per-layer documents,
+compress each layer and stream `ReplyRequestTerrainSVG` chunks back (with
+`part`/`parts` fragments when a layer is still too large). Textures reply with
+`ReplyRequestTexture` as before. `LoadGameTerrain` resolves to a `TerrainData`
+(`width`, `height`, `layers: [{ name, svg }]`); a legacy whole-SVG reply is still
+accepted by decompressing and splitting it locally. `ReplyTerrainSVG` is not
+implemented by the browser transport. In dev and `build:debug`, it logs each
+layer's raw SVG size, gzip size, base64 size, chunk count and compression ratio
+to the browser console; release builds drop the diagnostic. The app contract
+version is `2`.
 
 The engine moves `ExecJS` sources through base64 and decodes them with `atob`,
 so non-ASCII text in in-game replies and pushes arrives as a UTF-8 byte string
