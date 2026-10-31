@@ -2,11 +2,15 @@ import React from 'react';
 import './App.css'
 // Installs window.TacPhone before the first panel renders.
 import { GetTacPhoneHost } from './Backend/Host'
+import { compressAndToBase64, decompressFromBase64 } from './Backend/Compression'
 
 import { Actions, AddIcon, BorderNode, DockLocation, Layout, Model, TabNode, TabSetNode, type IJsonModel, type ITabRenderValues, type ITabSetRenderValues } from 'flexlayout-react';
 import 'flexlayout-react/style/dark.css';  
 
 const LAYOUT_STORAGE_KEY = 'tacphone.layout';
+
+/** Layout changes are coalesced into at most one save per window. */
+const LAYOUT_SAVE_INTERVAL_MS = 5000;
 
 // localStorage is unavailable in the sandboxed in-game browser, so probe it before using it.
 function getLayoutStorage(): Storage | undefined {
@@ -122,6 +126,12 @@ class App extends React.Component<{}, {loading: boolean, error: string | undefin
     private mounted = false;
     /** In-flight app load; reused so StrictMode cannot load the apps twice. */
     private loadPromise: Promise<void> | undefined;
+    /** JSON of the layout last written, so an unchanged model does not save again. */
+    private savedLayoutJson: string | undefined = JSON.stringify(this.model.toJson());
+    /** Pending coalesced layout save, if any. */
+    private layoutSaveTimer: ReturnType<typeof setTimeout> | undefined;
+    /** A layout change happened that has not been written yet. */
+    private layoutDirty = false;
 
     constructor(props: {})
     {
@@ -232,32 +242,82 @@ class App extends React.Component<{}, {loading: boolean, error: string | undefin
             return undefined;
 
         try {
-            const layout = parseLayout(await window.TacPhone.networking.Request({a: "main", c: "GetLayout"}));
-            return createModelFromLayout(layout);
+            const stored: unknown = await window.TacPhone.networking.Request({a: "main", c: "GetLayout"});
+
+            // The game stores the layout gzipped and base64-encoded; an empty string
+            // means nothing was saved yet. An older game may answer with the JSON
+            // text or an object, which parseLayout still accepts.
+            if (typeof stored === "string" && stored.length === 0)
+                return undefined;
+
+            const json = typeof stored === "string"
+                ? await decompressFromBase64(stored)
+                : stored;
+
+            return createModelFromLayout(parseLayout(json));
         } catch (error) {
             console.warn("Failed to request the TacPhone layout from the game.", error);
             return undefined;
         }
     }
 
-    private onLayoutChanged = (model: Model) => {
-        const layout = model.toJson();
-        const storage = getLayoutStorage();
+    private onLayoutChanged = () => {
+        this.layoutDirty = true;
 
+        // Coalesce a burst of changes (splitter drags, resizes) into one save.
+        if (this.layoutSaveTimer !== undefined)
+            return;
+
+        this.layoutSaveTimer = setTimeout(() => {
+            this.layoutSaveTimer = undefined;
+            void this.saveLayout();
+        }, LAYOUT_SAVE_INTERVAL_MS);
+    }
+
+    /**
+     * Writes the current layout once: plain JSON to localStorage when the browser
+     * has it, otherwise gzipped + base64 through the game's `main` app.
+     */
+    private saveLayout = async (): Promise<void> => {
+        if (!this.layoutDirty)
+            return;
+
+        this.layoutDirty = false;
+
+        const json = JSON.stringify(this.model.toJson());
+        if (json === this.savedLayoutJson)
+            return;
+
+        this.savedLayoutJson = json;
+
+        const storage = getLayoutStorage();
         if (storage) {
             try {
-                storage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(layout));
+                storage.setItem(LAYOUT_STORAGE_KEY, json);
                 return;
             } catch (error) {
                 console.warn("Failed to save the TacPhone layout to local storage.", error);
             }
         }
 
-        // Placeholder: send the layout to the game for persistence. The game currently only
-        // acknowledges the request; actually storing it there will be implemented later.
-        void window.TacPhone.networking.Request({a: "main", c: "SaveLayout", layout}).catch(error => {
+        try {
+            const layout = await compressAndToBase64(json);
+            await window.TacPhone.networking.Request({a: "main", c: "SaveLayout", layout});
+        } catch (error) {
+            // Retry on the next change instead of silently dropping the layout.
+            this.savedLayoutJson = undefined;
             console.warn("Failed to send the TacPhone layout to the game.", error);
-        });
+        }
+    }
+
+    /** Flushes a change that is still waiting for the save window. */
+    private flushPendingLayout = (): void => {
+        if (this.layoutSaveTimer === undefined)
+            return;
+
+        clearTimeout(this.layoutSaveTimer);
+        this.layoutSaveTimer = undefined;
+        void this.saveLayout();
     }
 
     onRenderTabSet = (node: TabSetNode | BorderNode, renderValues: ITabSetRenderValues) => {
@@ -334,6 +394,7 @@ class App extends React.Component<{}, {loading: boolean, error: string | undefin
             // constructor; the directory must follow it or it reports stale rects.
             if (layout) {
                 this.model = layout;
+                this.savedLayoutJson = JSON.stringify(this.model.toJson());
                 panelDirectory.attach(this.model);
             }
 
@@ -362,6 +423,7 @@ class App extends React.Component<{}, {loading: boolean, error: string | undefin
     componentWillUnmount(): void {
         this.mounted = false;
         panelDirectory.detach();
+        this.flushPendingLayout();
     }
 
     render() {

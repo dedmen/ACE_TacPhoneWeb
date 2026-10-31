@@ -79,9 +79,11 @@ reference is [`ACE_TacPhone_Main/README.md`](../ACE_TacPhone_Main/README.md).
 - The persisted app choice is the tab config `panelId`. `AppChooserPanel` reads
   it back on mount, and `PanelInstance.setApp()` writes it for the next reload.
   Panel `id`s are persisted in layouts; renaming one breaks saved layouts.
-- Layout persistence: `localStorage` when available (external browser).
-  Otherwise `App.tsx` calls the game's `main` app with `GetLayout` /
-  `SaveLayout`; the SQF side is still a placeholder (see `TODO.md`).
+- Layout persistence: `localStorage` when available (external browser), storing
+  the plain JSON under `tacphone.layout`. In-game `App.tsx` gzips and
+  base64-encodes the model and calls the game's `main` app with `SaveLayout`;
+  `GetLayout` returns the string stored in `profileNamespace`. Both paths
+  coalesce changes into at most one save per 5 seconds.
 - `largest()` ranks only the main layout, not floating popups, because areas of
   different layouts are not comparable.
 

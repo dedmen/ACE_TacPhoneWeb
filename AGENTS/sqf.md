@@ -140,8 +140,14 @@ mission snapshot for the host (`multiplayer`, `playerId`, `missionName`,
 `__A3_DEBUG__` and the `allowDebug` CBA setting). `RequestTexture` checks
 `fileExists` first and returns `{ok: false}` instead of forwarding when the
 texture is missing, since the engine would otherwise open an error popup.
-`GetFile` remaps `/` or `""` to `data\index.html`, normalises `/` to `\`, and
-returns `""` when the file does not exist.
+`SaveLayout` stores the layout as an opaque, gzipped-and-base64-encoded string
+in `profileNamespace` under `ace_tacphone_layout` (one layout per player
+profile); `GetLayout` returns that string, or `""` when nothing was saved yet.
+`SaveLayout` only rejects an oversized value (an empty layout is valid) and skips
+the profile write when the layout is unchanged. It does not call
+`saveProfileNamespace`; the game writes the profile on its own. `GetFile` remaps `/` or `""` to
+`data\index.html`, normalises `/` to `\`, and returns `""` when the file does
+not exist.
 
 ## Extension calls
 

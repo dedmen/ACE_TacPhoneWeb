@@ -349,9 +349,9 @@ Optional locations:
   `react-dom/client`, `react/jsx-runtime`, `react/compiler-runtime`). Never bundle
   a second React copy. Apps cannot add mappings; extend
   `websource/packages/tacphone-build/shared-modules.js` instead.
-- In the in-game browser there is no `fetch` / `XMLHttpRequest`, no
-  `localStorage`, and no `IndexedDB`. Use `window.TacPhone.networking` for
-  everything.
+- In the in-game browser `fetch` / `XMLHttpRequest` cannot reach the network
+  (only `data:` and `blob:` URLs work), and there is no `localStorage` or
+  `IndexedDB`. Use `window.TacPhone.networking` for everything.
 - `window.TacPhone` is the only host global.
 - Panel components receive `AppProps` (`appId`, `panelId`, `node`, `model`,
   `panel`); they are no longer called with no props. The host is the global

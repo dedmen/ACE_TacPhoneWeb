@@ -20,10 +20,11 @@ relay instead of the game's own LAN webhost. See
 | Arma 3 | 2.24+ (2.23 dev branch) | TacPhone uses `CT_CONTROL_REF`, `ctrlWebBrowserAction ["SetControlReference", ...]`, and `SetBrowserInternalSize`, which were added in the 2.23 dev branch and ship in 2.24. Arma 3 2.22 stable does not expose them. |
 | Browser | Chromium 126+ | The in-game browser is Chromium 126. An external browser needs the same minimum feature set: ES modules, import maps, blob-URL module imports, and `CompressionStream` / `DecompressionStream`. |
 
-The in-game browser runs local content in a sandbox. It has no `fetch` /
-`XMLHttpRequest`, `localStorage`, or `IndexedDB`. Code that runs in both modes
-must not depend on those APIs. Bundle assets inline; use `window.TacPhone.networking`
-to load files from the game.
+The in-game browser runs local content in a sandbox. `fetch` / `XMLHttpRequest`
+cannot reach the network, though `data:` and `blob:` URLs still work; there is
+no `localStorage` or `IndexedDB`. Code that runs in both modes must not depend
+on network access or persistent browser storage. Bundle assets inline; use
+`window.TacPhone.networking` to load files from the game.
 
 ## Quick start
 
@@ -106,6 +107,20 @@ panel title, app name and panel id; Escape or the clear button empties it. Touch
 clients render the grid alone, matching a phone home screen. The grid follows
 `appDirectory.onDidChange`, so icons that resolve after the first paint appear
 without a reload.
+
+## Layout persistence
+
+The flexlayout model is saved per browser/profile. An external browser keeps the
+plain JSON in `localStorage` under `tacphone.layout` and never sends it to the
+game. The in-game sandbox has no storage, so the host gzips the JSON,
+base64-encodes it, and calls the game's `main` app (`SaveLayout`); SQF stores
+that string in `profileNamespace` (`ace_tacphone_layout`) and returns it from
+`GetLayout` on the next load.
+
+Both paths coalesce changes into at most one write per 5 seconds, so dragging a
+splitter or resizing a tabset saves once instead of once per frame. A change
+still waiting for its window is flushed on unmount. Panel ids and tab configs
+are part of the model, so a restored layout reopens the same apps.
 
 ## Developing apps
 

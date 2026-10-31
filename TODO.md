@@ -9,16 +9,19 @@ needs a product decision before coding, **[wontfix]** deliberately left as is.
 
 ## Persist the TacPhone layout in-game
 
-- [ ] Implement `GetLayout` and `SaveLayout` in
+- [x] Implement `GetLayout` and `SaveLayout` in
   `addons/tacphone/functions/fnc_processBrowserRequest.sqf`.
-  - `SaveLayout` should store the `layout` value from the request so it can be
-    returned later for the same player/phone.
-  - `GetLayout` should return the stored layout instead of an empty hashmap.
-- [ ] Keep `localStorage` as the external-browser persistence path and use the
+  - `SaveLayout` stores the gzipped/base64 `layout` string in `profileNamespace`
+    under `ace_tacphone_layout`, rejects empty/oversized/non-string values, and
+    skips the profile write when the layout did not change.
+  - `GetLayout` returns that string, or `""` when nothing was saved yet.
+- [x] Keep `localStorage` as the external-browser persistence path and use the
   SQF path when `localStorage` is unavailable (the in-game browser).
-- [ ] Remove the temporary placeholder comments in
+- [x] Remove the temporary placeholder comments in
   `ACE_TacPhone_Main/src/App.tsx` and avoid sending `SaveLayout` on every layout
-  change once the SQF persistence is implemented.
+  change once the SQF persistence is implemented. Changes are coalesced into at
+  most one save per 5 seconds (trailing throttle); a pending change is flushed on
+  unmount.
 
 ## Native extension (`WebServerExtension`)
 
@@ -328,8 +331,9 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
   report Arma's selected output device, so the browser sink is not mapped to it.
   Wire Arma's device to `setSinkId` once the game can expose it; notification and
   Messenger sounds share the one `AudioContext`.
-- [ ] **[cleanup]** Remove the temporary `SaveLayout`/`GetLayout` placeholders
-  once the game-side persistence exists (see the first section).
+- [x] **[cleanup]** Remove the temporary `SaveLayout`/`GetLayout` placeholders
+  once the game-side persistence exists (see the first section). Done: the host
+  sends a gzipped/base64 layout and SQF stores it in `profileNamespace`.
 - [x] Removed all references to and handling of the legacy `devapps/` folder.
   Discovery now only uses `dev-apps.local.json`, `TACPHONE_DEV_APPS`, or sibling
   folders with the `"tacphone"` marker; `AGENTS.md`, `ACE_TacPhone_Main/README.md`,
