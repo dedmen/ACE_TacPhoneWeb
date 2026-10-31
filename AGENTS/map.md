@@ -18,6 +18,7 @@ The full reference is [`ACE_TacPhone_Map/README.md`](../ACE_TacPhone_Map/README.
 | Marker notifications | `src/MapMarkers/MarkerNotifications.ts` |
 | Layer switcher | `src/LayerSwitcher.tsx` |
 | Game → app command routing | `src/CommandRegistry.ts` |
+| Messenger sharing and `map.marker` renderer | `src/MessagingBridge.ts` |
 | Inter-app service types | `src/api.ts` (source of `dist/ace_tacphone_map.d.ts`) |
 | Generated/copied output | `dist/ace_tacphone_map.js`, `dist/ace_tacphone_map.d.ts`, `../../apps/map/data/ace_tacphone_map.js` |
 
@@ -55,7 +56,9 @@ freehand strokes request none.
 
 ## Marker interaction
 
-Only `_USER_DEFINED` markers are editable; everything else is read-only.
+Only `_USER_DEFINED` markers are editable; everything else is read-only. The
+touch context menu additionally offers “Share to Messenger” for icon markers
+when the Messenger app is installed (see [Messenger integration](#messenger-integration)).
 
 The map is always north-up: the view sets `enableRotation: false` and the
 `DragRotate`/`PinchRotate` interactions are removed at map creation, so
@@ -120,14 +123,50 @@ Each mounted Map panel registers service `map`, version `1`, from `src/Map.tsx`:
 
 | Method | Meaning |
 | --- | --- |
-| `flyTo({ x, y, resolution?, animate? })` | Move the view; omit `resolution` to keep zoom, `animate: false` jumps. Calls before the terrain SVG is ready are queued. |
+| `flyTo({ x, y, resolution?, animate? })` | Move the view; omit `resolution` to keep zoom, `animate: false` jumps. Calls before the terrain layers are ready are queued. |
 | `getView()` | `{ x, y, resolution }` or `undefined` while the view is not ready. |
 | `isReady()` | True when the map and terrain view exist. |
+| `hasMarker(name)` | True while a marker with that internal name is on the marker layer. |
+| `focusMarker(name)` | Flies to the marker at the current resolution. Resolves `false` when the marker does not exist or the layer is not ready; it waits for the initial marker snapshot before deciding. |
 
 Coordinates are world/map units, not latitude/longitude. Consumers should
 `resolveAsync({ service: 'map', ... })` because a background Map has no live
 registration. The generated `dist/ace_tacphone_map.d.ts` exports `MapApi`,
 `MapViewState`, `MapFlyToOptions`, `MAP_SERVICE`, and `MAP_SERVICE_VERSION`.
+
+`MarkerLayerManager` backs those methods: `hasMarker()`, `whenMarkersLoaded()`
+(resolves after the initial snapshot, also on failure or destroy),
+`getMarkerChatData()` (icon markers only; null for polylines) and
+`focusMarker(name, flyTo)`.
+
+## Messenger integration
+
+`src/MessagingBridge.ts` keeps the Messenger contract local as structural
+types (`MessengerApi`, `ChatObject`, `MessengerObjectRenderer`); it never imports
+`MessagingApp` source. The service is `messenger`, the app and panel id are
+`Messaging`.
+
+- **Share**: the marker context menu shows “Share to Messenger” only for an
+  icon marker (`shape === "ICON"`, i.e. a `Point` feature) while
+  `window.TacPhone.apps.knownApps` contains `Messaging`. The handler builds
+  `{ kind: 'map.marker', version: 1, data: { name, type, color, text, label,
+  position }, preview: { title, subtitle: 'Map marker', icon, color },
+  action: { service: 'map', panelId: 'ACE_TacPhone_Map', method: 'focusMarker',
+  args: [name] } }` and calls
+  `resolveAsync({ service: 'messenger', panelId: 'Messaging', openIfMissing: true })`
+  then `MessengerApi.shareObject()`. Messenger owns its target selector and its
+  dialogs; the Map only shows a notification when sharing really fails (not on a
+  user cancel).
+- **Renderer**: while any Map panel is mounted, a `map.marker` renderer is
+  registered with a mounted Messenger panel (`describe` reuses the stored
+  preview for icon/color). The registration follows `interApp.onDidChange`, so
+  it attaches when Messenger mounts later, and is released on unmount; several
+  Map panels share one registration.
+- **Click**: the serialized `action` routes to the Map service with
+  `policy: 'ask'` and calls `focusMarker(name)`. When it returns false, Messenger
+  keeps the card, reports the marker as deleted, and offers a button that flies
+  to `data.position`.
+
 
 ## Data interest
 

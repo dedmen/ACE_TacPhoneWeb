@@ -11,6 +11,7 @@ copying artifacts into the game. Runtime rules live in the area docs.
 | `packages/tacphone-build/` | `@ace-tacphone/build`: `shared-modules.js`, `singlefile.ts`, and the `tacphone-build` CLI. |
 | `ACE_TacPhone_Main/` | Host: React UI, layout, networking, app loader, public API. |
 | `ACE_TacPhone_Map/` | Reference app, sibling of the host. |
+| `MessagingApp/` | Messenger app (chat, rooms, presence), sibling of the host. |
 | `SampleApp/` | Minimal example app; also the new-app template. |
 | `WebServerExtension/` | .NET 10 NativeAOT `arma_webhost_x64`; external-browser dev only. See [`webhost.md`](webhost.md). |
 | `RemoteServer/` | .NET 10 relay + static host for public remote access. Separate deployable, not part of the add-on. See [`remote.md`](remote.md). |
@@ -24,7 +25,7 @@ From this directory (workspace root):
 ```powershell
 npm install            # one root lockfile, hoisted workspace deps
 npm run dev            # host Vite server; open the printed URL
-npm run build          # host + Map + SampleApp
+npm run build          # host + Map + SampleApp + Messaging
 npm run build:host
 npm run build:apps
 npm run check          # tsc -b in every workspace package
@@ -43,23 +44,51 @@ Copy-Item dist\index.html ..\..\data\index.html
 ```
 
 Public relay (`RemoteServer/`, optional): copy the same host build into the
-server before publishing it:
+server before publishing/deploying it:
 
 ```powershell
 Copy-Item ACE_TacPhone_Main\dist\index.html RemoteServer\src\TacPhone.RemoteServer\wwwroot\index.html
+Copy-Item ACE_TacPhone_Main\dist\index.html RemoteServer\publish\wwwroot\index.html
 ```
 
-Apps (`ACE_TacPhone_Map`, `SampleApp`), run from the app folder:
+The relay serves its own copy of the host page. Updating `addons/tacphone/data/index.html`
+and the in-game PBO is not enough; an old relay copy silently drops app pushes
+that arrive before the app finishes loading.
+
+Apps (`ACE_TacPhone_Map`, `MessagingApp`, `SampleApp`), run from the app folder:
 
 ```powershell
 npm run build          # tsc -b + vite + shared-import check + bundle-api-types
 Copy-Item dist\ace_tacphone_map.js ..\..\apps\map\data\ace_tacphone_map.js
+Copy-Item dist\ace_tacphone_messaging.js ..\..\apps\messaging\data\ace_tacphone_messaging.js
 Copy-Item dist\ace_tacphone_sampleapp.js ..\..\apps\SampleApp\data\ace_tacphone_sampleapp.js
 ```
 
 All copy destinations are git-ignored in ACE3. The build does not copy them for
 you. A successful app build also emits the generated `dist/<name>.d.ts` used by
 consumers.
+
+## Applying the game build
+
+HEMTT writes the PBO to `.hemttout/build/addons/ace_tacphone.pbo`; it does not
+update the game's dev mod directory.
+
+When the PBO needs to be updated and Arma is running, ask the user to exit the
+game first. Then copy the built PBO over the dev mod copy and let the user
+restart:
+
+```powershell
+Copy-Item .hemttout\build\addons\ace_tacphone.pbo `
+    'D:\Spiele\SteamLibrary\steamapps\common\Arma 3\@acedev\addons\ace_tacphone.pbo' -Force
+```
+
+The game loads that PBO from `@acedev\addons` on the next start. Never replace it
+while Arma has the file open.
+
+The native extension is separate: the game loads
+`D:\Spiele\SteamLibrary\steamapps\common\Arma 3\arma_webhost_x64.dll`. After
+rebuilding `WebServerExtension`, ask the user to exit the game, back up the old
+DLL, then replace that file. The game only picks it up on restart.
 
 ## Build behavior
 

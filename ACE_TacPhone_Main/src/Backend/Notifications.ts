@@ -20,11 +20,13 @@ import type {
     TacPhoneNotification,
 } from "./Types";
 import { appDirectory } from "./AppDirectory";
+import { audio } from "./Audio";
 
 export type {
     NotificationAction,
     NotificationCenterApi,
     NotificationOptions,
+    NotificationSound,
     NotificationTapHandler,
     TacPhoneNotification,
 } from "./Types";
@@ -86,6 +88,11 @@ export class NotificationCenter
         this.setNotifications([...this.notifications, notification]);
         this.trimToLimit();
         this.scheduleAutoDismiss(id, duration);
+
+        // One sound per notification. The engine throttles bursts itself and
+        // never throws; a missing/unknown preset only logs a warning.
+        if (options.sound)
+            audio.play(options.sound);
 
         return id;
     }

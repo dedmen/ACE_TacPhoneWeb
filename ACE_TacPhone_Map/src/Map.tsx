@@ -34,6 +34,12 @@ import {
     type MapApi,
     type MapFlyToOptions,
 } from './api';
+import {
+    MAP_APP_NAME,
+    isMessengerInstalled,
+    registerMarkerObjectRenderer,
+    shareMarkerToMessenger,
+} from './MessagingBridge';
 
 // Game-side data interest for marker updates. Must match INTEREST_MARKERS in
 // addons/tacphone/apps/map/script_component.hpp.
@@ -43,9 +49,11 @@ const LONG_PRESS_DURATION_MS = 600;
 const LONG_PRESS_MOVE_TOLERANCE_PX = 10;
 // Press-and-hold on a marker picks it up. Same delay for mouse and touch.
 const MARKER_MOVE_HOLD_MS = 100;
-// Assumed marker menu size, used to keep it inside the map container.
+// Assumed marker menu size, used to keep it inside the map container. The menu
+// can show share/edit/delete, so the height covers three 44 px items, a heading
+// and the padding.
 const MARKER_MENU_WIDTH_PX = 200;
-const MARKER_MENU_HEIGHT_PX = 100;
+const MARKER_MENU_HEIGHT_PX = 184;
 const MARKER_MENU_MARGIN_PX = 8;
 
 const TERRAIN_TILE_SIZE = 256;
@@ -156,6 +164,12 @@ class App extends React.Component<AppProps,MapState> {
 
     /** Unregister function for the Map API. */
     private unregisterMapApi: (() => void) | undefined;
+
+    /**
+     * Releases the `map.marker` renderer registration. One registration is
+     * shared by every mounted Map panel.
+     */
+    private releaseMessengerRenderer: (() => void) | undefined;
 
     private longPressTimer: number | null = null;
     private longPressStart: { x: number; y: number; pointerId: number; coordinate: [number, number] } | null = null;
@@ -399,6 +413,61 @@ class App extends React.Component<AppProps,MapState> {
          * by applyTerrainLayers when terrainViewReady becomes true.
          */
         this.buildAndRegisterMapApi();
+
+        // A shared map.marker card routes back into this app; the registration
+        // follows the inter-app registry because Messenger may mount later.
+        this.releaseMessengerRenderer = registerMarkerObjectRenderer();
+    }
+
+    /**
+     * Applies a view move, queueing it until the terrain view exists. This is
+     * the implementation of `MapApi.flyTo()` and of marker focusing.
+     */
+    private flyToCoordinate(options: MapFlyToOptions): void {
+        // Validate before doing anything, including storing a pending target.
+        if (
+            typeof options.x !== 'number' ||
+            typeof options.y !== 'number' ||
+            !Number.isFinite(options.x) ||
+            !Number.isFinite(options.y)
+        ) {
+            console.warn('MapApi.flyTo: invalid x/y coordinates');
+            return;
+        }
+
+        // The terrain view is replaced once the SVG arrives, so a request
+        // that arrives before then is applied by applyPendingFlyTo().
+        if (!this.map || !this.terrainViewReady) {
+            this.pendingFlyTo = options;
+            return;
+        }
+
+        const view = this.map.getView();
+        const projection = view.getProjection();
+
+        const center = [options.x, options.y];
+
+        // Clamp the center to the current view projection extent when one exists
+        const extent = projection.getExtent();
+        if (extent) {
+            center[0] = Math.max(extent[0], Math.min(options.x, extent[2]));
+            center[1] = Math.max(extent[1], Math.min(options.y, extent[3]));
+        }
+
+        // Only apply resolution when it is a finite positive number
+        const resolution = options.resolution !== undefined && Number.isFinite(options.resolution) && options.resolution > 0 ? options.resolution : undefined;
+
+        if (options.animate !== false) {
+            const animation: { center: number[]; resolution?: number; duration: number } = { center, duration: 300 };
+            if (resolution !== undefined)
+                animation.resolution = resolution;
+            view.animate(animation);
+        } else {
+            view.setCenter(center);
+            if (resolution !== undefined) {
+                view.setResolution(resolution);
+            }
+        }
     }
 
     private buildAndRegisterMapApi(): void {
@@ -411,53 +480,12 @@ class App extends React.Component<AppProps,MapState> {
          * - flyTo(options): move the map view
          * - getView(): get current view state
          * - isReady(): check if API is available
+         * - hasMarker(name): check if a marker exists
+         * - focusMarker(name): fly to a marker, resolving false when it is gone
          */
         const api: MapApi = {
             flyTo: (options: MapFlyToOptions) => {
-                // Validate before doing anything, including storing a pending target.
-                if (
-                    typeof options.x !== 'number' ||
-                    typeof options.y !== 'number' ||
-                    !Number.isFinite(options.x) ||
-                    !Number.isFinite(options.y)
-                ) {
-                    console.warn('MapApi.flyTo: invalid x/y coordinates');
-                    return;
-                }
-
-                // The terrain view is replaced once the SVG arrives, so a request
-                // that arrives before then is applied by applyPendingFlyTo().
-                if (!this.map || !this.terrainViewReady) {
-                    this.pendingFlyTo = options;
-                    return;
-                }
-
-                const view = this.map.getView();
-                const projection = view.getProjection();
-
-                const center = [options.x, options.y];
-
-                // Clamp the center to the current view projection extent when one exists
-                const extent = projection.getExtent();
-                if (extent) {
-                    center[0] = Math.max(extent[0], Math.min(options.x, extent[2]));
-                    center[1] = Math.max(extent[1], Math.min(options.y, extent[3]));
-                }
-
-                // Only apply resolution when it is a finite positive number
-                const resolution = options.resolution !== undefined && Number.isFinite(options.resolution) && options.resolution > 0 ? options.resolution : undefined;
-
-                if (options.animate !== false) {
-                    const animation: { center: number[]; resolution?: number; duration: number } = { center, duration: 300 };
-                    if (resolution !== undefined)
-                        animation.resolution = resolution;
-                    view.animate(animation);
-                } else {
-                    view.setCenter(center);
-                    if (resolution !== undefined) {
-                        view.setResolution(resolution);
-                    }
-                }
+                this.flyToCoordinate(options);
             },
             getView: () => {
                 if (!this.terrainViewReady || this.map === null) {
@@ -482,6 +510,32 @@ class App extends React.Component<AppProps,MapState> {
             },
             isReady: () => {
                 return this.terrainViewReady && this.map !== null;
+            },
+            hasMarker: (name: string) => {
+                return typeof name === 'string' && name !== '' && this.markerManager?.hasMarker(name) === true;
+            },
+            focusMarker: async (name: string) => {
+                const manager = this.markerManager;
+                const map = this.map;
+
+                if (!map || !manager || typeof name !== 'string' || name === '') {
+                    return false;
+                }
+
+                // The initial snapshot arrives asynchronously; without waiting,
+                // a marker object clicked right after opening the Map would look
+                // deleted. whenMarkersLoaded() also resolves on failure.
+                await manager.whenMarkersLoaded();
+
+                // This panel may have been unmounted (or rebuilt) meanwhile.
+                if (this.map !== map || this.markerManager !== manager) {
+                    return false;
+                }
+
+                return manager.focusMarker(name, (position) => {
+                    // Keep the current resolution: focusing must not change zoom.
+                    this.flyToCoordinate({ x: position[0], y: position[1] });
+                });
             },
         };
 
@@ -509,6 +563,12 @@ class App extends React.Component<AppProps,MapState> {
         if (this.unregisterMapApi) {
             this.unregisterMapApi();
             this.unregisterMapApi = undefined;
+        }
+
+        // Release the shared renderer registration (reference counted).
+        if (this.releaseMessengerRenderer) {
+            this.releaseMessengerRenderer();
+            this.releaseMessengerRenderer = undefined;
         }
 
         /** Clear pending fly-to on unmount. */
@@ -1184,8 +1244,11 @@ class App extends React.Component<AppProps,MapState> {
             return;
         }
 
-        if (this.getEditableMarkerNameAtEvent(event)) {
+        const markerName = this.getEditableMarkerNameAtEvent(event);
+
+        if (markerName) {
             event.preventDefault();
+            this.openMarkerMenu(markerName, event.clientX, event.clientY);
         }
     };
 
@@ -1750,73 +1813,50 @@ class App extends React.Component<AppProps,MapState> {
         this.closeMarkerMenu();
     };
 
-
-    private splitSVGIntoLayers(bytes: Uint8Array<ArrayBuffer>): {
-        width: number;
-        height: number;
-        layers: Array<{ name: string; imageUrl: string }>;
-    } {
-        // The SVG file contains the size of the terrain, which we need to know for our tiling and scaling
-        // And we also want to split out the SVG layers
-
-        const svgDoc = (new DOMParser()).parseFromString((new TextDecoder('utf-8')).decode(bytes), 'image/svg+xml');
-        const rootSvg = svgDoc.documentElement;
-
-        if (rootSvg.tagName.toLowerCase() !== 'svg') {
-            throw new Error('The terrain response is not a valid SVG document.');
+    /**
+     * Sharing needs both a shareable marker (an icon marker; polylines are not)
+     * and an installed Messenger app.
+     */
+    private canShareMarker = (name: string): boolean => {
+        if (!isMessengerInstalled()) {
+            return false;
         }
 
-        // Base measurements of your standalone SVG artwork blueprint
-        const widthAttribute = rootSvg.getAttribute("width"); // Get the Terrain size from the SVG head
-        const heightAttribute = rootSvg.getAttribute("height");
-        const svgBaseWidth = Number(widthAttribute);
-        const svgBaseHeight = Number(heightAttribute);
+        return this.markerManager?.getMarkerChatData(name) != null;
+    };
 
-        if (
-            widthAttribute === null ||
-            heightAttribute === null ||
-            !Number.isFinite(svgBaseWidth) ||
-            !Number.isFinite(svgBaseHeight) ||
-            svgBaseWidth <= 0 ||
-            svgBaseHeight <= 0
-        ) {
-            throw new Error('The terrain SVG is missing a valid width or height.');
+    /** Builds the `map.marker` object and hands it to Messenger. */
+    private handleShareMarkerFromMenu = (name: string): void => {
+        this.closeMarkerMenu();
+
+        const data = this.markerManager?.getMarkerChatData(name);
+        if (!data) {
+            return;
         }
 
-        const originalDefs = rootSvg.querySelector("defs"); // defs will be copied into every file
-        if (!originalDefs) {
-            throw new Error('The terrain SVG is missing its <defs> section.');
-        }
+        // Messenger opens its own target selector and closes its own dialogs;
+        // this app only reports a real failure, not a user cancellation.
+        void shareMarkerToMessenger(data)
+            .then((result) => {
+                if (!result.ok && !result.cancelled) {
+                    this.showShareError(result.error);
+                }
+            })
+            .catch((error: unknown) => {
+                console.error('Failed to share marker', error);
+                this.showShareError(error instanceof Error ? error.message : undefined);
+            });
+    };
 
-        const layers = rootSvg.querySelectorAll("svg > g");
-        if (layers.length === 0) {
-            throw new Error('The terrain SVG does not contain any layers.');
-        }
-
-        var svgSplitLayers: Array<{name: string, imageUrl: string}> = []; // We will split out the different layers
-
-        layers.forEach((layer, index) => {
-            // Clone the root <svg> element (shallow clone, so it copies attributes but not children)
-            const newSvg = rootSvg.cloneNode(false);
-            newSvg.appendChild(originalDefs.cloneNode(true)); // Deep clone the defs
-            newSvg.appendChild(layer.cloneNode(true)); // Add the deep cloned layer
-
-            // Serialize the newly constructed SVG DOM tree back into a string
-            const serializer = new XMLSerializer();
-            const newSVGString = serializer.serializeToString(newSvg);
-
-            const svgBlob = new Blob([newSVGString], { type: "image/svg+xml;charset=utf-8" });
-            const blobURL = URL.createObjectURL(svgBlob);
-
-            svgSplitLayers.push({ name: layer.id || `Layer ${index + 1}`, imageUrl: blobURL});
+    private showShareError(detail: string | undefined): void {
+        window.TacPhone.notifications.show({
+            title: 'Could not share marker',
+            body: detail && detail !== '' ? detail : 'Messenger is not available.',
+            app: MAP_APP_NAME,
+            sound: 'alert',
         });
-
-        return {
-            width: svgBaseWidth,
-            height: svgBaseHeight,
-            layers: svgSplitLayers
-        };
     }
+
 
     private loadTerrainLayerImage(layer: TerrainLayer): Promise<{ name: string; image: HTMLImageElement }> {
         return new Promise((resolve, reject) => {
@@ -2141,6 +2181,8 @@ class App extends React.Component<AppProps,MapState> {
                         y={markerMenu.y}
                         onEdit={() => this.handleEditMarkerFromMenu(markerMenu.name)}
                         onDelete={() => this.handleDeleteMarkerFromMenu(markerMenu.name)}
+                        onShare={() => this.handleShareMarkerFromMenu(markerMenu.name)}
+                        canShare={this.canShareMarker(markerMenu.name)}
                         onClose={this.closeMarkerMenu}
                     />
                 )}

@@ -1,0 +1,136 @@
+/* Global modal shell: fixed backdrop, scrollable body, pinned footer. */
+
+.backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 950;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 14px;
+    background: rgba(0, 0, 0, 0.62);
+    animation: backdrop_in 0.12s ease-out;
+}
+
+.dialog {
+    width: min(400px, 100%);
+    max-height: min(560px, 100%);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+    background: var(--mss-surface);
+    border: 1px solid var(--mss-border-strong);
+    border-radius: 12px;
+    box-shadow: var(--mss-shadow);
+    animation: dialog_in 0.14s ease-out;
+}
+
+.dialogWide {
+    width: min(520px, 100%);
+}
+
+.header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 11px 12px 10px;
+    border-bottom: 1px solid var(--mss-border);
+    background: var(--mss-surface-2);
+}
+
+.leading {
+    display: flex;
+    flex: 0 0 auto;
+}
+
+.heading {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.title {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.3;
+    color: var(--mss-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.subtitle {
+    margin-top: 2px;
+    font-size: 11.5px;
+    color: var(--mss-text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.close {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--mss-text-muted);
+    cursor: pointer;
+}
+
+.close:hover {
+    background: var(--mss-surface-3);
+    color: var(--mss-text);
+}
+
+.closeIcon {
+    width: 14px;
+    height: 14px;
+}
+
+.body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.footer {
+    flex: 0 0 auto;
+    border-top: 1px solid var(--mss-border);
+    background: var(--mss-surface-2);
+    padding: 10px 12px;
+}
+
+.actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+@keyframes backdrop_in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+@keyframes dialog_in {
+    from { opacity: 0; transform: translateY(-6px) scale(0.985); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .backdrop,
+    .dialog {
+        animation: none;
+    }
+}

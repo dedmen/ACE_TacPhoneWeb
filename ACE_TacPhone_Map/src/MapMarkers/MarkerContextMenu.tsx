@@ -13,6 +13,13 @@ interface MarkerContextMenuProps {
     y: number;
     onEdit: () => void;
     onDelete: () => void;
+    /**
+     * Share the marker through the Messenger app. Only rendered when
+     * {@link MarkerContextMenuProps.canShare} is true.
+     */
+    onShare?: () => void;
+    /** True for a shareable icon marker while the Messenger app is installed. */
+    canShare?: boolean;
     onClose: () => void;
 }
 
@@ -24,7 +31,15 @@ interface MarkerContextMenuProps {
  * exists, so a fresh press is required to activate anything. Keyboard
  * activation still works through click, which reports detail === 0.
  */
-export function MarkerContextMenu({ x, y, onEdit, onDelete, onClose }: MarkerContextMenuProps): React.JSX.Element {
+export function MarkerContextMenu({
+    x,
+    y,
+    onEdit,
+    onDelete,
+    onShare,
+    canShare = false,
+    onClose,
+}: MarkerContextMenuProps): React.JSX.Element {
     const menuRef = useRef<HTMLDivElement>(null);
     const openedAtRef = useRef(0);
     const pressedRef = useRef<string | null>(null);
@@ -57,6 +72,17 @@ export function MarkerContextMenu({ x, y, onEdit, onDelete, onClose }: MarkerCon
         };
     }, [onClose]);
 
+    /** Runs the menu action named by a button's `data-action`. */
+    const runAction = (action: string): void => {
+        if (action === 'share') {
+            onShare?.();
+        } else if (action === 'edit') {
+            onEdit();
+        } else {
+            onDelete();
+        }
+    };
+
     const handleItemPointerDown = (event: React.PointerEvent<HTMLButtonElement>): void => {
         event.stopPropagation();
         if (isOpenGuardActive()) {
@@ -77,11 +103,7 @@ export function MarkerContextMenu({ x, y, onEdit, onDelete, onClose }: MarkerCon
         }
 
         event.preventDefault();
-        if (action === 'edit') {
-            onEdit();
-        } else {
-            onDelete();
-        }
+        runAction(action);
     };
 
     const handleItemClick = (event: React.MouseEvent<HTMLButtonElement>): void => {
@@ -91,11 +113,7 @@ export function MarkerContextMenu({ x, y, onEdit, onDelete, onClose }: MarkerCon
             return;
         }
 
-        if (event.currentTarget.dataset.action === 'edit') {
-            onEdit();
-        } else {
-            onDelete();
-        }
+        runAction(event.currentTarget.dataset.action ?? '');
     };
 
     return (
@@ -107,6 +125,21 @@ export function MarkerContextMenu({ x, y, onEdit, onDelete, onClose }: MarkerCon
             aria-label="Marker"
         >
             <div className={MenuStyle.heading}>Marker</div>
+            {canShare && onShare !== undefined && (
+                <button
+                    type="button"
+                    role="menuitem"
+                    data-action="share"
+                    className={MenuStyle.item}
+                    onPointerDown={handleItemPointerDown}
+                    onPointerUp={handleItemPointerUp}
+                    onPointerCancel={() => { pressedRef.current = null; }}
+                    onPointerLeave={() => { pressedRef.current = null; }}
+                    onClick={handleItemClick}
+                >
+                    Share to Messenger
+                </button>
+            )}
             <button
                 type="button"
                 role="menuitem"

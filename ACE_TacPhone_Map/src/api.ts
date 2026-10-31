@@ -5,9 +5,9 @@
  * `tacphone-build bundle-api-types`, which emits a self-contained
  * `dist/ace_tacphone_map.d.ts` from it. Keep it free of host imports.
  *
- * Other apps can use this to move the map view. The implementation is built
- * on OpenLayers but the public interface is framework-free: callbacks and
- * methods close over the component instance.
+ * Other apps can use this to move the map view or focus a marker. The
+ * implementation is built on OpenLayers but the public interface is
+ * framework-free: callbacks and methods close over the component instance.
  */
 
 export interface MapViewState {
@@ -37,6 +37,22 @@ export interface MapApi {
     getView(): MapViewState | undefined;
     /** True when the map instance exists and terrain view is ready. */
     isReady(): boolean;
+    /**
+     * True when a marker with this internal name is currently on the map.
+     *
+     * Marker names come from the game (`_USER_DEFINED…` for player markers) and
+     * are the `data.name` of a shared `map.marker` chat object.
+     */
+    hasMarker(name: string): boolean;
+    /**
+     * Move the view to a marker position, keeping the current resolution.
+     *
+     * Resolves `false` when the marker does not exist (for example it was
+     * deleted) or the marker layer is not ready yet. It waits for the initial
+     * marker snapshot before deciding, so a call shortly after opening the Map
+     * panel does not report a false negative.
+     */
+    focusMarker(name: string): Promise<boolean>;
 }
 
 export const MAP_SERVICE = "map";

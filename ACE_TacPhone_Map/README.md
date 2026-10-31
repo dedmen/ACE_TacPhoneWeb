@@ -10,6 +10,7 @@ the game through the TacPhone request protocol.
 | SQF request processor | `addons/tacphone/apps/map/functions/fnc_processBrowserRequest.sqf` |
 | App entry point | `src/main.tsx` |
 | App service types | `src/api.ts` |
+| Messenger marker sharing | `src/MessagingBridge.ts` |
 | Generated declarations | `dist/ace_tacphone_map.d.ts` |
 | Production bundle | `dist/ace_tacphone_map.js` |
 | File loaded in game | `addons/tacphone/apps/map/data/ace_tacphone_map.js` |
@@ -184,7 +185,8 @@ be moved or deleted; all other markers are read-only.
 - **Touch/pen**: press and hold a marker for 100 ms to lift it (drop-shadow
   highlight), then drag to move it; releasing drops it at the pointer. Holding
   still until the 600 ms long-press timeout, or releasing without dragging,
-  opens a context menu with edit and delete actions.
+  opens a context menu with edit, delete, and (for icon markers, when Messenger
+  is installed) “Share to Messenger” actions.
 - A long-press or double-click on top of an existing marker never opens the
   marker creation dialog, so markers cannot be stacked on the same spot.
 - While a marker is being dragged, the local pointer position wins: incoming
@@ -304,12 +306,18 @@ built in `src/Map.tsx` after the OpenLayers map exists and registered with
 `window.TacPhone.interApp.register(this.props.panel, { service: 'map', version: 1,
 api })`; the registration is removed before the map is torn down. The API is
 `flyTo({ x, y, resolution?, animate? })`, `getView()` (returns
-`{ x, y, resolution }` or `undefined`), and `isReady()`. Coordinates are
-map/world units, not latitude/longitude.
+`{ x, y, resolution }` or `undefined`), `isReady()`, `hasMarker(name)`, and
+`focusMarker(name)`. Coordinates are map/world units, not latitude/longitude.
 `resolution` keeps the current zoom when omitted and `animate: false` jumps
-instead of animating. A `flyTo()` that arrives before the terrain SVG has loaded
+instead of animating. A `flyTo()` that arrives before the terrain layers have loaded
 is queued and applied after the initial fit, so routing into a freshly opened Map
 popup still lands on the requested position.
+
+`hasMarker(name)` is a synchronous check of the marker layer.
+`focusMarker(name)` resolves `false` when the marker is gone or the layer is not
+ready; it waits for the initial marker snapshot before deciding and flies to the
+marker at the current resolution (a polyline focuses its first vertex). Both are
+used by the Messenger marker cards described below.
 
 Other apps resolve it through
 `window.TacPhone.interApp.resolveAsync({ service: 'map', ... })` (see the host's
@@ -323,6 +331,45 @@ sync-api-types` only copies an already-generated declaration to consumers. The
 app does not keep its own copy of the declarations.
 This is browser-side only; the game talks to the Map through the request
 processor and command registry described above, never through this API.
+
+## Sharing markers with Messenger
+
+The optional Messenger app (`MessagingApp`, service `messenger`, app/panel id
+`Messaging`) can carry a marker as a chat object. All of it lives in
+`src/MessagingBridge.ts`, which keeps the Messenger contract as local structural
+types and never imports the Messenger source.
+
+A `map.marker` object looks like this:
+
+```ts
+{
+    kind: 'map.marker',
+    version: 1,
+    data: { name, type, color, text, label, position: [x, y] },
+    preview: { title, subtitle: 'Map marker', icon, color },
+    action: { service: 'map', panelId: 'ACE_TacPhone_Map', method: 'focusMarker', args: [name] },
+}
+```
+
+`position` is data only; the preview never shows coordinates. `icon` is the game
+texture path of the marker type and `color` the resolved marker color.
+
+- **Share**: the context menu shows “Share to Messenger” for icon markers only
+  (polylines are display-only) and only while `window.TacPhone.apps.knownApps`
+  contains `Messaging`. Sharing routes to the Messenger panel with
+  `openIfMissing: true` and calls `shareObject()`; Messenger opens its own target
+  selector. The Map shows a notification only when sharing fails, never when the
+  user cancels, and closing Messenger dialogs is the Messenger's job.
+- **Renderer**: while a Map panel is mounted, a `map.marker` renderer is
+  registered with a mounted Messenger panel. `describe()` keeps the stored
+  preview's icon/color (they are not part of `data`) and takes the title from the
+  marker text. The registration follows `interApp.onDidChange`, so a Messenger
+  panel that mounts later is picked up, and it is released on unmount.
+- **Click**: the serialized `action` routes to the Map service with
+  `policy: 'ask'` (so the host can ask which Map instance to use) and calls
+  `focusMarker(name)`. When that returns false, Messenger keeps the card,
+  reports "This marker was deleted", and offers a button that flies to
+  `data.position`, the last known position stored in the chat object.
 
 ## Marker notifications
 

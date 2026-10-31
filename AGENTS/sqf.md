@@ -114,13 +114,17 @@ from the local page:
    removed and the callback is invoked once with
    `{a: "main", c: "ReplyRequestTerrainSVG", uid, error: "in-game phone not open"}`.
    The handler returns the streaming sentinel either way.
-3. Each `ReplyRequestTerrainSVG` looks the context up by `uid` and calls the
+3. The command sent to `"local"` carries `debug: true` only when the add-on was
+   compiled with `__A3_DEBUG__`; release builds send `debug: false`. The web
+   producer uses it to enable the per-layer compression-ratio diagnostic. It is
+   not part of the chunk protocol or the relay cache.
+4. Each `ReplyRequestTerrainSVG` looks the context up by `uid` and calls the
    stored `[_request, callbackArgs] call callback` — the chunk hashmap itself is
    the reply (`{a, c, uid, index, count, part, parts, name, width, height, data,
    last}`). SQF does not assemble or reorder chunks; the browser and the relay do.
-4. The context is deleted when the chunk carries `error` or `last`. An unknown
+5. The context is deleted when the chunk carries `error` or `last`. An unknown
    `uid` only logs, so a late chunk after cleanup is harmless.
-5. `fnc_terrainRequestCleanup` removes contexts older than the given age and all
+6. `fnc_terrainRequestCleanup` removes contexts older than the given age and all
    contexts of a client. It runs on every new terrain request (60 s) and on the
    WebSocket `Disconnect` callback for that client. It only inspects hashmap
    entries — the texture proxy stores promises in the same map.

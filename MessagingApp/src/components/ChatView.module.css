@@ -1,0 +1,138 @@
+/* Chat pane: header, message scroller, composer. */
+
+.view {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    background: var(--mss-bg);
+}
+
+.header {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--mss-border);
+    background: var(--mss-surface);
+}
+
+.back {
+    margin-left: -4px;
+}
+
+.heading {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.title {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--mss-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--mss-text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.actions {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.iconButton {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: none;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--mss-text-muted);
+    cursor: pointer;
+}
+
+/* Chromium in the game does not show native title tooltips reliably. */
+.iconButton[data-tooltip]::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 20;
+    padding: 4px 7px;
+    border: 1px solid var(--mss-border);
+    border-radius: 6px;
+    background: var(--mss-surface-3);
+    color: var(--mss-text);
+    font-size: 11px;
+    line-height: 1.25;
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    transform: translateY(-2px);
+    transition: opacity 0.1s ease-out, transform 0.1s ease-out;
+}
+
+.iconButton[data-tooltip]:hover::after,
+.iconButton[data-tooltip]:focus-visible::after {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.iconButton:hover {
+    background: var(--mss-surface-3);
+    color: var(--mss-text);
+}
+
+.icon {
+    width: 16px;
+    height: 16px;
+}
+
+.messages {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 6px 0 10px;
+    scrollbar-width: thin;
+}
+
+.dismiss {
+    flex: 0 0 auto;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: inherit;
+    font-size: 12px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.dismiss:hover {
+    background: rgba(255, 255, 255, 0.1);
+}

@@ -318,6 +318,11 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
   all resolve `undefined`.
 - [ ] **[decision]** `App.tsx:316-317` TODO: keep the mobile screen awake and add
   a fullscreen mode (Settings), relevant for the external-browser path.
+- [ ] **[decision]** Audio output device: `window.TacPhone.audio.setSinkId()` and
+  `enumerateDevices()` already exist in `Backend/Audio.ts`, but the game cannot
+  report Arma's selected output device, so the browser sink is not mapped to it.
+  Wire Arma's device to `setSinkId` once the game can expose it; notification and
+  Messenger sounds share the one `AudioContext`.
 - [ ] **[cleanup]** Remove the temporary `SaveLayout`/`GetLayout` placeholders
   once the game-side persistence exists (see the first section).
 - [x] Removed all references to and handling of the legacy `devapps/` folder.
@@ -343,9 +348,13 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
   persisted layout. `AppChooserPanel.componentDidMount()` now reads
   `PanelInstance.getConfig().panelId` and switches to that app when it is still
   registered; `setPanelConfig()` keeps writing the value for the next reload.
-- [ ] **[decision]** Messenger app consuming the `map` service with
-  `policy: 'ask'` (the routing API and the target dialog exist; no Messenger app
-  does yet).
+- [x] **[decision]** Messenger app consuming the `map` service with
+  `policy: 'ask'`. Done: the `map.marker` object carries
+  `action: { service: 'map', method: 'focusMarker', policy: 'ask' }`; Messenger
+  routes it through `resolveAsync({ service: 'map', policy: 'ask' })`, so the
+  host target chooser picks the Map instance. The Map renderer only supplies the
+  preview, so Messenger can keep the card and offer the last known position when
+  `focusMarker()` returns false.
 - [ ] **[decision]** Cross-app events/subscriptions beyond method calls (for
   example "markers changed" notifications).
 - [ ] **[cleanup]** `interApp.waitFor(service, predicate)` lifecycle helper, so
@@ -357,6 +366,67 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
 ## Tooling and dependencies
 
 - [ ] **[cleanup]** rerun `npm audit`, both builds, and `check:importmap`.
+
+## Messenger app (`MessagingApp`)
+
+Web UI (Tasks 4-5), the game half (Task 3) and the Map integration (Task 6) are
+implemented; Task 8 verified the workspace build, the copied bundles and the
+in-game registration. Behaviour references: `MessagingApp/README.md` and
+`../apps/messaging/README.md`.
+
+Remaining work:
+
+- [ ] **[decision]** Enable `missionProfileNamespace` persistence and choose the
+  save triggers (round end, mission end, periodic), schema migration, size
+  limits, and whether state survives mission switches.
+  `fnc_serverExportState`/`fnc_serverImportState` exist and are versioned, but
+  `GVAR(serverPersistenceEnabled) = false` and only the debug commands call them.
+- [ ] **[decision]** Participant colours: `groupColor` is sent empty until the
+  future group member colour system exists; use it for participants and the
+  sender group accent in `fnc_assembleParticipant.sqf` when it lands.
+- [ ] **[decision]** Invite UX: `InviteToRoom` takes recipient UIDs plus the
+  room to invite them into, so the shared target selector shows a destination
+  room list (current room preselected) together with the player/group picker,
+  instead of only a room list. Revisit if a simpler "invite to this room" flow
+  is preferred.
+- [ ] **[decision]** The Messenger panel does not remember the last open room
+  across remounts; the store's `activeRoomId` resets when the app re-syncs.
+- [x] Task 8: `GetPlayerList` is answered by a `PlayerList.State` push, while the
+  request reply only says `pending`; `ChatStore.requestPlayerList()` now applies
+  a list only when the reply carries one, so an empty reply no longer wipes the
+  pushed roster.
+- [x] `CreateRoom` now waits for the matching `Room.Upsert` push, so the new
+  room id is available to the create and share dialogs even though relayed
+  commands answer `{ ok: true, pending: true }`.
+- [ ] **[bug]** The same `pending` reply still leaves `JoinRoom` and forwarding
+  into a new room without a correlated server result; a rejected join only
+  surfaces later through `Error`/room pushes. Add a correlated result push
+  (request id) or wait for the room/error push in those flows.
+- [x] `Messaging.Debug.Reset` now sends `Room.Upsert` with `removed: true` to
+  every participant before clearing the server maps, so open pages drop stale
+  debug rooms without a reload.
+- [ ] **[decision]** Cross-device presence: the in-game client is `"local"` and
+  its presence is derived from the TacPhone display mode by the game, so
+  `setClientPresence` from the page is informational only for that client.
+- [x] Presence live-tested: HUD/DIALOG available, CLOSED/HIDDEN minimized when
+  no other client is visible, external page visible/hidden, and fake players.
+  The suite now refuses to run if another remote phone/tablet/dev page is
+  visible, because that legitimately keeps the player available.
+- [ ] **[decision]** Leaving a room whose whole group is invited is currently
+  blocked. Figure out a later flow: leave the in-game group, convert the group
+  invite into individual participants, or let the member leave and mark the
+  group as partially invited.
+- [x] Notification suppression live-verified: with the in-game phone focused on
+  the active room, an injected message produced no notification.
+- [x] Group `Deleted` handler live-verified with synthetic AI-only groups,
+  including deleting the only group in a room.
+- [ ] Fake-player testing limitations: the debug commands and fake players only
+  exist in an `__A3_DEBUG__` build. The guarded `fnc_debug*.sqf` files are still
+  shipped in release PBOs (bodies compiled out), and the page's debug toolbar
+  requires a debug web build, so neither can be exercised in a release client.
+- [ ] No unit tests for the store. The reusable Node WebSocket suite lives in
+  `MessagingApp/test/` (Task 7; see its README) and needs a running `__A3_DEBUG__`
+  game with the host on port 8001, so it is not part of `npm run check`.
 
 ## Remote access (public relay)
 

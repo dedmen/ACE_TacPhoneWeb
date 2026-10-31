@@ -311,6 +311,7 @@ window.TacPhone: TacPhoneHost
 | `interApp` | Register an app's service and resolve or call another app's. See [Inter-app API](#inter-app-api). |
 | `interests` | Acquire and release named data interests so the game only sends what the page needs. See [Data interests](#data-interests). |
 | `notifications` | Toast banners. See [Notifications](#notifications). |
+| `audio` | Synthesised notification sounds and output-device selection. See [Audio](#audio). |
 | `utils.CommandRegistry` | Message router helper shown above. |
 | `utils.PanelContext` | React context with the live `PanelInstance` of the panel an app is rendered in. |
 | `utils.usePanel()` | Hook form of `PanelContext` for function components. |
@@ -895,6 +896,7 @@ const id = window.TacPhone.notifications.show({
     icon: undefined,                  // optional explicit icon URL
     duration: 15000,                  // milliseconds; 0 = permanent until dismissed
     data: { key: "value" },           // arbitrary payload for handlers
+    sound: "message",                 // optional built-in sound, played once
     action: (notification) => {       // tap handler: function (page-local only)
         console.log("Tapped!", notification);
         return new Promise(resolve => setTimeout(resolve, 1000));
@@ -918,6 +920,7 @@ window.TacPhone.notifications.dismiss(id);
 | `icon` | No | `string` | Resolved from `app` | Explicit icon URL; overrides the app icon. |
 | `duration` | No | `number` | `15000` | Auto-dismiss after this many milliseconds. Use `0` for permanent (until dismissed). |
 | `data` | No | `unknown` | — | Arbitrary payload available in the tap handler. |
+| `sound` | No | `"message" \| "alert" \| "success"` | — | Built-in sound played once when the notification is shown. |
 | `action` | No | `NotificationTapHandler` | — | Function run when the notification is tapped; may be async. |
 
 ### Tap action
@@ -956,6 +959,45 @@ window.TacPhone.notifications.show({
 - The notification stack is transient: there is no persistent history or center screen.
 - When more than [`MAX_NOTIFICATIONS`](src/Backend/Notifications.ts) (5) are shown,
   the oldest are dropped silently without animation.
+
+## Audio
+
+`window.TacPhone.audio` provides built-in notification sounds and output-device
+selection. Sounds are synthesised with the Web Audio API (oscillators and gain
+envelopes); there are no audio assets to ship.
+
+```ts
+window.TacPhone.audio.play("message"); // "message" | "alert" | "success"
+
+const outputs = await window.TacPhone.audio.enumerateDevices();
+await window.TacPhone.audio.setSinkId(outputs[0].deviceId);
+window.TacPhone.audio.getOutputDeviceId(); // device id, or undefined for the default
+```
+
+Most apps should pass `sound` to a notification instead of calling `play()`
+directly; `NotificationCenter.show()` plays it exactly once per notification.
+
+| Member | Purpose |
+| --- | --- |
+| `play(sound)` | Plays one preset. Silent when Web Audio is unavailable or the context is still suspended; bursts are throttled per preset. |
+| `enumerateDevices()` | Every `audiooutput` device the browser reports, as `AudioDeviceInfo[]`. Returns `[]` when `navigator.mediaDevices` is unavailable. |
+| `setSinkId(deviceId)` | Routes the page's audio to one device through `AudioContext.setSinkId()`. Rejects with a clear error when the browser does not support it. |
+| `getOutputDeviceId()` | The explicitly selected device id, or undefined when the browser default is used. |
+
+### Autoplay unlock
+
+Browsers start an `AudioContext` suspended until a user gesture. The host creates
+the context lazily and installs `pointerdown`/`keydown` listeners that create and
+resume it, so sounds work after the first interaction with the phone. A `play()`
+on a still-suspended context tries to resume and drops that one sound rather than
+queueing it for a later click.
+
+### Output-device note
+
+Notification sounds and `setSinkId()` share the same `AudioContext`, so a sink
+change applies to every host sound. Selecting the device is scaffolding for a
+future feature that mirrors Arma's audio output device: the game cannot currently
+report its device, so nothing discovers it today (see `TODO.md`).
 
 ## Related documentation
 

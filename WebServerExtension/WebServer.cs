@@ -7,6 +7,7 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Net.WebSockets;
 using System.Text;
+using System.Text.Json;
 using ArmaServerSide.Transports;
 
 namespace ArmaServerSide
@@ -165,6 +166,11 @@ namespace ArmaServerSide
 
         // Set when the host starts shutting down; every WebSocket wait observes it.
         readonly CancellationTokenSource _stopping = new();
+
+        // A closed remote peer can remain in SQF's target list until the relay
+        // reports peer-left. Do not repeat the same delivery warning on every
+        // presence/request frame during that window.
+        readonly ConcurrentDictionary<string, DateTimeOffset> _lastSendWarnings = new(StringComparer.Ordinal);
         volatile bool _stopped;
 
         public WebServer(int port)
@@ -600,7 +606,24 @@ namespace ArmaServerSide
 
                     if (delivered < normalizedTargets.Count)
                     {
-                        ExtensionLog.Warn($"SendTo: {normalizedTargets.Count - delivered} of {normalizedTargets.Count} target(s) were not connected");
+                        var description = DescribeSendContent(content);
+                        var warningKey = description.StartsWith("command ", StringComparison.Ordinal)
+                            ? description
+                            : "reply";
+                        var now = DateTimeOffset.UtcNow;
+
+                        if (!_lastSendWarnings.TryGetValue(warningKey, out var last) ||
+                            now - last >= TimeSpan.FromSeconds(10))
+                        {
+                            _lastSendWarnings[warningKey] = now;
+
+                            if (_lastSendWarnings.Count > 100)
+                                _lastSendWarnings.Clear();
+
+                            ExtensionLog.Warn(
+                                $"SendTo: {normalizedTargets.Count - delivered} of {normalizedTargets.Count} target(s) were not connected " +
+                                $"for {description}");
+                        }
                     }
                 }
 
@@ -611,6 +634,48 @@ namespace ArmaServerSide
                 ExtensionLog.Error("SendTo failed", ex);
                 return 0;
             }
+        }
+
+        /// <summary>
+        /// Short description of a frame for delivery diagnostics: command app and
+        /// name for game pushes, reply key for request replies.
+        /// </summary>
+        private static string DescribeSendContent(string content)
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(content);
+                var root = document.RootElement;
+
+                if (root.ValueKind == JsonValueKind.Object &&
+                    root.TryGetProperty("k", out var kind))
+                {
+                    var kindText = kind.ValueKind == JsonValueKind.String ? kind.GetString() : kind.ToString();
+
+                    if (kindText == "command" &&
+                        root.TryGetProperty("d", out var data) &&
+                        data.ValueKind == JsonValueKind.Object)
+                    {
+                        var app = data.TryGetProperty("a", out var appElement) && appElement.ValueKind == JsonValueKind.String
+                            ? appElement.GetString()
+                            : null;
+                        var command = data.TryGetProperty("c", out var commandElement) && commandElement.ValueKind == JsonValueKind.String
+                            ? commandElement.GetString()
+                            : null;
+
+                        return $"command {app ?? "?"}.{command ?? "?"}";
+                    }
+
+                    return $"message k={kindText}";
+                }
+            }
+            catch
+            {
+                // Fall through to the bounded raw payload.
+            }
+
+            const int maxPreview = 80;
+            return content.Length <= maxPreview ? content : content[..maxPreview] + "...";
         }
     }
 }

@@ -5,6 +5,8 @@
 // one definition of the app contract. Never add types here.
 
 export type {
+    AudioApi,
+    AudioDeviceInfo,
     InterAppRegistration,
     InterAppRegistry,
     AppCatalog,
@@ -22,6 +24,7 @@ export type {
     NotificationAction,
     NotificationCenterApi,
     NotificationOptions,
+    NotificationSound,
     NotificationTapHandler,
     OpenPanelOptions,
     OpenPanelResult,

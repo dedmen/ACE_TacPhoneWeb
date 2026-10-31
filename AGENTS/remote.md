@@ -135,8 +135,11 @@ host.
   one frame. The request config is not a cache key; the pin stores its hash only to
   decide whether a request matches. A hit is answered by the relay and never
   reaches the game; the pin and buffered transfers are dropped on host disconnect
-  so a reconnect re-renders its own terrain. `TacPhone:TerrainCache:*` bounds
-  memory; `/health` reports `terrainCacheEntries/Bytes/Hosts/Hits/Misses` plus
+  so a reconnect re-renders its own terrain. Every lookup logs a hit or miss at
+  `Information`; a miss includes the reason (cache disabled, no pin, config
+  mismatch, or missing payload), never payload/config contents.
+  `TacPhone:TerrainCache:*` bounds memory; `/health` reports
+  `terrainCacheEntries/Bytes/Hosts/Hits/Misses` plus
   `terrainCachePending/PendingBytes`.
 - The relay also keeps a **global** texture cache for `RequestTexture` replies,
   keyed by normalized `path` + `maxSize` (replace `/` with `\`, strip the leading

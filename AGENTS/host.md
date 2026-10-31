@@ -22,6 +22,7 @@ reference is [`ACE_TacPhone_Main/README.md`](../ACE_TacPhone_Main/README.md).
 | Inter-app registry and routing | `src/Backend/InterApp.ts`, `src/Panels/TargetChooserDialog.tsx` |
 | Data interests | `src/Backend/InterestRegistry.ts` |
 | Notifications | `src/Backend/Notifications.ts`, `src/Panels/NotificationHost.tsx` |
+| Audio (synthesised sounds, output device) | `src/Backend/Audio.ts` |
 | Built-in `main` app | `src/MainApps/main.tsx` |
 | Error UI | `src/Panels/AppErrorBoundary.tsx` |
 | Styles | `src/App.css`, `src/index.css`, `src/Panels/*.module.css` |
@@ -109,10 +110,12 @@ compress each layer and stream `ReplyRequestTerrainSVG` chunks back (with
 `ReplyRequestTexture` as before. `LoadGameTerrain` resolves to a `TerrainData`
 (`width`, `height`, `layers: [{ name, svg }]`); a legacy whole-SVG reply is still
 accepted by decompressing and splitting it locally. `ReplyTerrainSVG` is not
-implemented by the browser transport. In dev and `build:debug`, it logs each
-layer's raw SVG size, gzip size, base64 size, chunk count and compression ratio
-to the browser console; release builds drop the diagnostic. The app contract
-version is `2`.
+implemented by the browser transport. A game add-on built with `__A3_DEBUG__`
+sets `debug` on the `RequestTerrainSVG` command; `ReplyTerrainSVG` then logs each
+layer's raw SVG size, gzip size, base64 size, chunk count and compression ratio.
+The bundled in-game page is normally a release web build, so the diagnostic uses
+`console.warn` there (release builds strip `console.log`); release game builds
+send `debug: false` and skip it. The app contract version is `2`.
 
 The engine moves `ExecJS` sources through base64 and decodes them with `atob`,
 so non-ASCII text in in-game replies and pushes arrives as a UTF-8 byte string
@@ -154,6 +157,34 @@ warning; nothing throws.
 duration is 15 s, `0` means permanent, and at most 5 banners are kept (oldest
 dropped silently). `action` is a page-local function, not a game message. Apps can
 open/focus panels or call other services from it.
+
+`show()` plays `options.sound` once per notification through
+`Backend/Audio.ts`; the sound is optional and notification behaviour is otherwise
+unchanged. The audio engine throttles bursts, so several notifications shown in
+the same instant can share one sound.
+
+## Audio (`Backend/Audio.ts`)
+
+`window.TacPhone.audio` is the app-facing surface (`AudioApi`):
+
+- `play(sound)` plays one built-in preset (`message`, `alert`, `success`).
+- `enumerateDevices()` filters `navigator.mediaDevices.enumerateDevices()` down to
+  `audiooutput` and returns `[]` when unsupported.
+- `setSinkId(deviceId)` uses `AudioContext.setSinkId()` and rejects with a clear
+  error when the browser lacks it; the selected id is remembered.
+- `getOutputDeviceId()` returns that id, or undefined for the browser default.
+
+Sounds are synthesised with oscillators and gain envelopes: there are no audio
+assets and no `new Audio()` elements. The single `AudioContext` is created
+lazily, and `pointerdown`/`keydown` listeners installed at module load create and
+resume it, so the autoplay policy is satisfied by the first user gesture.
+`play()` never queues on a suspended context (a queued sound would only fire on a
+later click); it tries to resume and drops that sound. Without Web Audio the
+engine logs one warning and becomes a no-op.
+
+Notification sounds and `setSinkId()` share the same context, so a sink change
+applies to every sound. Mirroring Arma's audio output device is future
+scaffolding: the game cannot report its device today (see `TODO.md`).
 
 ## Changing the public API
 

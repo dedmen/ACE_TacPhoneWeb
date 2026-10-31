@@ -1,0 +1,194 @@
+/* One message: sender header, bubble, object cards and actions. */
+
+.row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 1px 10px 1px 10px;
+}
+
+.rowStart {
+    margin-top: 9px;
+}
+
+.own {
+    justify-content: flex-end;
+}
+
+.avatar {
+    margin-top: 17px;
+}
+
+.body {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    max-width: min(78%, 460px);
+}
+
+.own .body {
+    align-items: flex-end;
+}
+
+.header {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 0 2px 3px;
+    font-size: 11.5px;
+}
+
+.sender {
+    font-weight: 700;
+    color: var(--mss-text);
+}
+
+.group {
+    font-size: 10.5px;
+    font-weight: 600;
+    opacity: 0.85;
+}
+
+.time {
+    font-size: 10.5px;
+    color: var(--mss-text-faint);
+}
+
+.bubble {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+    padding: 7px 10px;
+    border: 1px solid var(--mss-border);
+    border-radius: 12px 12px 12px 4px;
+    background: var(--mss-surface-2);
+    color: var(--mss-text);
+}
+
+.bubbleOwn {
+    border-color: rgba(122, 167, 255, 0.35);
+    border-radius: 12px 12px 4px 12px;
+    background: var(--mss-own);
+}
+
+.content {
+    font-size: 13px;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    user-select: text;
+}
+
+.objects {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.forwarded {
+    display: flex;
+    align-items: flex-start;
+    gap: 5px;
+    padding: 4px 7px;
+    border-left: 2px solid var(--mss-accent);
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--mss-text-muted);
+    font-size: 11px;
+    line-height: 1.35;
+}
+
+.forwarded strong {
+    color: var(--mss-text);
+    font-weight: 600;
+}
+
+.forwardedIcon {
+    flex: 0 0 auto;
+    width: 12px;
+    height: 12px;
+    margin-top: 1px;
+}
+
+.failed {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--mss-danger);
+    font-size: 11px;
+}
+
+.failedIcon {
+    width: 12px;
+    height: 12px;
+}
+
+.footer {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 16px;
+    padding: 1px 2px 0;
+}
+
+.pending {
+    font-size: 10px;
+    color: var(--mss-text-faint);
+    font-style: italic;
+}
+
+.action {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 1px 4px;
+    border: none;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--mss-text-faint);
+    font: inherit;
+    font-size: 10.5px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.12s ease-out;
+}
+
+.row:hover .action,
+.action:focus-visible {
+    opacity: 1;
+}
+
+.action:hover {
+    background: var(--mss-surface-3);
+    color: var(--mss-text);
+}
+
+.actionIcon {
+    width: 11px;
+    height: 11px;
+}
+
+/* Touch devices have no hover: keep the action visible. */
+@media (hover: none) {
+    .action {
+        opacity: 1;
+    }
+}
+
+/* Group membership notice (joined/left/deleted via in-game group change). */
+.system {
+    align-self: center;
+    max-width: 92%;
+    margin: 3px auto;
+    padding: 4px 10px;
+    border: 1px solid var(--mss-border);
+    border-radius: 999px;
+    background: var(--mss-surface-2);
+    color: var(--mss-text-faint);
+    font-size: 11px;
+    text-align: center;
+    overflow-wrap: anywhere;
+}
+

@@ -1,0 +1,90 @@
+/* Message input bar pinned to the bottom of the chat view. */
+
+.composer {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 8px 10px calc(8px + env(safe-area-inset-bottom, 0px));
+    border-top: 1px solid var(--mss-border);
+    background: var(--mss-surface);
+}
+
+.row {
+    display: flex;
+    align-items: flex-end;
+    gap: 7px;
+}
+
+.input {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 32px;
+    max-height: 108px;
+    padding: 7px 10px;
+    border: 1px solid var(--mss-border);
+    border-radius: 9px;
+    background: var(--mss-surface-2);
+    color: var(--mss-text);
+    font: inherit;
+    font-size: 13px;
+    line-height: 1.4;
+    resize: none;
+    overflow-y: auto;
+    outline: none;
+    /* scrollHeight includes padding but not the border; border-box keeps the
+       measured height from asking Chromium for a scrollbar on an empty box. */
+    box-sizing: border-box;
+    scrollbar-width: thin;
+}
+
+.input:focus {
+    border-color: var(--mss-accent);
+    background: var(--mss-surface-3);
+}
+
+.input::placeholder {
+    color: var(--mss-text-faint);
+}
+
+.input:disabled {
+    opacity: 0.6;
+}
+
+.send {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 1px solid var(--mss-accent-strong);
+    border-radius: 9px;
+    background: var(--mss-accent-strong);
+    color: #fff;
+    cursor: pointer;
+}
+
+.send:hover:not(:disabled) {
+    background: var(--mss-accent);
+    border-color: var(--mss-accent);
+}
+
+.send:disabled {
+    border-color: var(--mss-border);
+    background: var(--mss-surface-3);
+    color: var(--mss-text-faint);
+    cursor: default;
+}
+
+.sendIcon {
+    width: 15px;
+    height: 15px;
+}
+
+.error {
+    padding: 3px 2px;
+    color: var(--mss-danger);
+    font-size: 11px;
+}

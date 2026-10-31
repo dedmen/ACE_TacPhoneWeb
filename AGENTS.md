@@ -6,9 +6,10 @@ Build here, then copy the outputs into the parent add-on. The root `package.json
 is an npm workspace. Every incomplete task or placeholder must be listed in
 `TODO.md`.
 
-Web code is in `ACE_TacPhone_Main` (host), `ACE_TacPhone_Map` and `SampleApp`
-(apps), and `packages/` (contract/build tooling). The game side is the parent
-`addons/tacphone` add-on.
+Web code is in `ACE_TacPhone_Main` (host), `ACE_TacPhone_Map`, `MessagingApp`
+and `SampleApp` (apps), and `packages/` (contract/build tooling). The game side
+is the parent `addons/tacphone` add-on; the Messenger game half is
+`addons/tacphone/apps/messaging`.
 
 ## Read only the file for your task
 

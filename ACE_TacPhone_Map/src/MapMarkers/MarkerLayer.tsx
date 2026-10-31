@@ -57,6 +57,29 @@ export interface MarkerProperties {
     position: [number, number];
 }
 
+/**
+ * Everything another app needs to show and describe an icon marker, for
+ * example as a `map.marker` chat object in the Messenger app.
+ */
+export interface MarkerChatData {
+    /** Internal marker name, used as the `focusMarker` argument. */
+    name: string;
+    /** Marker type class name (CfgMarkers). */
+    type: string;
+    /** Marker color class name (CfgMarkerColors); empty for the type color. */
+    color: string;
+    /** Marker text/label as sent by the game. */
+    text: string;
+    /** Alias of {@link text}; the game has no separate label for marker text. */
+    label: string;
+    /** Map/world position. Data only: never shown as coordinates in a preview. */
+    position: [number, number];
+    /** Game texture path of the marker type icon; empty when the type is unknown. */
+    typeIcon: string;
+    /** Resolved marker color as a CSS hex string. */
+    resolvedColor: string;
+}
+
 /** Per-marker bookkeeping while the user drags a marker in the Web UI. */
 interface MarkerMoveState {
     /** Timestamp of the last position update sent to the game. */
@@ -228,6 +251,9 @@ export class MarkerLayerManager {
     private resolveMarkerConfigReady!: () => void;
 
     private initialMarkersLoaded = false;
+    /** Resolves once the initial marker snapshot is applied (or failed). */
+    private markersLoaded: Promise<void>;
+    private resolveMarkersLoaded!: () => void;
     private playerId: string | undefined;
 
     private pendingMarkerOperations: PendingMarkerOperation[] = [];
@@ -248,6 +274,10 @@ export class MarkerLayerManager {
     constructor(title: string = 'Live Markers') {
         this.markerConfigReady = new Promise<void>((resolve) => {
             this.resolveMarkerConfigReady = resolve;
+        });
+
+        this.markersLoaded = new Promise<void>((resolve) => {
+            this.resolveMarkersLoaded = resolve;
         });
 
         this.releaseMarkerLayer = registerMarkerLayer();
@@ -302,6 +332,10 @@ export class MarkerLayerManager {
             // afterwards by the finally block and may still notify.
             markKnownMarkerNames(markers.map((marker) => marker[0]));
         }).finally(() => {
+            // Always resolve the readiness promise, even after destroy and after
+            // a failed/timed-out snapshot: focusMarker() must never hang.
+            this.resolveMarkersLoaded();
+
             if (this.destroyed) {
                 return;
             }
@@ -416,6 +450,9 @@ export class MarkerLayerManager {
         this.markerRegistry.clear();
         this.source.clear();
 
+        // Nobody may wait forever for the snapshot of a destroyed layer.
+        this.resolveMarkersLoaded();
+
         // The release function is idempotent, so the layer count cannot go below 0.
         this.releaseMarkerLayer?.();
         this.releaseMarkerLayer = null;
@@ -426,6 +463,102 @@ export class MarkerLayerManager {
      */
     public whenMarkerConfigLoaded(): Promise<void> {
         return this.markerConfigReady;
+    }
+
+    /**
+     * Resolves once the initial marker snapshot has been applied, or after it
+     * failed/timed out, or when this manager was destroyed. Never rejects.
+     */
+    public whenMarkersLoaded(): Promise<void> {
+        return this.markersLoaded;
+    }
+
+    /** True when a marker with this name is currently on the layer. */
+    public hasMarker(name: string): boolean {
+        if (this.destroyed || typeof name !== 'string' || name === '') {
+            return false;
+        }
+
+        return this.getRegisteredFeature(name) !== null;
+    }
+
+    /**
+     * Data of an icon marker for sharing with another app (Messenger), or null
+     * when the marker does not exist or is a polyline. Polyline markers are
+     * display-only and not shareable.
+     */
+    public getMarkerChatData(name: string): MarkerChatData | null {
+        if (this.destroyed || typeof name !== 'string' || name === '') {
+            return null;
+        }
+
+        const feature = this.getRegisteredFeature(name);
+        const geometry = feature?.getGeometry();
+
+        // Only point/icon markers are shareable; a LineString is a polyline.
+        if (!feature || !(geometry instanceof Point)) {
+            return null;
+        }
+
+        const coordinates = geometry.getCoordinates();
+        if (!isFinitePosition(coordinates)) {
+            return null;
+        }
+
+        const type = (feature.get('type') as string | undefined) ?? '';
+        const color = (feature.get('color') as string | undefined) ?? '';
+        const text = (feature.get('label') as string | undefined) ?? '';
+        const typeResolved = this.markerTypes.get(type);
+
+        return {
+            name,
+            type,
+            color,
+            text,
+            label: text,
+            position: [coordinates[0], coordinates[1]],
+            typeIcon: typeResolved?.icon ?? '',
+            resolvedColor: this.resolveMarkerColor(color, typeResolved),
+        };
+    }
+
+    /**
+     * Flies to a marker through the supplied `flyTo` callback when it exists.
+     * Returns false for an unknown marker, so callers can report a deleted one.
+     * A polyline focuses its first vertex.
+     */
+    public focusMarker(name: string, flyTo: (position: [number, number]) => void): boolean {
+        if (this.destroyed || typeof name !== 'string' || name === '') {
+            return false;
+        }
+
+        const geometry = this.getRegisteredFeature(name)?.getGeometry();
+        let position: [number, number] | null = null;
+
+        if (geometry instanceof Point) {
+            const coordinates = geometry.getCoordinates();
+            if (isFinitePosition(coordinates)) {
+                position = [coordinates[0], coordinates[1]];
+            }
+        } else if (geometry instanceof LineString) {
+            const first = geometry.getCoordinates()[0];
+            if (isFinitePosition(first)) {
+                position = [first[0], first[1]];
+            }
+        }
+
+        if (!position) {
+            return false;
+        }
+
+        flyTo(position);
+        return true;
+    }
+
+    /** Resolves a CfgMarkerColors class name, falling back to the type color. */
+    private resolveMarkerColor(colorClassName: string, typeResolved: MarkerType | undefined): string {
+        const colorResolved = colorClassName !== '' ? this.markerColors.get(colorClassName) : undefined;
+        return colorResolved?.color || typeResolved?.color || DEFAULT_MARKER_COLOR;
     }
 
     public getMarkerTypes(): MarkerType[] {
@@ -626,9 +759,7 @@ export class MarkerLayerManager {
 
         // `color` is a CfgMarkerColors class name, or empty for the marker type's
         // own color. markerColors is keyed by class name, not by a hex value.
-        var colorResolved = color !== '' ? this.markerColors.get(color) : undefined;
-
-        markerIcon.setColor(colorResolved?.color || typeResolved.color || DEFAULT_MARKER_COLOR);
+        markerIcon.setColor(this.resolveMarkerColor(color, typeResolved));
         return resStyle;
     }
 

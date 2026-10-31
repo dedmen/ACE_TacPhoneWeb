@@ -1,0 +1,42 @@
+/*
+ * Palette of the Messenger app.
+ *
+ * The host phone UI and the Map app use dark translucent surfaces with compact
+ * controls, so the Messenger follows that language instead of the light page
+ * theme used by the host's landing page. The variables live in a class instead
+ * of `:root` because dialogs are portalled to `document.body` and would not
+ * inherit anything defined on the panel root.
+ */
+.theme {
+    --mss-bg: #141418;
+    --mss-surface: #1c1c21;
+    --mss-surface-2: #26262d;
+    --mss-surface-3: #303039;
+    --mss-border: rgba(255, 255, 255, 0.12);
+    --mss-border-strong: rgba(255, 255, 255, 0.22);
+    --mss-text: #ececf1;
+    --mss-text-muted: #a0a0ad;
+    --mss-text-faint: #777783;
+    --mss-accent: #7aa7ff;
+    --mss-accent-strong: #4d86ff;
+    --mss-accent-soft: rgba(122, 167, 255, 0.16);
+    --mss-own: rgba(77, 134, 255, 0.22);
+    --mss-danger: #ff8a8a;
+    --mss-danger-soft: rgba(255, 90, 90, 0.16);
+    --mss-available: #4ade80;
+    --mss-minimized: #fbbf24;
+    --mss-offline: #7c7c88;
+    --mss-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+    --mss-radius: 10px;
+
+    color: var(--mss-text);
+    font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+.theme *,
+.theme *::before,
+.theme *::after {
+    box-sizing: border-box;
+}

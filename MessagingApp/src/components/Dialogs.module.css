@@ -1,0 +1,501 @@
+/* Shared styles of the Messenger dialogs (create, add, members, targets). */
+
+.picker {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 0;
+}
+
+.tabs {
+    display: flex;
+    gap: 4px;
+    padding: 3px;
+    border-radius: 8px;
+    background: var(--mss-surface-2);
+}
+
+.tab {
+    flex: 1 1 0;
+    padding: 5px 8px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--mss-text-muted);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.tab:hover {
+    color: var(--mss-text);
+}
+
+.tab[data-active='true'] {
+    background: var(--mss-surface-3);
+    color: var(--mss-text);
+}
+
+.optionList {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-height: 220px;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 2px;
+    border: 1px solid var(--mss-border);
+    border-radius: 8px;
+    background: var(--mss-bg);
+}
+
+.option {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    min-height: 40px;
+    padding: 6px 8px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--mss-text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.option:hover:not(:disabled) {
+    background: var(--mss-surface-2);
+}
+
+.option[data-selected='true'] {
+    background: var(--mss-accent-soft);
+}
+
+.option:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.checkbox {
+    position: relative;
+    flex: 0 0 auto;
+    width: 16px;
+    height: 16px;
+    border: 1.5px solid var(--mss-border-strong);
+    border-radius: 4px;
+    background: var(--mss-surface);
+}
+
+.checkbox[data-checked='true'] {
+    border-color: var(--mss-accent);
+    background: var(--mss-accent-strong);
+}
+
+.checkbox[data-checked='true']::after {
+    content: '';
+    position: absolute;
+    left: 4.5px;
+    top: 1px;
+    width: 4px;
+    height: 8px;
+    border: solid #fff;
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+}
+
+.optionText {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.optionName {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12.5px;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.optionMeta {
+    font-size: 11px;
+    color: var(--mss-text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.optionHint {
+    flex: 0 0 auto;
+    font-size: 10px;
+    text-transform: capitalize;
+    color: var(--mss-text-faint);
+}
+
+.countBadge {
+    padding: 0 5px;
+    border-radius: 8px;
+    background: var(--mss-surface-3);
+    color: var(--mss-text-muted);
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 15px;
+}
+
+.optionEmpty {
+    padding: 18px 8px;
+    text-align: center;
+    font-size: 11.5px;
+    color: var(--mss-text-faint);
+}
+
+.selectionSummary {
+    font-size: 11px;
+    color: var(--mss-text-faint);
+}
+
+.sectionTitle {
+    margin: 2px 0 -2px;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+    color: var(--mss-text-faint);
+}
+
+.field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--mss-text-muted);
+}
+
+.input {
+    width: 100%;
+    height: 32px;
+    padding: 0 9px;
+    border: 1px solid var(--mss-border);
+    border-radius: 8px;
+    background: var(--mss-surface-2);
+    color: var(--mss-text);
+    font: inherit;
+    font-size: 12.5px;
+    outline: none;
+}
+
+.input:focus {
+    border-color: var(--mss-accent);
+    background: var(--mss-surface-3);
+}
+
+.input::placeholder {
+    color: var(--mss-text-faint);
+}
+
+.roomList {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-height: 190px;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 2px;
+    border: 1px solid var(--mss-border);
+    border-radius: 8px;
+    background: var(--mss-bg);
+}
+
+.roomOption {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    min-height: 38px;
+    padding: 6px 8px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--mss-text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.roomOption:hover {
+    background: var(--mss-surface-2);
+}
+
+.roomOption[data-selected='true'] {
+    background: var(--mss-accent-soft);
+}
+
+.radio {
+    position: relative;
+    flex: 0 0 auto;
+    width: 14px;
+    height: 14px;
+    border: 1.5px solid var(--mss-border-strong);
+    border-radius: 50%;
+}
+
+.roomOption[data-selected='true'] .radio {
+    border-color: var(--mss-accent);
+}
+
+.roomOption[data-selected='true'] .radio::after {
+    content: '';
+    position: absolute;
+    inset: 2px;
+    border-radius: 50%;
+    background: var(--mss-accent);
+}
+
+.roomText {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.roomName {
+    font-size: 12.5px;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.roomMeta {
+    font-size: 11px;
+    color: var(--mss-text-muted);
+}
+
+.newRoomRow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 8px;
+    border: 1px dashed var(--mss-border-strong);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--mss-text);
+    font: inherit;
+    font-size: 12.5px;
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+}
+
+.newRoomRow:hover {
+    background: var(--mss-surface-2);
+}
+
+.newRoomRow[data-selected='true'] {
+    border-style: solid;
+    border-color: var(--mss-accent);
+    background: var(--mss-accent-soft);
+}
+
+.note {
+    font-size: 11px;
+    line-height: 1.45;
+    color: var(--mss-text-muted);
+}
+
+.error {
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: var(--mss-danger-soft);
+    color: var(--mss-danger);
+    font-size: 11.5px;
+}
+
+.button {
+    min-height: 30px;
+    padding: 5px 12px;
+    border: 1px solid var(--mss-border);
+    border-radius: 7px;
+    background: var(--mss-surface-2);
+    color: var(--mss-text);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.button:hover:not(:disabled) {
+    background: var(--mss-surface-3);
+}
+
+.button:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.buttonPrimary {
+    border-color: var(--mss-accent-strong);
+    background: var(--mss-accent-strong);
+    color: #fff;
+}
+
+.buttonPrimary:hover:not(:disabled) {
+    background: var(--mss-accent);
+    border-color: var(--mss-accent);
+}
+
+.memberList {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-height: 0;
+    overflow-y: auto;
+}
+
+.memberRow {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 6px 4px;
+    border-bottom: 1px solid var(--mss-border);
+}
+
+.memberRow:last-child {
+    border-bottom: none;
+}
+
+.memberInfo {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.memberName {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12.5px;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.memberMeta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--mss-text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.creatorBadge {
+    padding: 0 5px;
+    border-radius: 8px;
+    background: var(--mss-accent-soft);
+    color: var(--mss-accent);
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    line-height: 15px;
+}
+
+.removeButton {
+    flex: 0 0 auto;
+    padding: 4px 8px;
+    border: 1px solid rgba(255, 138, 138, 0.4);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--mss-danger);
+    font: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.removeButton:hover:not(:disabled) {
+    background: var(--mss-danger-soft);
+}
+
+.removeButton:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+.groupColorSwatch {
+    flex: 0 0 auto;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--mss-border-strong);
+}
+
+/* Participants grouped by their in-game group. */
+.memberGroup {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-bottom: 4px;
+}
+
+.memberGroupHeader {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 4px 3px;
+    color: var(--mss-text-muted);
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.memberGroupCount {
+    margin-left: auto;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: var(--mss-surface-3);
+    font-size: 10px;
+    font-weight: 600;
+}
+
+
+.buttonDanger {
+    border-color: var(--mss-danger);
+    background: var(--mss-danger-soft);
+    color: var(--mss-danger);
+}
+
+.buttonDanger:hover:not(:disabled) {
+    background: var(--mss-danger);
+    color: #fff;
+}
+
+.leaveNote {
+    flex: 1 1 auto;
+    color: var(--mss-danger);
+    font-size: 11px;
+    line-height: 1.3;
+    text-align: right;
+}
+

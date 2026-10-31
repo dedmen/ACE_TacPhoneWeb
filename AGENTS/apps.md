@@ -4,7 +4,9 @@ Read this when writing or changing any TacPhone app, or when adding a new app.
 Host internals are in [`host.md`](host.md); the Map app's own details are in
 [`map.md`](map.md). The full user-facing reference is
 [`ACE_TacPhone_Main/README.md`](../ACE_TacPhone_Main/README.md#app-contract) and
-[`SampleApp/README.md`](../SampleApp/README.md).
+[`SampleApp/README.md`](../SampleApp/README.md); the Messenger app is the full
+example of services, notifications and cross-app object renderers
+([`MessagingApp/README.md`](../MessagingApp/README.md)).
 
 ## App module
 

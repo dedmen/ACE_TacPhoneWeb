@@ -66,6 +66,7 @@ export interface TacPhoneHost {
     interApp: InterAppRegistry;
     interests: InterestRegistryApi;
     notifications: NotificationCenterApi;
+    audio: AudioApi;
     utils: TacPhoneUtils;
 }
 
@@ -263,8 +264,13 @@ export interface Networking {
      * Loads the terrain and streams it back to the game as compressed layer
      * chunks. Host-internal producer path used by the built-in main app; only
      * the in-game transport implements it.
+     *
+     * @param debug Enables the per-layer compression-ratio diagnostic. The
+     *   in-game `main` command sets it from the add-on's `__A3_DEBUG__` build
+     *   flag, so a bundled release page can still report it when the game is a
+     *   debug build.
      */
-    ReplyTerrainSVG(uid: string | number, config: object): Promise<void>;
+    ReplyTerrainSVG(uid: string | number, config: object, debug?: boolean): Promise<void>;
     OnMessageFromGame(message: object): void;
 }
 
@@ -317,6 +323,9 @@ export type NotificationTapHandler = (
 /** The tap action of a notification. */
 export type NotificationAction = NotificationTapHandler;
 
+/** Built-in notification sound preset; the host synthesises all of them. */
+export type NotificationSound = 'message' | 'alert' | 'success';
+
 /** Options accepted by NotificationCenterApi.show(). */
 export interface NotificationOptions {
     title: string;
@@ -331,6 +340,8 @@ export interface NotificationOptions {
     data?: unknown;
     /** Runs when the notification is tapped. */
     action?: NotificationAction;
+    /** Built-in sound played once when the notification is shown. */
+    sound?: NotificationSound;
 }
 
 /** Stored notification; what subscribers render. */
@@ -355,6 +366,37 @@ export interface NotificationCenterApi {
     dismiss(id: string): void;
     /** Removes every notification immediately, without the exit animation. */
     clear(): void;
+}
+
+// ---------------------------------------------------------------------------
+// Audio
+// ---------------------------------------------------------------------------
+
+/** One selectable audio output, as reported by the browser. */
+export interface AudioDeviceInfo {
+    /** Browser device id, usable with AudioApi.setSinkId(). */
+    deviceId: string;
+    /** Human-readable label; empty without the microphone permission in some browsers. */
+    label: string;
+    /** MediaDeviceInfo.kind; always "audiooutput" here. */
+    kind: string;
+    /** Device group id, when the browser reports one. */
+    groupId?: string;
+}
+
+/** Built-in sound synthesis and output-device selection (`window.TacPhone.audio`). */
+export interface AudioApi {
+    /** Plays one built-in preset. Silent before the first user gesture or without Web Audio. */
+    play(sound: NotificationSound): void;
+    /** Every audio output the browser exposes; an empty array when unsupported. */
+    enumerateDevices(): Promise<AudioDeviceInfo[]>;
+    /**
+     * Routes the page's audio to one output device.
+     * Rejects with a clear error when the browser lacks AudioContext.setSinkId().
+     */
+    setSinkId(deviceId: string): Promise<void>;
+    /** The explicitly selected output device id, or undefined for the browser default. */
+    getOutputDeviceId(): string | undefined;
 }
 
 // ---------------------------------------------------------------------------
