@@ -1,3 +1,5 @@
+import { POLYLINE_MEASUREMENTS_TAG } from './PolylineMeasurements';
+
 /**
  * Everything the Web UI knows about a marker that should be created.
  *
@@ -9,10 +11,15 @@ export interface MarkerCreationData {
     name?: string;
     /**
      * User-visible marker name/label. Icon markers use it as their text;
-     * polyline markers have no text and omit it.
+     * polyline markers ignore it.
      */
     label?: string;
-    /** Marker text. Takes precedence over `label` when set. */
+    /**
+     * Marker text. Takes precedence over `label` when set.
+     *
+     * Polyline marker text is data-only: Arma does not display it, so the Map
+     * app uses it for the measurement tag.
+     */
     text?: string;
     /** CfgMarkers class name. Omitted by polyline markers, which have no icon type. */
     type?: string;
@@ -30,7 +37,7 @@ export interface MarkerCreationData {
     brush?: string;
     /** Marker size, either a uniform scale or [width, height]. */
     size?: number | [number, number];
-    /** Marker channel. Not yet configurable in the UI; defaults to 0 (global). */
+    /** Marker channel. Defaults to 0 (Global) when omitted. */
     channel?: number;
     /** Polyline points as a flat list: [x1, y1, x2, y2, ...]. */
     polyline?: number[];
@@ -49,7 +56,7 @@ export function createMarker(marker: MarkerCreationData): Promise<{ name: string
         c: 'CreateMarker',
         marker: {
             ...marker,
-            channel: marker.channel ?? 0, // TODO: make configurable in the Web UI
+            channel: marker.channel ?? 0,
         },
     }).then((result) => {
         const name = (result as { name?: unknown }).name;
@@ -77,21 +84,21 @@ function isPoint(value: unknown): value is [number, number] {
  * Creates a polyline marker from a list of map positions.
  *
  * The game already supports POLYLINE markers (`fnc_createMarker.sqf` takes the
- * `shape` and the flat `polyline` array as-is), but only the color and the
- * geometry are configurable from the UI today; picking a channel is a TODO
- * like it is for icon markers.
+ * `shape` and the flat `polyline` array as-is). The request is sent through
+ * `createMarker`, so the app name, command and response handling stay in one
+ * place. Only the fields a polyline actually has are sent: `label`, `type`,
+ * `brush`, `size`, `dir` and `alpha` are left out so the game applies its own
+ * defaults. A position is still required, so the first vertex is used.
  *
- * The request is sent through `createMarker`, so the channel default, the app
- * name, the command and the response handling stay in one place. Only the
- * fields a polyline actually has are sent: `label`, `text`, `type`, `brush`,
- * `size`, `dir` and `alpha` are left out so the game applies its own defaults.
- * A position is still required to create the marker, so the first vertex is
- * used.
+ * When `measurements` is true, the marker text carries the data-only
+ * measurement tag. Arma does not display polyline text; the Map app uses it to
+ * rebuild the measurement overlay for every client.
  */
 export function createPolylineMarker(
     points: Array<[number, number]>,
     color: string,
     channel?: number,
+    measurements = false,
 ): Promise<{ name: string }> {
     if (points.length < 2 || !points.every(isPoint)) {
         throw new Error('A polyline marker needs at least two valid points');
@@ -106,14 +113,13 @@ export function createPolylineMarker(
         polyline.push(point[0], point[1]);
     }
 
-    // Only the fields a polyline actually has: no icon type, label, text,
-    // brush, size, direction, or alpha. The game applies its own defaults.
     const marker: MarkerCreationData = {
         shape: 'POLYLINE',
         polyline,
         color,
         position: points[0],
         ...(channel === undefined ? {} : { channel }),
+        ...(measurements ? { text: POLYLINE_MEASUREMENTS_TAG } : {}),
     };
 
     return createMarker(marker);

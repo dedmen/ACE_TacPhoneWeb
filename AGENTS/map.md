@@ -10,10 +10,17 @@ The full reference is [`ACE_TacPhone_Map/README.md`](../ACE_TacPhone_Map/README.
 | --- | --- |
 | Entry and panels | `src/main.tsx` (`ACE_TacPhone_Map`, `ACE_TacPhone_Map_Placeholder`) |
 | Map view/OpenLayers, panel lifecycle, `map` service | `src/Map.tsx` |
+| Marker map module (layers, interactions, polyline drawing) | `src/MapMarkers/MarkerModule.ts` |
+| Marker UI (dialog, context menu, polyline controls) | `src/MapMarkers/MarkerOverlay.tsx` |
+| Marker channel store shared with the layer switcher | `src/MapMarkers/MarkerChannelStore.ts` |
+| Generic layer-switcher section registry | `src/MapMarkers/LayerSwitcherRegistry.ts` |
+| Marker layer-switcher section | `src/MapMarkers/MarkerLayerSwitcherSection.tsx` |
 | Marker requests | `src/MapMarkers/MarkerApi.ts` |
-| Marker rendering, state, queue, icons | `src/MapMarkers/MarkerLayer.tsx` |
+| Marker rendering, state, queue, icons, channel layers | `src/MapMarkers/MarkerLayer.tsx` |
+| Marker channels and direction helpers | `src/MapMarkers/Channels.ts` |
 | Create/edit dialog and context menu | `src/MapMarkers/MarkerCreateDialog.tsx`, `src/MapMarkers/MarkerContextMenu.tsx` |
-| Polyline drawing and measurement | `src/MapMarkers/PolylineDrawing.ts`, `src/MapMarkers/PolylineDrawControls.tsx` |
+| Polyline drawing and measurement styles | `src/MapMarkers/PolylineDrawing.ts`, `src/MapMarkers/PolylineMeasurements.ts`, `src/MapMarkers/PolylineDrawControls.tsx` |
+| Persisted polyline measurement overlay | `src/MapMarkers/PolylineMeasurementLayer.ts` |
 | Terrain heights | `src/MapMarkers/TerrainHeightApi.ts` |
 | Marker notifications | `src/MapMarkers/MarkerNotifications.ts` |
 | Layer switcher | `src/LayerSwitcher.tsx` |
@@ -33,6 +40,20 @@ resolves to a `TerrainData` (`{ width, height, layers: [{ name, svg }] }`).
 and turns each layer's `svg` into a Blob URL/`Image`; the Map never parses or
 splits the raw terrain SVG itself (the host producer does that before sending).
 
+`MarkerOverlay` is mounted by `Map.tsx` and creates the `MarkerModule`; the
+module owns the marker layers, polyline drawing preview, measurement overlay and
+all marker / polyline map pointer and keyboard interactions. The overlay owns
+the React marker UI (create/edit dialog, context menu, polyline controls) and
+publishes the active channel through `MarkerChannelStore`. `Map.tsx` keeps no
+marker state.
+
+`LayerSwitcher` is generic. Map add-ons inject sections through
+`LayerSwitcherRegistry`; a section can claim map layers and render its own rows.
+The marker overlay registers `MarkerLayerSwitcherSection`, which renders the
+channel checkboxes/radio and hides itself when no marker module is attached. A
+Map panel can omit the overlay to host a plain map with no marker layers,
+interactions, UI, or layer-switcher channel section.
+
 ## Requests and game pushes
 
 Web → game (all through `window.TacPhone.networking.Request`, `a:
@@ -41,17 +62,22 @@ Web → game (all through `window.TacPhone.networking.Request`, `a:
 | `c` | Purpose |
 | --- | --- |
 | `GetAllMarkers` | Initial snapshot; also seeds known names for notifications. |
-| `GetPlayerID` | Local player id, used to suppress own-marker notifications. |
 | `GetMarkerTypes` | Marker types, colors, brushes, icons. |
+| `GetMarkerChannels` | Standard plus in-use custom channels, labels and marker-placement flags. |
 | `getTerrainHeight` | Heights ASL for a batch of 2D positions, same order. |
 | `CreateMarker` | Create a marker, or update one when `marker.name` exists. |
 | `DeleteMarker` | Delete a marker by name. |
+
+The local player id and multiplayer flag come from the host's one-time
+`window.TacPhone.gameInfo` snapshot, not from a Map request. The Map awaits
+`gameInfo.whenReady()` before applying the marker snapshot.
 
 Game → web: `Marker.Upsert` (new or changed marker) and `Marker.Delete`. Both are
 routed through `mapCommandRegistry` in `src/CommandRegistry.ts`.
 
 `getTerrainHeights(positions)` in `TerrainHeightApi.ts` validates input/reply,
-batches, and caches coordinates. Only click-per-point drawing requests heights;
+batches, and shares a whole-meter coordinate cache with the persisted
+measurement overlay. Only click-per-point drawing requests heights immediately;
 freehand strokes request none.
 
 ## Marker interaction
@@ -64,8 +90,9 @@ The map is always north-up: the view sets `enableRotation: false` and the
 `DragRotate`/`PinchRotate` interactions are removed at map creation, so
 two-finger touch cannot rotate it.
 
-- Desktop: hover + `Delete` deletes; double-click edits label/type/color;
-  hold left mouse 100 ms then drag to move.
+- Desktop: hover + `Delete` deletes; double-click edits
+  label/type/color/channel/direction/scale; hold left mouse 100 ms then drag to
+  move.
 - Touch/pen: hold 100 ms to lift and drag; holding until the 600 ms long-press
   timeout (or releasing without dragging) opens edit/delete actions.
 - A long-press/double-click on an existing marker never opens the create dialog.
@@ -73,8 +100,47 @@ two-finger touch cannot rotate it.
   100 ms plus a final update on release. During a drag the local pointer wins;
   other incoming property changes still apply. Edits send only changed
   `label`/`type`/`color`.
-- New markers send `CreateMarker` with `shape`, `position`, `color`, and marker
-  properties. The game generates the `_USER_DEFINED` name.
+- New markers send `CreateMarker` with `shape`, `position`, `color`, `channel`,
+  and marker properties. The game generates the `_USER_DEFINED` name.
+- The create/edit dialog shows direction and scale sliders (`-180..180`, `0..360`
+  when sent; `0.5..2`). Edits send the changed `label`/`type`/`color`/`dir`/`size`.
+
+## Marker creation dialog
+
+- A small semi-transparent panel is positioned beside the marker (left/right,
+  with an above/below fallback) so the icon and its label stay visible.
+- It shows a live preview on its own layer at the target position; label, type,
+  color, direction and scale update it immediately. Preview is create-only.
+- In multiplayer the channel dropdown defaults to the active channel and changing
+  it makes that channel active. It is available in both create and edit mode;
+  singleplayer has no channel control.
+- Direction (`-180..180`, default `0`) and scale (`0.5..2`, default `1`) sliders
+  are sent as `dir` and `size: [scale, scale]`.
+- Create mode remembers the last selected type/color in module scope (per page
+  session). Edit mode uses the marker's values and does not overwrite them.
+
+## Marker channels
+
+- In multiplayer the marker layer is split into one OpenLayers layer per
+  channel. Channels 0, 1, 3 and 5 (Global, Side, Group, Direct) always get a
+  layer; 2, 4 and custom channels appear only while they contain markers.
+- Custom channel IDs/names come from `GetMarkerChannels`: IDs `6..15` and
+  `26..65`, only when `radioChannelInfo` reports them as in use.
+- The layer switcher itself is generic. The marker overlay registers a section
+  through `LayerSwitcherRegistry`; that section renders the channel checkboxes,
+  active-channel radio and active label. With no marker module attached, no
+  section exists and the switcher has no channel UI.
+- One channel is active. Markers on other channels use
+  `INACTIVE_CHANNEL_ALPHA` (0.45); measurement labels dim with them.
+- New markers, the create-dialog default and polyline drawing use the active
+  channel. Changing the channel in the create dialog makes it active. The edit
+  dialog can move a marker to another channel: the Web UI creates a new marker
+  on the target channel and deletes the old one. The new marker gets a fresh
+  local-player `_USER_DEFINED` name (never another player's id).
+- In singleplayer only channel 3 (Group) exists, all markers are bucketed into
+  it, and there is no channel selector or radio. The Web UI resolves the
+  outgoing channel to 3 before sending; SQF does not re-check `isMultiplayer` or
+  the channel type.
 
 ## Polyline drawing
 
@@ -94,18 +160,26 @@ for mouse, touch, and pen.
   `preventDefault()` while freehand is armed as a fallback for ancestors that
   re-enable panning. The app root also clips with `overflow: hidden` so canvas
   rounding cannot make the tab scroll container scrollable.
-- Measurement overlay is preview-only and click-per-point only: per-segment
-  distances, total, per-vertex terrain-height labels, segment `Δh`, interior
-  angles (degree text plus fixed 24 px arcs), and a first-segment bearing
-  (`° / mil`). Nothing is sent to the game.
+- The measurement overlay is click-per-point only: per-segment distances, total,
+  per-vertex terrain-height labels, segment `Δh`, interior angles (degree text
+  plus fixed 24 px arcs), and a first-segment bearing (`° / mil`).
 - `Done` (at least two vertices) sends `CreateMarker` with
   `{ shape: 'POLYLINE', position: [x1, y1], polyline: [x1, y1, x2, y2, ...],
-  color }`. The game generates the name; `Done` leaves the mode active with an
-  empty canvas so several lines can be drawn.
-- The preview layer sits above markers and is not in the layer switcher.
+  color, channel }`. The game generates the name; `Done` leaves the mode active
+  with an empty canvas so several lines can be drawn.
+- In click-per-point mode the marker text is set to
+  `POLYLINE_MEASUREMENTS_TAG` (`ace_tacphone:polyline-measurements:1`). Polyline
+  text is data-only: Arma does not display it, and the Map never renders it.
+- Every client, including the creator, rebuilds the measurement overlay for a
+  tagged polyline from its geometry and terrain heights. Heights are fetched
+  lazily once the polyline is visible.
+- `PolylineMeasurementLayer` only draws when the polyline's screen-space
+  bounding box is large enough (`60_000 px²` area or a `320 px` span fallback).
+  Height requests are skipped while zoomed out.
+- The preview layer sits above markers and is not in the layer switcher; the
+  persisted measurement overlay is also untitled and excluded from hit-testing.
 - Polyline markers are display-only in the web UI: the context menu, `Delete`,
-  and drag/edit paths handle point markers only. Color is the only configurable
-  property; channel stays at the request default `0`.
+  and drag/edit paths handle point markers only.
 
 ## Notifications
 
@@ -185,7 +259,7 @@ The interest is `ACE_TacPhone_Map.markers` (`MAP_MARKERS_INTEREST` in
 
 | File | Role |
 | --- | --- |
-| `fnc_processBrowserRequest.sqf` | Handles the `GetAllMarkers`, `GetPlayerID`, `getTerrainHeight`, `CreateMarker`, `DeleteMarker`, and `GetMarkerTypes` requests. |
+| `fnc_processBrowserRequest.sqf` | Handles the `GetAllMarkers`, `GetMarkerChannels`, `getTerrainHeight`, `CreateMarker`, `DeleteMarker`, and `GetMarkerTypes` requests. |
 | `fnc_createMarker.sqf` | Creates or updates a marker from request data. |
 | `fnc_assembleMarkerInfo.sqf` | Builds the marker array sent as `Marker.Upsert` / snapshot entries. |
 | `fnc_onMarkerCreated.sqf`, `fnc_onMarkerPosChanged.sqf`, `fnc_onMarkerDeleted.sqf` | Mission/CBA marker event handlers; push to interested clients. |

@@ -62,3 +62,67 @@ export function getTerrainHeights(
         return heights as number[];
     });
 }
+
+/**
+ * Terrain heights for the current page session, keyed by whole-meter map
+ * coordinate. Terrain does not change while the page is open, so a point only
+ * has to be requested once, even across drawing previews and marker overlays.
+ */
+const terrainHeightCache = new Map<string, number>();
+
+function terrainHeightKey(x: number, y: number): string {
+    return `${Math.round(x)},${Math.round(y)}`;
+}
+
+export function getCachedTerrainHeight(x: number, y: number): number | undefined {
+    return terrainHeightCache.get(terrainHeightKey(x, y));
+}
+
+export function setCachedTerrainHeight(x: number, y: number, height: number): void {
+    if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(height)) {
+        terrainHeightCache.set(terrainHeightKey(x, y), height);
+    }
+}
+
+/**
+ * Resolves heights using the shared cache and one batched request for the
+ * missing positions. Returns one height per input position (or null when the
+ * input is invalid). Rejects only when the batched game request fails.
+ */
+export async function resolveTerrainHeights(
+    positions: ReadonlyArray<readonly [number, number]>,
+): Promise<Array<number | null>> {
+    const results: Array<number | null> = positions.map(() => null);
+    const missingPositions: Array<[number, number]> = [];
+    const missingIndices: number[] = [];
+
+    for (let index = 0; index < positions.length; index++) {
+        const position = positions[index];
+        if (!isPoint(position)) {
+            continue;
+        }
+
+        const cached = getCachedTerrainHeight(position[0], position[1]);
+        if (cached !== undefined) {
+            results[index] = cached;
+        } else {
+            missingPositions.push([position[0], position[1]]);
+            missingIndices.push(index);
+        }
+    }
+
+    if (missingPositions.length === 0) {
+        return results;
+    }
+
+    const heights = await getTerrainHeights(missingPositions);
+    for (let index = 0; index < heights.length; index++) {
+        const height = heights[index];
+        const position = missingPositions[index];
+        const targetIndex = missingIndices[index];
+        results[targetIndex] = height;
+        setCachedTerrainHeight(position[0], position[1], height);
+    }
+
+    return results;
+}

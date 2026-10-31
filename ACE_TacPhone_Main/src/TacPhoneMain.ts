@@ -12,6 +12,7 @@ export * from "@ace-tacphone/api";
 
 // Host services. Apps reach them through window.TacPhone.
 export { GetTacPhoneHost } from "./Backend/Host";
+export { GameInfoStore, gameInfo } from "./Backend/GameInfo";
 export { AppDirectory, appDirectory } from "./Backend/AppDirectory";
 export { InterAppRegistry, interApp } from "./Backend/InterApp";
 export { InterestRegistry, interestRegistry } from "./Backend/InterestRegistry";

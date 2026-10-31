@@ -19,6 +19,8 @@ export type {
     CommandHandler,
     CommandRegistry,
     CommandRegistryConstructor,
+    GameInfo,
+    GameInfoApi,
     InterestRegistryApi,
     Networking,
     NotificationAction,

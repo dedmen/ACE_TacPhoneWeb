@@ -11,6 +11,8 @@ export interface PolylineDrawControlsProps {
     colors: MarkerColor[];
     /** CfgMarkerColors class name of the selected color. */
     selectedColor: string;
+    /** Label of the active marker channel, or empty when unknown. */
+    channelLabel?: string;
     /** True when a tap places one vertex instead of drawing freehand. */
     clickPerPoint: boolean;
     onToggle: () => void;
@@ -26,6 +28,7 @@ export function PolylineDrawControls({
     vertexCount,
     colors,
     selectedColor,
+    channelLabel = '',
     clickPerPoint,
     onToggle,
     onSelectColor,
@@ -68,6 +71,9 @@ export function PolylineDrawControls({
                     </label>
 
                     <div className={PolylineStyle.panel_muted}>Right-drag to pan</div>
+                    {channelLabel !== '' && (
+                        <div className={PolylineStyle.panel_muted}>Channel: {channelLabel}</div>
+                    )}
 
                     {colors.length === 0 ? (
                         <div className={PolylineStyle.panel_muted}>Loading colors…</div>

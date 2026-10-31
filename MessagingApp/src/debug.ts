@@ -1,13 +1,10 @@
 /**
  * Debug-only helpers for the Messenger app.
  *
- * Every helper is compiled in only for `debug` builds: `DEBUG_FAKE_PLAYERS_ENABLED`
- * is `import.meta.env.MODE === 'debug'`, which becomes the literal `false` in a
- * release build, so bundlers drop the branch and the fake-player tooling.
- *
- * The game side of each command lives under `#ifdef __A3_DEBUG__` in the messaging
- * add-on (`Messaging.Debug.*`). Release game builds do not compile it, and the
- * request then fails harmlessly because every helper swallows errors.
+ * Debug mode is the game add-on's `__A3_DEBUG__` build (`-debug`) combined with
+ * the server/mission `allowDebug` CBA setting. The host exposes that as
+ * `window.TacPhone.gameInfo.isDebug()`. The game side of each command lives
+ * under `#ifdef __A3_DEBUG__` and re-checks `allowDebug` before dispatching.
  *
  * There is no UI here: Task 5 calls these helpers from the debug-only toolbar.
  */
@@ -16,12 +13,14 @@ import type { ChatPresence } from './api';
 import { MESSAGING_APP_NAME } from './api';
 import { chatStore } from './state/ChatStore';
 
-/** True only in `npm run build:debug` / `vite --mode debug` builds. */
-export const DEBUG_FAKE_PLAYERS_ENABLED = import.meta.env.MODE === 'debug';
+/** True only when the game is a __A3_DEBUG__ build and the server allows debug. */
+export function isDebugEnabled(): boolean {
+    return window.TacPhone?.gameInfo?.isDebug() === true;
+}
 
 // Debug builds only: lets the stored test checklist inspect panel/notification
 // state without adding a public host API.
-if (DEBUG_FAKE_PLAYERS_ENABLED) {
+if (isDebugEnabled()) {
     (window as typeof window & { __messengerStore?: typeof chatStore }).__messengerStore = chatStore;
 }
 
@@ -65,7 +64,7 @@ export async function debugRequest<T = unknown>(
     command: DebugCommand,
     payload: Record<string, unknown> = {},
 ): Promise<T | undefined> {
-    if (!DEBUG_FAKE_PLAYERS_ENABLED) return undefined;
+    if (!isDebugEnabled()) return undefined;
 
     try {
         return await window.TacPhone.networking.Request({
@@ -130,7 +129,9 @@ export function debugGetStatus(): Promise<MessagingDebugStatus | undefined> {
  * individual imports. Unused in release builds.
  */
 export const messagingDebug = {
-    enabled: DEBUG_FAKE_PLAYERS_ENABLED,
+    get enabled(): boolean {
+        return isDebugEnabled();
+    },
     commands: DEBUG_COMMANDS,
     presenceValues: DEBUG_PRESENCE_VALUES,
     displayModes: DEBUG_DISPLAY_MODES,

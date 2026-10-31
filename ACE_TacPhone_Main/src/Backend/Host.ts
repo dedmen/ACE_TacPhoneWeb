@@ -20,6 +20,7 @@ import { panelDirectory } from "./PanelDirectory";
 import { interApp } from "./InterApp";
 import { interestRegistry } from "./InterestRegistry";
 import { notificationCenter } from "./Notifications";
+import { gameInfo } from "./GameInfo";
 import { audio } from "./Audio";
 import { CommandRegistry } from "./MessageRouter";
 import { PanelContext, usePanel } from "../Panels/PanelContext";
@@ -47,6 +48,7 @@ function createHost(): TacPhoneHost {
         interests: interestRegistry,
         notifications: notificationCenter,
         audio,
+        gameInfo,
         utils: {
             CommandRegistry,
             PanelContext,

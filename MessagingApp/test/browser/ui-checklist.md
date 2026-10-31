@@ -11,13 +11,15 @@ check does not hide the next.
 
 ## 0. Prerequisites
 
-- [ ] Arma is running an `__A3_DEBUG__` build with the TacPhone messaging add-on.
+- [ ] Arma is running an `__A3_DEBUG__` build with the TacPhone messaging add-on
+      and the `TacPhone > Allow debug mode` CBA setting enabled.
 - [ ] The TacPhone web host is reachable at `https://localhost:8001/` and the
       certificate is trusted.
 - [ ] Two Messenger panels can be opened (or one external browser page plus the
       in-game page).
-- [ ] The debug toolbar is visible in the debug bundle (fake players, inject
-      message, enemy chat, presence, reset).
+- [ ] The debug toolbar is visible when the game is an `__A3_DEBUG__` build and
+      `Allow debug mode` is enabled (fake players, inject message, enemy chat,
+      presence, reset).
 - [ ] The browser console shows no uncaught errors on boot or StrictMode
       double-mount.
 

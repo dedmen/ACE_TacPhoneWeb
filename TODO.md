@@ -174,10 +174,12 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
   map instance; load once and share.
 - [ ] **[cleanup]** Icon offset and shadow displacement are hardcoded and wrong
   for scaled markers (`MarkerLayer.tsx:262, 285`).
-- [ ] **[cleanup]** `MarkerLayer.tsx:481` TODO: only a subset of marker properties
-  is applied; the rest are ignored.
-- [ ] **[cleanup]** `MarkerApi.ts:49` TODO: marker `channel` is not configurable
-  in the UI.
+- [x] **[cleanup]** `MarkerLayer.tsx` applies every incoming marker property.
+  `shape`/`brush` are stored on the feature; their rectangle/ellipse pattern
+  texture rendering remains a separate feature task.
+- [ ] **[feature]** Render `RECTANGLE`/`ELLIPSE` markers, including
+  `CfgMarkerBrushes` pattern textures. `MarkerLayer.tsx` already stores `shape`
+  and `brush` from `Marker.Upsert`.
 
 ### Lifecycle and feedback
 
@@ -226,14 +228,17 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
 
 ### Polyline drawing (remaining)
 
-- [ ] **[decision]** Chat channel selector for polyline markers. Only the
-  `CfgMarkerColors` line color is exposed; the channel is always sent as the
-  request default `0`. Other marker properties (label, brush, size, alpha) are
-  also absent from the polyline UI.
 - [ ] **[decision]** Polyline markers cannot be edited or deleted from the map:
   the context menu, `Delete` key, and drag/edit paths only handle point markers,
   so a polyline created in the UI is display-only from the Web UI (it can still
   be changed or deleted in-game).
+- [ ] **[cleanup]** Persisted measurement labels can overlap when several measured
+  polylines are visible at once; there is no label decluttering yet.
+- [ ] **[cleanup]** Measurement zoom thresholds are hardcoded
+  (`PolylineMeasurementLayer.ts`); evaluate exposing them.
+- [ ] **[cleanup]** Custom channel definitions and labels are refreshed only when
+  a Map panel mounts; `radioChannelCreate`/`radioChannelSetLabel` later in the
+  mission are not picked up until remount.
 - [ ] **[cleanup]** No live rubber-band preview in click-per-point mode from the
   last vertex to the pointer or finger while placing vertices. Freehand mode
   draws the line under the pointer while dragging, so this applies to the

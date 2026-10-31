@@ -311,6 +311,7 @@ window.TacPhone: TacPhoneHost
 | `interApp` | Register an app's service and resolve or call another app's. See [Inter-app API](#inter-app-api). |
 | `interests` | Acquire and release named data interests so the game only sends what the page needs. See [Data interests](#data-interests). |
 | `notifications` | Toast banners. See [Notifications](#notifications). |
+| `gameInfo` | One-time mission snapshot: `whenReady()`, `get()`, `isDebug()` with `multiplayer`, `playerId`, `missionName`, `terrainName`, `gameVersion` and `debug`. |
 | `audio` | Synthesised notification sounds and output-device selection. See [Audio](#audio). |
 | `utils.CommandRegistry` | Message router helper shown above. |
 | `utils.PanelContext` | React context with the live `PanelInstance` of the panel an app is rendered in. |
@@ -324,12 +325,17 @@ SVG, compresses each layer and streams it back as `ReplyRequestTerrainSVG`
 chunks; the split/chunk helpers are private to `src/Backend/Networking.ts`. The
 built-in `main` app only calls `networking.ReplyTerrainSVG(uid, config)`.
 `ReplyTerrainSVG()` is host-internal and is not implemented by the browser
-transport. A game add-on built with `__A3_DEBUG__` sets `debug` on the terrain
-request; `ReplyTerrainSVG` then logs each layer's raw SVG size, gzip size, base64
-size, chunk count and compression ratio. The bundled in-game page is normally a
-release web build, so it uses `console.warn` there (release builds strip
-`console.log`); release game builds skip the diagnostic. The app contract version
-is `2`.
+transport. When `window.TacPhone.gameInfo.isDebug()` is true (an `__A3_DEBUG__`
+game build **and** the server/mission `allowDebug` CBA setting), it logs each
+layer's raw SVG size, gzip size, base64 size, chunk count and compression ratio.
+The bundled in-game page is normally a release web build, so it uses
+`console.warn` (release builds strip `console.log`); otherwise the diagnostic is
+skipped. The app contract version is `2`.
+
+```ts
+const { multiplayer, missionName, terrainName, gameVersion, debug } =
+    await window.TacPhone.gameInfo.whenReady();
+```
 
 `window.TacPhone` is the only app-facing global.
 

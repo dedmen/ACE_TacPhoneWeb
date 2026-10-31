@@ -132,13 +132,16 @@ from the local page:
 Add new streaming commands this way instead of returning a promise: a promise can
 resolve only once and would have to buffer every chunk.
 
-Built-in `main` commands include `GetAvailableApps`, `GetFile`, `GetPlayerPos`,
-`GetTime`, `Interest.Set`, `Interest.Clear`, `GetLayout`, `SaveLayout`, and the
-terrain/texture proxies. `RequestTexture` checks `fileExists` first and
-returns `{ok: false}` instead of forwarding when the texture is missing, since
-the engine would otherwise open an error popup. `GetFile` remaps `/` or `""` to
-`data\index.html`, normalises `/` to `\`, and returns `""` when the file does
-not exist.
+Built-in `main` commands include `GetAvailableApps`, `GetGameInfo`, `GetFile`,
+`GetPlayerPos`, `GetTime`, `Interest.Set`, `Interest.Clear`, `GetLayout`,
+`SaveLayout`, and the terrain/texture proxies. `GetGameInfo` is the one-time
+mission snapshot for the host (`multiplayer`, `playerId`, `missionName`,
+`terrainName` via `worldName`, `gameVersion`, and a debug flag that requires both
+`__A3_DEBUG__` and the `allowDebug` CBA setting). `RequestTexture` checks
+`fileExists` first and returns `{ok: false}` instead of forwarding when the
+texture is missing, since the engine would otherwise open an error popup.
+`GetFile` remaps `/` or `""` to `data\index.html`, normalises `/` to `\`, and
+returns `""` when the file does not exist.
 
 ## Extension calls
 

@@ -21,6 +21,7 @@ reference is [`ACE_TacPhone_Main/README.md`](../ACE_TacPhone_Main/README.md).
 | Game → app message routing | `src/Backend/AppMessaging.ts`, `src/Backend/MessageRouter.ts` |
 | Inter-app registry and routing | `src/Backend/InterApp.ts`, `src/Panels/TargetChooserDialog.tsx` |
 | Data interests | `src/Backend/InterestRegistry.ts` |
+| Global game info (multiplayer, player id, mission/terrain, version, debug) | `src/Backend/GameInfo.ts` |
 | Notifications | `src/Backend/Notifications.ts`, `src/Panels/NotificationHost.tsx` |
 | Audio (synthesised sounds, output device) | `src/Backend/Audio.ts` |
 | Built-in `main` app | `src/MainApps/main.tsx` |
@@ -36,12 +37,18 @@ reference is [`ACE_TacPhone_Main/README.md`](../ACE_TacPhone_Main/README.md).
 2. Importing `src/Backend/Host.ts` builds `window.TacPhone` from the service
    singletons (lazy and idempotent; also installed on a microtask).
 3. `App.tsx` creates the flexlayout model, attaches it to `panelDirectory`,
-   loads apps through `window.TacPhone.apps.LoadAvailableApps()`, and renders the
-   app chooser panels.
+   loads the one-time `window.TacPhone.gameInfo` snapshot in parallel with the
+   layout, then loads apps through `window.TacPhone.apps.LoadAvailableApps()`,
+   and renders the app chooser panels. Game info is available before any app
+   `init()` runs.
 4. The app loader asks the game `{a:"main", c:"GetAvailableApps"}`, which returns
    `{ file, devfile, icon }` per app. Each module is loaded from the packaged
    file, or from `/devapps/<Name>/<devfile>` in development, checked against
    `TACPHONE_API_VERSION`, and asked for `GetTacPhoneApps()`.
+5. `GetGameInfo` is called once through `main` and caches multiplayer, player id,
+   mission name, `worldName`, game version and the debug flag. Debug is true only
+   for an `__A3_DEBUG__` build with the server/mission `allowDebug` CBA setting
+   enabled.
 
 ## Layout and panels
 
@@ -111,11 +118,12 @@ compress each layer and stream `ReplyRequestTerrainSVG` chunks back (with
 (`width`, `height`, `layers: [{ name, svg }]`); a legacy whole-SVG reply is still
 accepted by decompressing and splitting it locally. `ReplyTerrainSVG` is not
 implemented by the browser transport. A game add-on built with `__A3_DEBUG__`
-sets `debug` on the `RequestTerrainSVG` command; `ReplyTerrainSVG` then logs each
-layer's raw SVG size, gzip size, base64 size, chunk count and compression ratio.
-The bundled in-game page is normally a release web build, so the diagnostic uses
-`console.warn` there (release builds strip `console.log`); release game builds
-send `debug: false` and skip it. The app contract version is `2`.
+and the server/mission `allowDebug` CBA setting makes `gameInfo.isDebug()` true;
+`ReplyTerrainSVG` then logs each layer's raw SVG size, gzip size, base64 size,
+chunk count and compression ratio. The bundled in-game page is normally a release
+web build, so the diagnostic uses `console.warn` (release builds strip
+`console.log`). Release game builds or `allowDebug = false` skip it. The app
+contract version is `2`.
 
 The engine moves `ExecJS` sources through base64 and decodes them with `atob`,
 so non-ASCII text in in-game replies and pushes arrives as a UTF-8 byte string

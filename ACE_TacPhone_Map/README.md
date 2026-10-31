@@ -115,6 +115,12 @@ The current panels are:
 
 - `ACE_TacPhone_Map` — the OpenLayers map (`src/Map.tsx`).
 - `ACE_TacPhone_Map_Placeholder` — a small placeholder panel.
+- Marker layers, polyline drawing and map pointer/keyboard interactions live in
+  `src/MapMarkers/MarkerModule.ts`; the marker dialog, context menu, polyline
+  controls, channel store and layer-switcher section live in
+  `src/MapMarkers/MarkerOverlay.tsx`, `MarkerChannelStore.ts` and
+  `MarkerLayerSwitcherSection.tsx`. A map can be created without markers by not
+  mounting the overlay; the layer switcher then has no channel UI.
 
 A panel has a globally unique `id`, an `appComponent` typed as
 `React.ComponentType<AppProps>`, `GetDefaultTitle()`, and `GetTacPhoneIcon()`.
@@ -135,9 +141,11 @@ await window.TacPhone.networking.Request({
 
 The map's SQF processor handles `GetAllMarkers`, `CreateMarker` (creates a new
 marker, or updates an existing one when `marker.name` is supplied),
-`DeleteMarker`, `GetMarkerTypes`, and `getTerrainHeight`. Messages from the game
-are routed through `mapCommandRegistry` (`src/CommandRegistry.ts`), which is an
-instance of the host's `window.TacPhone.utils.CommandRegistry`.
+`DeleteMarker`, `GetMarkerTypes`, `GetMarkerChannels`, and `getTerrainHeight`.
+The local player id and multiplayer flag come from the host's one-time
+`window.TacPhone.gameInfo` snapshot, not from a Map request. Messages from the
+game are routed through `mapCommandRegistry` (`src/CommandRegistry.ts`), which is
+an instance of the host's `window.TacPhone.utils.CommandRegistry`.
 
 `getTerrainHeight` takes a list of 2D world/map positions and returns one height
 above sea level in meters per position, in the same order:
@@ -174,14 +182,28 @@ nulls the layer in its cached layer state, which the map's last frame state stil
 references until the next render, so `forEachFeatureAtPixel()` would throw on a
 pointer event in between.
 
+### Marker creation dialog
+
+The create dialog is a small, semi-transparent side panel rather than a centered
+modal. It is placed beside the marker (left/right, with an above/below fallback)
+so the full icon and label stay visible. A live preview on its own layer follows
+label, type, color, direction and scale changes; direction uses a `-180..180`
+slider (default `0`) and scale uses `0.5..2` (default `1`). In multiplayer the
+channel dropdown defaults to the active channel and changing it makes that
+channel active. It is available in both create and edit mode; singleplayer has
+no channel control. Create mode remembers the last selected type/color for the
+page session; edit mode prefills the marker's values and applies the sliders on
+Save.
+
 ### Marker interaction
 
 Only markers whose name starts with `_USER_DEFINED` (player-created markers) can
 be moved or deleted; all other markers are read-only.
 
 - **Desktop**: hover a marker and press `Delete` to delete it. Double-click a
-  marker to edit its label, type, and color. Press and hold the left mouse
-  button on a marker (100 ms without moving), then drag to move it.
+  marker to edit its label, type, color, channel, direction and scale. Press and
+  hold the left mouse button on a marker (100 ms without moving), then drag to
+  move it.
 - **Touch/pen**: press and hold a marker for 100 ms to lift it (drop-shadow
   highlight), then drag to move it; releasing drops it at the pointer. Holding
   still until the 600 ms long-press timeout, or releasing without dragging,
@@ -194,8 +216,30 @@ be moved or deleted; all other markers are read-only.
   color, label, ...) still apply. Movement is sent to the game as a position-only
   `CreateMarker` request (`{ name, position }`), throttled to one request per
   100 ms plus a final update on release. Editing sends only the changed
-  `label`/`type`/`color` fields through the same `CreateMarker` update path.
-  Deleting sends `DeleteMarker` with the marker name.
+  `label`/`type`/`color`/`dir`/`size` fields through the same `CreateMarker`
+  update path. Deleting sends `DeleteMarker` with the marker name.
+
+### Marker channels
+
+In multiplayer the marker layer is split into one OpenLayers layer per channel:
+
+- Global, Side, Group and Direct (0, 1, 3, 5) always have a layer.
+- Command, Vehicle and custom channels get a layer only while they contain
+  markers. Custom channels come from `GetMarkerChannels` (`6..15`, `26..65`,
+  only when `radioChannelInfo` reports them in use) and use their real labels.
+- The layer switcher is generic. Map add-ons inject sections through
+  `LayerSwitcherRegistry`; the marker overlay registers the channel section,
+  which owns the channel rows, active radio and active label. With no marker
+  module attached, no marker section exists.
+- Markers on non-active channels use the inactive-channel alpha (0.45), as do
+  their measurement labels.
+- New markers, the create-dialog default and polyline drawing use the active
+  channel. Changing the channel in the create dialog makes it active. The edit
+  dialog can move a marker to another channel: the Web UI creates a new marker
+  on the target channel and deletes the old one. The new marker gets a fresh
+  local-player `_USER_DEFINED` name.
+- In singleplayer only channel 3 (Group) exists; all markers are shown there and
+  there is no channel selector or radio.
 
 ### Polyline drawing
 
@@ -282,6 +326,8 @@ geometry and color.
     position: [x1, y1],
     polyline: [x1, y1, x2, y2, ...], // flat array
     color: '<CfgMarkerColors class>',
+    channel: 3, // active channel
+    text: 'ace_tacphone:polyline-measurements:1', // only in click-per-point mode
 }
 ```
 
@@ -291,13 +337,24 @@ The mode then stays active with an empty canvas, so several lines can be drawn i
 a row. The preview is drawn in its own OpenLayers layer above the marker layer and
 is not listed in the layer switcher.
 
-Only color is configurable today: polyline markers have no label, type (beyond
-`POLYLINE`), shape, brush, size, or alpha in the UI, and the chat channel is not
-implemented yet so it stays at the request default `0`. No SQF change is needed:
-`fnc_createMarker.sqf` already handles `shape`/`polyline`, and
-`fnc_assembleMarkerInfo.sqf` reports polylines back through `Marker.Upsert`.
-Player-created polyline markers are currently display-only in the Web UI: unlike
-point markers they cannot yet be edited or deleted from the map.
+Click-per-point polylines store `POLYLINE_MEASUREMENTS_TAG`
+(`ace_tacphone:polyline-measurements:1`) in the marker text. Polyline text is
+data-only: Arma does not display it and the Map must not use it as a label or
+notification title. Every client rebuilds the measurement overlay from the
+polyline geometry and terrain heights:
+
+- distances, angles, bearing, total, height labels and `Δh` match the drawing
+  preview;
+- heights are requested lazily, once a polyline is visible;
+- the overlay only draws when the polyline's screen-space bounding box is large
+  enough (`60_000 px²` area or a `320 px` span fallback), so zoomed-out views
+  allocate no label styles;
+- measurements respect the owning channel's visibility and active-channel dim.
+
+Polyline markers remain display-only in the Web UI: unlike point markers they
+cannot yet be edited or deleted from the map. No SQF change is needed for the
+tag: `fnc_createMarker.sqf` already stores `text` and
+`fnc_assembleMarkerInfo.sqf` reports it back through `Marker.Upsert`.
 
 ### Map service (other TacPhone apps)
 
@@ -314,10 +371,11 @@ is queued and applied after the initial fit, so routing into a freshly opened Ma
 popup still lands on the requested position.
 
 `hasMarker(name)` is a synchronous check of the marker layer.
-`focusMarker(name)` resolves `false` when the marker is gone or the layer is not
-ready; it waits for the initial marker snapshot before deciding and flies to the
-marker at the current resolution (a polyline focuses its first vertex). Both are
-used by the Messenger marker cards described below.
+`focusMarker(name)` is forwarded to the marker module, which resolves `false`
+when the marker is gone or the layer is not ready; it waits for the initial
+marker snapshot before deciding and flies to the marker at the current
+resolution (a polyline focuses its first vertex). Both are used by the Messenger
+marker cards described below.
 
 Other apps resolve it through
 `window.TacPhone.interApp.resolveAsync({ service: 'map', ... })` (see the host's

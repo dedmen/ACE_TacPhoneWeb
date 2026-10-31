@@ -11,10 +11,8 @@ import styles from './DebugToolbar.module.css';
 /**
  * Debug-only fake-player toolbar.
  *
- * Only mounted when `DEBUG_FAKE_PLAYERS_ENABLED` is true (see
- * `MessengerApp.tsx`); release builds render the literal `false` branch and the
- * bundler drops this module, so no `Messaging.Debug.*` string reaches the
- * release bundle.
+ * Only mounted when the game is an __A3_DEBUG__ build and the server/mission
+ * allows debug (`window.TacPhone.gameInfo.isDebug()`).
  */
 export function DebugToolbar(): JSX.Element {
     const state = useChatStore();

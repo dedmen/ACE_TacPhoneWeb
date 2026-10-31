@@ -84,7 +84,8 @@ Implemented (web side):
   `sound: "message"` and tap-to-open routing through
   `interApp.resolveAsync({ service: 'messenger', panelId: 'Messaging' })`;
 - `src/debug.ts`: `Messaging.Debug.*` helpers behind
-  `DEBUG_FAKE_PLAYERS_ENABLED` (`import.meta.env.MODE === 'debug'`);
+  `window.TacPhone.gameInfo.isDebug()` (an `__A3_DEBUG__` game build **and**
+  the server/mission `allowDebug` CBA setting);
 - `init()` in `src/main.tsx` (idempotent under StrictMode);
 - room/message helpers in `src/state/roomUtils.ts` (titles, previews, presence,
   invite detection);
@@ -102,7 +103,7 @@ Implemented (web side):
   - `FloatingDialog` (portal to `document.body`, z-index 950: above
     notifications, below the host target chooser),
   - `ParticipantPicker` (Players/Groups tabs, case-insensitive name search),
-  - `DebugToolbar` (only when `DEBUG_FAKE_PLAYERS_ENABLED`);
+  - `DebugToolbar` (only when `gameInfo.isDebug()` is true);
 - `src/service.ts`: the `messenger` inter-app service (version 1) implementing
   `MessengerApi`, registered from the panel lifecycle; `shareObject()` opens the
   target selector through `src/dialogBus.ts` and resolves on send or cancel;
@@ -117,10 +118,11 @@ the wire/behaviour reference.
 Map integration: marker sharing and the `map.marker` object renderer live in
 `ACE_TacPhone_Map/src/MessagingBridge.ts`; neither app imports the other.
 
-Release bundle: `npm run build` folds `DEBUG_FAKE_PLAYERS_ENABLED` to `false`,
-so the debug toolbar and every `Messaging.Debug.*`/`AddFakePlayers` string are
-absent from `dist/ace_tacphone_messaging.js`. The single-file build also keeps
-the bundle pure ASCII.
+Release bundle: `npm run build` no longer tree-shakes the debug toolbar or its
+`Messaging.Debug.*` strings out of `dist/ace_tacphone_messaging.js`; the runtime
+`gameInfo.isDebug()` check hides the toolbar unless the game is an `__A3_DEBUG__`
+build with `allowDebug` enabled. The single-file build also keeps the bundle
+pure ASCII.
 
 Known limitations (tracked in `websource/TODO.md`):
 

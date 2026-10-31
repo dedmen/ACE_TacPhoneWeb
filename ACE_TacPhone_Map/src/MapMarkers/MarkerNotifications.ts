@@ -75,14 +75,14 @@ export function markKnownMarkerNames(names: Iterable<string>): void {
 
 /** Notification body: the marker text, else what kind of marker it is. */
 function markerLabel(type: unknown, text: unknown, shape: unknown): string {
-    if (typeof text === 'string' && text !== '') {
-        return text;
-    }
-
-    // Polyline markers have no text; their icon type is meaningless (the game
-    // keeps its "mil_dot" default), so name the shape instead.
+    // Polyline marker text is data-only (it carries the measurement tag) and
+    // must never leak into a user-facing notification.
     if (shape === 'POLYLINE') {
         return 'Polyline';
+    }
+
+    if (typeof text === 'string' && text !== '') {
+        return text;
     }
 
     if (typeof type === 'string' && type !== '') {

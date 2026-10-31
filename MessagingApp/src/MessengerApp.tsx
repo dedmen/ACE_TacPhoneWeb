@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'reac
 import type { AppProps, PanelInfo } from '@ace-tacphone/api';
 
 import { MESSENGER_DISPLAY_NAME } from './api';
-import { DEBUG_FAKE_PLAYERS_ENABLED } from './debug';
+import { isDebugEnabled } from './debug';
 import { cancelShareRequest, getPendingShare, settleShare, subscribeShareRequests } from './dialogBus';
 import { useServerNow } from './format';
 import { registerMessengerService } from './service';
@@ -254,7 +254,7 @@ export function MessengerApp(props: AppProps): JSX.Element {
                     </div>
                 )}
 
-                {DEBUG_FAKE_PLAYERS_ENABLED && <DebugToolbar />}
+                {isDebugEnabled() && <DebugToolbar />}
 
                 {dialog?.type === 'create' && (
                     <CreateRoomDialog

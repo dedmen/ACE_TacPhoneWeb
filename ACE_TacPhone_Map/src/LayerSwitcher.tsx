@@ -1,28 +1,41 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type Map from 'ol/Map';
 import type BaseLayer from 'ol/layer/Base';
 import { getUid } from 'ol/util.js';
 
+import {
+  type LayerSwitcherLayer,
+  type LayerSwitcherRegistry,
+  type LayerSwitcherSection,
+} from './MapMarkers/LayerSwitcherRegistry';
 import LayerSwitcherStyle from './LayerSwitcherStyle.module.scss';
-
-// Define the shape of the layer data we want React to track
-interface LayerData {
-  id: string;
-  title: string;
-  visible: boolean;
-  layerInstance: BaseLayer;
-}
 
 interface LayerSwitcherProps {
   map: Map | null;
   isOpen: boolean;
   onToggle: () => void;
   onClose: () => void;
+  /** Map add-ons (markers, later GPS) inject sections here. */
+  sections?: LayerSwitcherRegistry;
 }
 
-export function LayerSwitcher({ map, isOpen, onToggle, onClose }: LayerSwitcherProps): React.JSX.Element | null {
-  const [layers, setLayers] = useState<LayerData[]>([]);
+const EMPTY_SECTIONS: ReadonlyArray<LayerSwitcherSection> = [];
+const NOOP_SUBSCRIBE = (): (() => void) => () => undefined;
+const EMPTY_SNAPSHOT = () => EMPTY_SECTIONS;
+
+export function LayerSwitcher({
+  map,
+  isOpen,
+  onToggle,
+  onClose,
+  sections,
+}: LayerSwitcherProps): React.JSX.Element | null {
+  const [layers, setLayers] = useState<LayerSwitcherLayer[]>([]);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const sectionList = useSyncExternalStore(
+    sections?.subscribe ?? NOOP_SUBSCRIBE,
+    sections?.getSnapshot ?? EMPTY_SNAPSHOT,
+  );
 
   useEffect(() => {
     if (!map) {
@@ -31,7 +44,7 @@ export function LayerSwitcher({ map, isOpen, onToggle, onClose }: LayerSwitcherP
     }
 
     const updateLayersState = (): void => {
-      const layersData: LayerData[] = map.getLayers().getArray()
+      const layersData: LayerSwitcherLayer[] = map.getLayers().getArray()
         .filter((layer): layer is BaseLayer & { get(key: 'title'): string } => {
           // Explicitly check that a title exists and is a string
           return typeof layer.get('title') === 'string';
@@ -40,7 +53,7 @@ export function LayerSwitcher({ map, isOpen, onToggle, onClose }: LayerSwitcherP
           id: getUid(layer),
           title: layer.get('title'),
           visible: layer.getVisible(),
-          layerInstance: layer
+          layer,
         }));
 
       setLayers(layersData);
@@ -79,9 +92,9 @@ export function LayerSwitcher({ map, isOpen, onToggle, onClose }: LayerSwitcherP
     };
   }, [isOpen, onClose]);
 
-  const handleToggle = (layerData: LayerData, isChecked: boolean): void => {
+  const handleToggle = (layerData: LayerSwitcherLayer, isChecked: boolean): void => {
     // Imperative OpenLayers layer visibility change
-    layerData.layerInstance.setVisible(isChecked);
+    layerData.layer.setVisible(isChecked);
 
     // Declarative React state change to reflect checkmark toggles instantly
     setLayers((prevLayers) =>
@@ -90,6 +103,27 @@ export function LayerSwitcher({ map, isOpen, onToggle, onClose }: LayerSwitcherP
   };
 
   if (layers.length === 0) return null;
+
+  // Sections own their layers; the marker module owns channel layers, so they
+  // never appear as plain rows. A map without marker (or other) modules simply
+  // has no sections and behaves like a plain layer list.
+  const plainLayers = layers.filter((layer) => (
+    !sectionList.some((section) => section.ownsLayer?.(layer.layer) === true)
+  ));
+
+  const renderRow = (layerData: LayerSwitcherLayer): React.JSX.Element => (
+    <div key={layerData.id} className={LayerSwitcherStyle.layer_row}>
+      <input
+        type="checkbox"
+        id={`layer-${layerData.id}`}
+        checked={layerData.visible}
+        onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+          handleToggle(layerData, e.target.checked)
+        }
+      />
+      <label htmlFor={`layer-${layerData.id}`}>{layerData.title}</label>
+    </div>
+  );
 
   return (
     <div className={LayerSwitcherStyle.layer_switcher_container} ref={containerRef}>
@@ -108,18 +142,16 @@ export function LayerSwitcher({ map, isOpen, onToggle, onClose }: LayerSwitcherP
       {isOpen && (
         <div className={LayerSwitcherStyle.layer_switcher_dropdown}>
           <h4>Layers</h4>
-          {layers.map((layerData) => (
-            <div key={layerData.id} className={LayerSwitcherStyle.layer_row}>
-              <input
-                type="checkbox"
-                id={`layer-${layerData.id}`}
-                checked={layerData.visible}
-                onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                  handleToggle(layerData, e.target.checked)
-                }
-              />
-              <label htmlFor={`layer-${layerData.id}`}>{layerData.title}</label>
-            </div>
+          {plainLayers.map(renderRow)}
+
+          {sectionList.map((section) => (
+            <React.Fragment key={section.id}>
+              {section.render({
+                map,
+                layers,
+                setLayerVisible: handleToggle,
+              })}
+            </React.Fragment>
           ))}
         </div>
       )}

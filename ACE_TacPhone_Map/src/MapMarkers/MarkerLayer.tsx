@@ -1,3 +1,4 @@
+import type OlMap from 'ol/Map';
 import VectorLayer from 'ol/layer/Vector';
 import VectorSource from 'ol/source/Vector';
 import Feature, { type FeatureLike } from 'ol/Feature';
@@ -6,7 +7,25 @@ import LineString from 'ol/geom/LineString';
 import { Style, Icon, Text, Fill, Stroke } from 'ol/style';
 import { mapCommandRegistry } from '../CommandRegistry';
 import { markKnownMarkerNames, notifyMarkerUpsert, registerMarkerLayer } from './MarkerNotifications';
-import { deleteMarker as deleteMarkerRequest, updateMarker as updateMarkerRequest, updateMarkerPosition } from './MarkerApi';
+import {
+    createMarker,
+    deleteMarker as deleteMarkerRequest,
+    updateMarker as updateMarkerRequest,
+    updateMarkerPosition,
+    type MarkerCreationData,
+} from './MarkerApi';
+import {
+    ALWAYS_VISIBLE_CHANNELS,
+    DEFAULT_MULTIPLAYER_CHANNEL,
+    INACTIVE_CHANNEL_ALPHA,
+    SINGLEPLAYER_CHANNEL,
+    getChannelLabel,
+    isChannelAvailable,
+    parseMarkerChannels,
+    type MarkerChannel,
+} from './Channels';
+import { PolylineMeasurementLayer } from './PolylineMeasurementLayer';
+import { isPolylineMeasurementsText } from './PolylineMeasurements';
 
 
 // name, type, color, dir, pos, text, shape, alpha, brush, size, channel, polyline
@@ -55,6 +74,26 @@ export interface MarkerProperties {
     type: string;
     color: string;
     position: [number, number];
+    dir: number;
+    size: [number, number];
+    channel: number;
+}
+
+/** Live marker preview shown at the position the dialog will create at. */
+export interface MarkerPreviewDraft {
+    position: [number, number];
+    label: string;
+    type: string;
+    color: string;
+    dir: number;
+    size: number;
+    channel: number;
+}
+
+interface ChannelLayerState {
+    channel: MarkerChannel;
+    layer: VectorLayer<VectorSource>;
+    source: VectorSource;
 }
 
 /**
@@ -104,21 +143,33 @@ function colorToHex(rgba: [number, number, number, number]): string {
 }
 
 function applyAlphaToColor(color: string, alpha: number): string {
-    if (alpha === undefined || alpha === null || alpha === 1) {
+    const effectiveAlpha = Number.isFinite(alpha) ? alpha : 1;
+    if (effectiveAlpha === 1) {
         return color;
     }
 
     // Hex colors from the game are #rrggbbaa. Strokes have no separate opacity,
     // so the marker alpha has to be part of the stroke color.
+    if (color.startsWith('#') && color.length === 7) {
+        const r = parseInt(color.slice(1, 3), 16);
+        const g = parseInt(color.slice(3, 5), 16);
+        const b = parseInt(color.slice(5, 7), 16);
+        return `rgba(${r}, ${g}, ${b}, ${effectiveAlpha})`;
+    }
+
     if (color.startsWith('#') && color.length === 9) {
         const r = parseInt(color.slice(1, 3), 16);
         const g = parseInt(color.slice(3, 5), 16);
         const b = parseInt(color.slice(5, 7), 16);
-        return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+        return `rgba(${r}, ${g}, ${b}, ${effectiveAlpha})`;
     }
 
     if (color.startsWith('rgba')) {
-        return color.replace(/rgba\(([^,]+),([^,]+),([^,]+),([^)]+)\)/, `rgba($1,$2,$3,${alpha})`);
+        return color.replace(/rgba\(([^,]+),([^,]+),([^,]+),([^)]+)\)/, `rgba($1,$2,$3,${effectiveAlpha})`);
+    }
+
+    if (color.startsWith('rgb(')) {
+        return color.replace(/rgb\(([^,]+),([^,]+),([^,]+)\)/, `rgba($1,$2,$3,${effectiveAlpha})`);
     }
 
     return color;
@@ -137,6 +188,14 @@ function isFinitePosition(position: unknown): position is [number, number] {
  * Invalid input falls back to the game's default uniform scale (1).
  */
 function parseMarkerSize(size: unknown): [number, number] {
+    if (Array.isArray(size) && size.length === 2) {
+        const width = Number(size[0]);
+        const height = Number(size[1]);
+        return isValidMarkerScale(width) && isValidMarkerScale(height)
+            ? [width, height]
+            : DEFAULT_MARKER_SIZE;
+    }
+
     if (typeof size === 'number') {
         return isValidMarkerScale(size) ? [size, size] : DEFAULT_MARKER_SIZE;
     }
@@ -234,10 +293,23 @@ function requestWithTimeout<T>(request: Promise<T>, description: string): Promis
 
 
 export class MarkerLayerManager {
-    public layer: VectorLayer<VectorSource>;
-    private source: VectorSource;
+    private readonly map: OlMap;
     // Registry to easily find features by ID without looping through the entire layer
     private markerRegistry: Map<string, Feature<Point | LineString>> = new Map();
+
+    /** One marker layer per channel that is currently shown. */
+    private channelLayers: Map<number, ChannelLayerState> = new Map();
+    private channels: MarkerChannel[] = [];
+    private isMultiplayerFlag = false;
+    private activeChannelId: number = SINGLEPLAYER_CHANNEL;
+    private channelsLoaded = false;
+    private channelsReady: Promise<void>;
+    private resolveChannelsReady!: () => void;
+
+    private measurementLayer: PolylineMeasurementLayer;
+    private previewLayer: VectorLayer<VectorSource>;
+    private previewSource: VectorSource;
+    private previewFeature: Feature<Point> | null = null;
 
     //#TODO store these globally, and only load them once, in case we have multiple maps
     // In general if we have multiple maps, there should probably just be one MarkerLayerManager
@@ -271,7 +343,8 @@ export class MarkerLayerManager {
     // layer owns the marker features.
     private releaseMarkerLayer: (() => void) | null = null;
 
-    constructor(title: string = 'Live Markers') {
+    constructor(map: OlMap) {
+        this.map = map;
         this.markerConfigReady = new Promise<void>((resolve) => {
             this.resolveMarkerConfigReady = resolve;
         });
@@ -280,16 +353,27 @@ export class MarkerLayerManager {
             this.resolveMarkersLoaded = resolve;
         });
 
+        this.channelsReady = new Promise<void>((resolve) => {
+            this.resolveChannelsReady = resolve;
+        });
+
         this.releaseMarkerLayer = registerMarkerLayer();
 
-        this.source = new VectorSource();
-        this.layer = new VectorLayer({
-            properties: { title },
-            source: this.source,
-            // Text declutterMode only has an effect on a decluttering layer.
+        this.previewSource = new VectorSource();
+        this.previewLayer = new VectorLayer({
+            source: this.previewSource,
             declutter: true,
-            style: this.dynamicIconStyleFunction
+            style: this.dynamicIconStyleFunction,
         });
+        this.previewLayer.setZIndex(3);
+        this.map.addLayer(this.previewLayer);
+
+        this.measurementLayer = new PolylineMeasurementLayer(this.map, {
+            isChannelVisible: (channel) => this.channelLayers.get(channel)?.layer.getVisible() ?? false,
+            getActiveChannel: () => this.activeChannelId,
+            getChannelDim: (channel) => this.getChannelDim(channel),
+        });
+        this.map.addLayer(this.measurementLayer.layer);
 
         // Register handlers via the class instance methods
         this.unregisterHooks.push(
@@ -302,18 +386,33 @@ export class MarkerLayerManager {
         // Retrieve all data in parallel. GetMarkerTypes used to gate
         // GetAllMarkers, so a single hung request could block marker loading
         // forever. requestWithTimeout() guarantees that all settle.
-        const playerIdPromise = this.loadPlayerId();
         const markerConfigPromise = this.loadMarkerConfig();
         const initialMarkersPromise = this.loadInitialMarkers();
+        const channelsPromise = this.loadMarkerChannels();
+        const gameInfoPromise = window.TacPhone.gameInfo.whenReady().catch((error: unknown) => {
+            console.warn('Failed to read global game info for markers', error);
+            return {
+                multiplayer: false,
+                playerId: '',
+                missionName: '',
+                terrainName: '',
+                gameVersion: '',
+                debug: false,
+            };
+        });
 
-        void Promise.all([playerIdPromise, markerConfigPromise, initialMarkersPromise]).then(([playerId, , markers]) => {
+        void Promise.all([markerConfigPromise, initialMarkersPromise, channelsPromise, gameInfoPromise]).then(([, markers, , info]) => {
             if (this.destroyed) {
                 return;
             }
 
-            // Store the player ID for filtering local markers, even when the marker
-            // snapshot failed; queued live upserts are still flushed below.
-            this.playerId = playerId ?? undefined;
+            this.isMultiplayerFlag = info.multiplayer === true;
+            this.playerId = info.playerId || undefined;
+            this.activeChannelId = this.isMultiplayerFlag
+                ? this.getDefaultMultiplayerChannel()
+                : SINGLEPLAYER_CHANNEL;
+
+            this.configureChannelLayers();
 
             if (!markers) {
                 return;
@@ -340,9 +439,227 @@ export class MarkerLayerManager {
                 return;
             }
 
+            // A failed game-info load must not leave the manager without a layer.
+            if (!this.channelsLoaded) {
+                this.isMultiplayerFlag = false;
+                this.configureChannelLayers();
+            }
+
             // Even a failed/timed-out load must unblock the update queue.
             this.initialMarkersLoaded = true;
             this.flushPendingMarkerOperations();
+        });
+    }
+
+    /** Resolves once the game mode and marker channels are ready. */
+    public whenChannelsLoaded(): Promise<void> {
+        return this.channelsReady;
+    }
+
+    public isMultiplayer(): boolean {
+        return this.isMultiplayerFlag;
+    }
+
+    public getChannels(): MarkerChannel[] {
+        return this.channels.map((channel) => ({ ...channel }));
+    }
+
+    public getAvailableChannels(): MarkerChannel[] {
+        if (!this.isMultiplayerFlag) {
+            return this.channels.filter((channel) => channel.id === SINGLEPLAYER_CHANNEL);
+        }
+
+        return this.channels.filter((channel) => channel.mapMarkersEnabled);
+    }
+
+    public getChannelLabel(channel: number): string {
+        return getChannelLabel(this.channels, channel);
+    }
+
+    public getActiveChannel(): number {
+        return this.activeChannelId;
+    }
+
+    public setActiveChannel(channel: number): void {
+        if (this.destroyed || !this.isMultiplayerFlag) {
+            return;
+        }
+
+        const info = this.channels.find((candidate) => candidate.id === channel);
+        if (!isChannelAvailable(info)) {
+            return;
+        }
+
+        if (this.activeChannelId === channel) {
+            return;
+        }
+
+        this.activeChannelId = channel;
+        this.refreshChannelStyles();
+        this.measurementLayer.setActiveChannel();
+        this.refreshAllSources();
+    }
+
+    public resolveChannel(channel: unknown): number {
+        if (!this.isMultiplayerFlag) {
+            return SINGLEPLAYER_CHANNEL;
+        }
+
+        const numeric = Number(channel);
+        if (!Number.isInteger(numeric) || numeric < 0) {
+            return DEFAULT_MULTIPLAYER_CHANNEL;
+        }
+
+        return numeric;
+    }
+
+    public getEffectiveChannelForRequest(channel: unknown): number {
+        return this.resolveChannel(channel);
+    }
+
+    public isMarkerLayer(layer: unknown): boolean {
+        for (const state of this.channelLayers.values()) {
+            if (state.layer === layer) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private getDefaultMultiplayerChannel(): number {
+        const preferred = [DEFAULT_MULTIPLAYER_CHANNEL, 1, 3, 5, 2, 4];
+        for (const id of preferred) {
+            const info = this.channels.find((channel) => channel.id === id);
+            if (isChannelAvailable(info)) {
+                return id;
+            }
+        }
+
+        return this.channels.find((channel) => channel.mapMarkersEnabled)?.id
+            ?? DEFAULT_MULTIPLAYER_CHANNEL;
+    }
+
+    private configureChannelLayers(): void {
+        if (this.channelsLoaded) {
+            return;
+        }
+
+        this.channelsLoaded = true;
+
+        if (this.channels.length === 0) {
+            this.channels = parseMarkerChannels(null);
+        }
+
+        const active = this.channels.find((channel) => channel.id === this.activeChannelId);
+        if (this.isMultiplayerFlag && !isChannelAvailable(active)) {
+            this.activeChannelId = this.getDefaultMultiplayerChannel();
+        }
+
+        const always = this.isMultiplayerFlag
+            ? [...ALWAYS_VISIBLE_CHANNELS]
+            : [SINGLEPLAYER_CHANNEL];
+
+        for (const channel of always) {
+            this.ensureChannelLayer(channel);
+        }
+
+        this.resolveChannelsReady();
+    }
+
+    private ensureChannelLayer(channel: number): ChannelLayerState {
+        const existing = this.channelLayers.get(channel);
+        if (existing) {
+            return existing;
+        }
+
+        const info = this.channels.find((candidate) => candidate.id === channel) ?? {
+            id: channel,
+            label: getChannelLabel(this.channels, channel),
+            custom: channel > 5,
+            mapMarkersEnabled: false,
+        };
+
+        const source = new VectorSource();
+        const layer = new VectorLayer({
+            properties: {
+                title: info.label,
+                markerChannel: channel,
+                markerChannelAvailable: info.mapMarkersEnabled,
+            },
+            source,
+            declutter: true,
+            style: this.dynamicIconStyleFunction,
+        });
+        layer.setZIndex(1);
+        layer.on('change:visible', () => this.measurementLayer.refresh());
+        this.map.addLayer(layer);
+
+        const state: ChannelLayerState = { channel: info, layer, source };
+        this.channelLayers.set(channel, state);
+        return state;
+    }
+
+    private removeChannelLayerIfEmpty(channel: number): void {
+        if (!this.isMultiplayerFlag || ALWAYS_VISIBLE_CHANNELS.has(channel)) {
+            return;
+        }
+
+        const state = this.channelLayers.get(channel);
+        if (!state || state.source.getFeatures().length > 0) {
+            return;
+        }
+
+        this.map.removeLayer(state.layer);
+        this.channelLayers.delete(channel);
+        this.measurementLayer.refresh();
+    }
+
+    private getChannelDim(channel: unknown): number {
+        if (!this.isMultiplayerFlag) {
+            return 1;
+        }
+
+        return Number(channel) === this.activeChannelId ? 1 : INACTIVE_CHANNEL_ALPHA;
+    }
+
+    private refreshChannelStyles(): void {
+        for (const [key, feature] of this.markerRegistry) {
+            const geometry = feature.getGeometry();
+            if (!(geometry instanceof LineString)) {
+                continue;
+            }
+
+            const channel = this.resolveChannel(feature.get('channel'));
+            const type = (feature.get('type') as string | undefined) ?? '';
+            const color = (feature.get('color') as string | undefined) ?? '';
+            const alpha = (feature.get('alpha') as number | undefined) ?? 1;
+            feature.set('baseStyle', this.createFeatureStyle(type, 'POLYLINE', color, '', '', alpha, channel));
+            feature.set('channel', channel);
+            this.markerRegistry.set(key, feature);
+        }
+    }
+
+    private refreshAllSources(): void {
+        for (const state of this.channelLayers.values()) {
+            state.source.changed();
+        }
+        this.previewSource.changed();
+    }
+
+    private loadMarkerChannels(): Promise<void> {
+        return requestWithTimeout(
+            window.TacPhone.networking.Request({ a: 'ACE_TacPhone_Map', c: 'GetMarkerChannels' }),
+            'GetMarkerChannels',
+        ).then((value) => {
+            if (this.destroyed) {
+                return;
+            }
+
+            this.channels = parseMarkerChannels(value);
+        }).catch((error: unknown) => {
+            console.error('Failed to load marker channels', error);
+            this.channels = parseMarkerChannels(null);
         });
     }
 
@@ -409,24 +726,6 @@ export class MarkerLayerManager {
         });
     }
 
-    private loadPlayerId(): Promise<string | null> {
-        return requestWithTimeout(
-            window.TacPhone.networking.Request({a: "ACE_TacPhone_Map", c: "GetPlayerID"}),
-            'GetPlayerID',
-        ).then((playerId: unknown) => {
-            if (typeof playerId === 'string' && playerId !== '') {
-                return playerId;
-            }
-            if (typeof playerId === 'number' && Number.isFinite(playerId)) {
-                return String(playerId);
-            }
-            return null;
-        }).catch((error: unknown) => {
-            console.error('Failed to load player ID', error);
-            return null;
-        });
-    }
-
     public destroy(): void {
         if (this.destroyed) {
             return;
@@ -448,10 +747,23 @@ export class MarkerLayerManager {
         this.pendingMarkerOperations = [];
         this.markerTextures.clear();
         this.markerRegistry.clear();
-        this.source.clear();
+
+        this.measurementLayer.destroy();
+        this.map.removeLayer(this.measurementLayer.layer);
+
+        this.hideMarkerPreview();
+        this.map.removeLayer(this.previewLayer);
+        this.previewSource.clear();
+
+        for (const state of this.channelLayers.values()) {
+            this.map.removeLayer(state.layer);
+            state.source.clear();
+        }
+        this.channelLayers.clear();
 
         // Nobody may wait forever for the snapshot of a destroyed layer.
         this.resolveMarkersLoaded();
+        this.resolveChannelsReady();
 
         // The release function is idempotent, so the layer count cannot go below 0.
         this.releaseMarkerLayer?.();
@@ -595,7 +907,7 @@ export class MarkerLayerManager {
             // The manager may have been destroyed while the texture was loading.
             if (!this.destroyed) {
                 this.markerTextures.set(iconPath, iconData); // Replace promise with real data, so that others won't wait on it
-                this.source.changed(); // Notify the layer of the change, it needs to refresh the icon
+                this.refreshAllSources(); // Notify every layer/feature that needs the new icon
             }
             return iconData;
         }).catch((error: unknown) => {
@@ -630,7 +942,9 @@ export class MarkerLayerManager {
         // Everything we can dynamically solve here, is slower (updated every render, instead of once at marker creation), but we don't fill the style cache with lots of crap
 
         const rotationInRadians = (feature.get('dir') || 0) * (Math.PI / 180); 
-        const alpha = feature.get('alpha') as number; 
+        const rawAlpha = feature.get('alpha') as number | undefined;
+        const alpha = (Number.isFinite(rawAlpha) ? rawAlpha as number : 1)
+            * this.getChannelDim(feature.get('channel'));
         const size = feature.get('size') as [number, number];
         const shadow = feature.get('shadow') as boolean;
         const elevated = feature.get('elevated') === true;
@@ -649,10 +963,12 @@ export class MarkerLayerManager {
 
         if (labelText != '')
         {
+            const rawLabelColor = (baseStyle.getImage() as Icon)?.getColor();
+            const labelColor = typeof rawLabelColor === 'string' ? rawLabelColor : '#ffffff';
             var text = new Text({
                 text: feature.get('label'), // Will be updated per feature
                 font: `normal bold condensed 24px "Roboto", sans-serif`,
-                fill: new Fill({ color: (baseStyle.getImage() as Icon)?.getColor() || '#ffffff' }),
+                fill: new Fill({ color: applyAlphaToColor(labelColor, alpha) }),
                 offsetX: size ? 32*size[1] : 32, //#TODO offset depends on icon size, text is right side of icon
                 scale: zoom,
                 declutterMode: "declutter",
@@ -699,7 +1015,15 @@ export class MarkerLayerManager {
         return baseStyle;
     };
 
-    private createFeatureStyle(type: string, shape: string, color: string, _brush: string, _size: string, alpha: number): Style {
+    private createFeatureStyle(
+        type: string,
+        shape: string,
+        color: string,
+        _brush: string,
+        _size: string,
+        alpha: number,
+        channel: number = this.activeChannelId,
+    ): Style {
 
         if (shape === 'POLYLINE' || shape === 'polyline') {
             var colorResolved = this.markerColors.get(color);
@@ -710,7 +1034,7 @@ export class MarkerLayerManager {
             // into another polyline and is restored when alpha becomes 1.
             return new Style({
                 stroke: new Stroke({
-                    color: applyAlphaToColor(lineColor, alpha),
+                    color: applyAlphaToColor(lineColor, alpha * this.getChannelDim(channel)),
                     width: strokeWidth,
                 }),
             });
@@ -843,12 +1167,16 @@ export class MarkerLayerManager {
         }
 
         const coordinates = geometry.getCoordinates();
+        const size = parseMarkerSize(feature.get('size'));
         return {
             name,
             label: (feature.get('label') as string | undefined) ?? '',
             type: (feature.get('type') as string | undefined) ?? '',
             color: (feature.get('color') as string | undefined) ?? '',
             position: [coordinates[0], coordinates[1]],
+            dir: (feature.get('dir') as number | undefined) ?? 0,
+            size,
+            channel: this.resolveChannel(feature.get('channel')),
         };
     }
 
@@ -984,7 +1312,14 @@ export class MarkerLayerManager {
      */
     public updateMarkerProperties(
         name: string,
-        changes: { label?: string; type?: string; color?: string },
+        changes: {
+            label?: string;
+            type?: string;
+            color?: string;
+            dir?: number;
+            size?: number | [number, number];
+            channel?: number;
+        },
     ): void {
         if (this.destroyed || !isEditableMarkerName(name)) {
             return;
@@ -998,24 +1333,129 @@ export class MarkerLayerManager {
         const label = changes.label ?? (feature.get('label') as string | undefined) ?? '';
         const type = changes.type ?? (feature.get('type') as string | undefined) ?? '';
         const color = changes.color ?? (feature.get('color') as string | undefined) ?? '';
+        const dir = changes.dir ?? (feature.get('dir') as number | undefined) ?? 0;
+        const size = changes.size !== undefined
+            ? parseMarkerSize(changes.size)
+            : parseMarkerSize(feature.get('size'));
         const alpha = (feature.get('alpha') as number | undefined) ?? 1;
+        const currentChannel = this.resolveChannel(feature.get('channel'));
+        const channel = changes.channel !== undefined
+            ? this.resolveChannel(changes.channel)
+            : currentChannel;
+
+        // Arma has no marker channel setter. Replace the marker instead: create
+        // a new marker on the requested channel and delete the old one. The new
+        // marker is intentionally created without a name, so the game generates
+        // it with the *local* player's id instead of reusing another player's
+        // id from the old marker name.
+        if (channel !== currentChannel) {
+            const geometry = feature.getGeometry();
+            if (!(geometry instanceof Point)) {
+                return;
+            }
+
+            const coordinates = geometry.getCoordinates();
+            const shape = (feature.get('shape') as string | undefined) ?? 'ICON';
+            const brush = (feature.get('brush') as string | undefined) ?? '';
+
+            createMarker({
+                label,
+                type,
+                color,
+                position: [coordinates[0], coordinates[1]],
+                dir,
+                size,
+                shape: shape as MarkerCreationData['shape'],
+                brush,
+                alpha,
+                channel,
+            }).then(() => deleteMarkerRequest(name))
+                .then(() => {
+                    if (!this.destroyed) {
+                        this.removeMarkerFeature(name);
+                    }
+                })
+                .catch((error: unknown) => {
+                    if (!this.destroyed) {
+                        console.error('Failed to move marker to another channel', error);
+                    }
+                });
+            return;
+        }
 
         // Update locally first so the map reflects the edit immediately; the
         // game echoes a regular Marker.Upsert afterwards.
         feature.set('label', label);
         feature.set('type', type);
         feature.set('color', color);
+        feature.set('dir', dir);
+        feature.set('size', size);
         feature.set('shadow', this.getMarkerShadow(type));
-        feature.set('baseStyle', this.createFeatureStyle(type, 'ICON', color, '', '', alpha));
-        this.source.changed();
+        feature.set('baseStyle', this.createFeatureStyle(type, 'ICON', color, '', '', alpha, channel));
+        this.channelLayers.get(channel)?.source.changed();
 
-        updateMarkerRequest(name, changes).catch((error: unknown) => {
+        const { channel: _ignoredChannel, ...updateChanges } = changes;
+        updateMarkerRequest(name, updateChanges).catch((error: unknown) => {
             if (this.destroyed) {
                 return;
             }
 
             console.error('Failed to edit marker', error);
         });
+    }
+
+    /**
+     * Shows or updates the live marker preview at the position the create
+     * dialog will use. The preview is a normal feature on its own layer, so it
+     * follows the same icon/type/color/direction/scale styling.
+     */
+    public showMarkerPreview(draft: MarkerPreviewDraft): void {
+        if (this.destroyed) {
+            return;
+        }
+
+        const channel = this.resolveChannel(draft.channel);
+        const size = parseMarkerSize(draft.size);
+
+        let feature = this.previewFeature;
+        if (!feature) {
+            feature = new Feature<Point>({
+                geometry: new Point(draft.position),
+                id: '__preview',
+            });
+            this.previewFeature = feature;
+            this.previewSource.addFeature(feature);
+        } else {
+            const geometry = feature.getGeometry();
+            if (geometry instanceof Point) {
+                geometry.setCoordinates(draft.position);
+            }
+        }
+
+        feature.set('label', draft.label);
+        feature.set('dir', draft.dir);
+        feature.set('alpha', 1);
+        feature.set('size', size);
+        feature.set('shadow', this.getMarkerShadow(draft.type));
+        feature.set('type', draft.type);
+        feature.set('color', draft.color);
+        feature.set('channel', channel);
+        feature.set('baseStyle', this.createFeatureStyle(draft.type, 'ICON', draft.color, '', '', 1, channel));
+        this.previewSource.changed();
+    }
+
+    public updateMarkerPreview(draft: MarkerPreviewDraft): void {
+        this.showMarkerPreview(draft);
+    }
+
+    public hideMarkerPreview(): void {
+        if (!this.previewFeature) {
+            return;
+        }
+
+        this.previewSource.removeFeature(this.previewFeature);
+        this.previewFeature = null;
+        this.previewSource.changed();
     }
 
     private clearPendingMoveTimer(move: MarkerMoveState): void {
@@ -1106,23 +1546,80 @@ export class MarkerLayerManager {
         notifyMarkerUpsert(data, this.playerId);
     }
 
+    private applyMarkerProperties(
+        feature: Feature<Point | LineString>,
+        props: {
+            name: string;
+            type: string;
+            color: string;
+            dir: number;
+            alpha: number;
+            brush: string;
+            size: [number, number];
+            text: string;
+            shape: string;
+            shadow: boolean;
+            channel: number;
+            baseStyle: Style;
+        },
+    ): void {
+        // Every property the game sends is kept on the feature. Shape/brush
+        // rendering (rectangle/ellipse pattern textures) is deliberately
+        // deferred, but the values are stored so that renderer can use them.
+        feature.set('id', props.name);
+        feature.set('label', props.text);
+        feature.set('type', props.type);
+        feature.set('color', props.color);
+        feature.set('dir', props.dir);
+        feature.set('alpha', props.alpha);
+        feature.set('brush', props.brush);
+        feature.set('size', props.size);
+        feature.set('shape', props.shape);
+        feature.set('shadow', props.shadow);
+        feature.set('channel', props.channel);
+        feature.set('baseStyle', props.baseStyle);
+    }
+
     private applyUpsert(data: MarkerUpdate): void {
         const [name, type, color, dir, pos, text, shape, alpha, brush, size, channel, polyline] = data;
-        const registryKey = this.markerKey(name, channel);
+        const effectiveChannel = this.resolveChannel(channel);
+        const registryKey = this.markerKey(name, effectiveChannel);
 
         // While the user drags this marker, the local geometry wins. Every
         // other field is still applied; only the position/geometry is kept.
         const isMoving = this.movingMarkers.has(name);
 
-        var sizeSplit = parseMarkerSize(size);
-        var featureStyle = this.createFeatureStyle(type, shape, color, brush, size, alpha);
-        var shadow = this.getMarkerShadow(type);
+        const sizeSplit = parseMarkerSize(size);
+        const featureStyle = this.createFeatureStyle(type, shape, color, brush, size, alpha, effectiveChannel);
+        const shadow = this.getMarkerShadow(type);
+        const featureProps = {
+            name,
+            type,
+            color,
+            dir,
+            alpha,
+            brush,
+            size: sizeSplit,
+            text,
+            shape,
+            shadow,
+            channel: effectiveChannel,
+            baseStyle: featureStyle,
+        };
 
         // Parse polyline if present. Malformed geometry is ignored instead of
         // handing NaN coordinates to OpenLayers.
         const coordinates = parsePolylineCoordinates(polyline);
         if (coordinates) {
-            const existingFeature = this.markerRegistry.get(registryKey);
+            const state = this.ensureChannelLayer(effectiveChannel);
+            let existingFeature = this.getRegisteredFeature(name);
+
+            // A channel change means the feature belongs in a different source.
+            if (existingFeature && this.resolveChannel(existingFeature.get('channel')) !== effectiveChannel) {
+                this.removeFeatureFromLayer(existingFeature);
+                this.markerRegistry.delete(this.findRegistryKey(existingFeature));
+                existingFeature = null;
+            }
 
             if (existingFeature) {
                 const geometry = existingFeature.getGeometry();
@@ -1132,50 +1629,38 @@ export class MarkerLayerManager {
                     }
                 } else if (isMoving) {
                     // Do not swap the dragged point for the incoming polyline.
-                    existingFeature.set("baseStyle", featureStyle);
-                    existingFeature.set("label", text);
-                    existingFeature.set("alpha", alpha);
-                    existingFeature.set("type", type);
-                    existingFeature.set("color", color);
+                    this.applyMarkerProperties(existingFeature, featureProps);
                     return;
                 } else {
-                    // Replace point with polyline
-                    this.source.removeFeature(existingFeature);
-                    this.markerRegistry.delete(registryKey);
-                    const newFeature = new Feature({
-                        geometry: new LineString(coordinates),
-                        id: name,
-                        label: text,
-                    });
-                    newFeature.set("dir", dir);
-                    newFeature.set("alpha", alpha);
-                    newFeature.set("size", sizeSplit);
-                    newFeature.set("baseStyle", featureStyle);
-                    newFeature.set("shadow", shadow);
-                    newFeature.set("type", type);
-                    newFeature.set("color", color);
-                    this.source.addFeature(newFeature);
-                    this.markerRegistry.set(registryKey, newFeature);
-                    return;
+                    // Replace point with polyline.
+                    this.removeFeatureFromLayer(existingFeature);
+                    this.markerRegistry.delete(this.findRegistryKey(existingFeature));
+                    existingFeature = null;
                 }
+            }
 
-                existingFeature.set("baseStyle", featureStyle);
-                existingFeature.set("label", text);
-                existingFeature.set("alpha", alpha);
-                existingFeature.set("type", type);
-                existingFeature.set("color", color);
+            if (existingFeature) {
+                this.applyMarkerProperties(existingFeature, featureProps);
+                state.source.changed();
             } else {
                 const newFeature = new Feature({
                     geometry: new LineString(coordinates),
                     id: name,
                     label: text,
                 });
-                newFeature.set("alpha", alpha);
-                newFeature.set("baseStyle", featureStyle);
-                newFeature.set("type", type);
-                newFeature.set("color", color);
-                this.source.addFeature(newFeature);
+                this.applyMarkerProperties(newFeature, featureProps);
+                state.source.addFeature(newFeature);
                 this.markerRegistry.set(registryKey, newFeature);
+            }
+
+            if (isPolylineMeasurementsText(text)) {
+                this.measurementLayer.upsert(
+                    name,
+                    effectiveChannel,
+                    coordinates as Array<[number, number]>,
+                );
+            } else {
+                this.measurementLayer.remove(name);
             }
             return;
         }
@@ -1185,70 +1670,64 @@ export class MarkerLayerManager {
             return;
         }
 
-        const existingFeature = this.markerRegistry.get(registryKey);
+        const state = this.ensureChannelLayer(effectiveChannel);
+        let existingFeature = this.getRegisteredFeature(name);
+
+        if (existingFeature && this.resolveChannel(existingFeature.get('channel')) !== effectiveChannel) {
+            this.removeFeatureFromLayer(existingFeature);
+            this.markerRegistry.delete(this.findRegistryKey(existingFeature));
+            existingFeature = null;
+        }
 
         if (existingFeature) {
-            // Update coordinates smoothly
             const geometry = existingFeature.getGeometry();
             if (geometry instanceof Point) {
                 if (!isMoving) {
                     geometry.setCoordinates(pos);
                 }
             } else if (geometry instanceof LineString && !isMoving) {
-                // Switching from polyline to point
-                this.source.removeFeature(existingFeature);
-                this.markerRegistry.delete(registryKey);
-                const newFeature = new Feature({
-                    geometry: new Point(pos),
-                    id: name,
-                    label: text,
-                });
-                newFeature.set("dir", dir);
-                newFeature.set("alpha", alpha);
-                newFeature.set("size", sizeSplit);
-                newFeature.set("baseStyle", featureStyle);
-                newFeature.set("shadow", shadow);
-                newFeature.set("type", type);
-                newFeature.set("color", color);
-                this.source.addFeature(newFeature);
-                this.markerRegistry.set(registryKey, newFeature);
-                return;
+                // Switching from polyline to point.
+                this.removeFeatureFromLayer(existingFeature);
+                this.markerRegistry.delete(this.findRegistryKey(existingFeature));
+                existingFeature = null;
             }
+        }
 
-            existingFeature.set("dir", dir);
-            existingFeature.set("alpha", alpha);
-            existingFeature.set("size", sizeSplit);
-            existingFeature.set("baseStyle", featureStyle);
-            existingFeature.set("label", text);
-            existingFeature.set("shadow", shadow);
-            existingFeature.set("type", type);
-            existingFeature.set("color", color);
-
-            //#TODO all the others
-
+        if (existingFeature) {
+            this.applyMarkerProperties(existingFeature, featureProps);
+            state.source.changed();
         } else {
-            // Create new marker feature
             const newFeature = new Feature({
                 geometry: new Point(pos),
                 id: name,
                 label: text,
             });
-
-            newFeature.set("dir", dir);
-            newFeature.set("alpha", alpha);
-            newFeature.set("size", sizeSplit);
-            newFeature.set("baseStyle", featureStyle);
-            newFeature.set("shadow", shadow);
-            newFeature.set("type", type);
-            newFeature.set("color", color);
-
-            this.source.addFeature(newFeature);
+            this.applyMarkerProperties(newFeature, featureProps);
+            state.source.addFeature(newFeature);
             this.markerRegistry.set(registryKey, newFeature);
         }
+
+        this.measurementLayer.remove(name);
+    }
+
+    private findRegistryKey(feature: Feature<Point | LineString>): string {
+        for (const [key, registered] of this.markerRegistry) {
+            if (registered === feature) {
+                return key;
+            }
+        }
+
+        return '';
+    }
+
+    private removeFeatureFromLayer(feature: Feature<Point | LineString>): void {
+        const channel = this.resolveChannel(feature.get('channel'));
+        this.channelLayers.get(channel)?.source.removeFeature(feature);
     }
 
     private removeMarkerFeature(name: string): void {
         const suffix = `:${name}`;
+        const channelsToReconcile = new Set<number>();
 
         // The game sends deletes by name only, so remove every channel entry
         // with that name. Marker names are normally unique anyway.
@@ -1259,10 +1738,14 @@ export class MarkerLayerManager {
 
             const feature = this.markerRegistry.get(key);
             if (feature) {
-                this.source.removeFeature(feature);
+                channelsToReconcile.add(this.resolveChannel(feature.get('channel')));
+                this.removeFeatureFromLayer(feature);
                 this.markerRegistry.delete(key);
             }
         });
+
+        this.measurementLayer.remove(name);
+        channelsToReconcile.forEach((channel) => this.removeChannelLayerIfEmpty(channel));
     }
 
     /**
@@ -1290,7 +1773,18 @@ export class MarkerLayerManager {
             return;
         }
 
-        this.source.clear();
+        for (const [channel, state] of this.channelLayers) {
+            state.source.clear();
+            if (!this.isMultiplayerFlag || ALWAYS_VISIBLE_CHANNELS.has(channel)) {
+                continue;
+            }
+
+            this.map.removeLayer(state.layer);
+            this.channelLayers.delete(channel);
+        }
+
         this.markerRegistry.clear();
+        this.measurementLayer.clear();
+        this.hideMarkerPreview();
     }
 }

@@ -190,14 +190,12 @@ export async function OnMessageFromGame(message: object): Promise<void> {
 
     if (c == "RequestTerrainSVG") {
         // Game would like to get the terrain sent back to it as layer chunks.
-        // `debug` is set by the game add-on only in __A3_DEBUG__ builds.
-        const { config, uid, debug } = message as {
+        const { config, uid } = message as {
             config: object;
             uid: string | number;
-            debug?: boolean;
         };
 
-        await window.TacPhone.networking.ReplyTerrainSVG(uid, config, debug === true);
+        await window.TacPhone.networking.ReplyTerrainSVG(uid, config);
     }
 
     if (c == "RequestTexture") {

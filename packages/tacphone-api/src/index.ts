@@ -67,7 +67,34 @@ export interface TacPhoneHost {
     interests: InterestRegistryApi;
     notifications: NotificationCenterApi;
     audio: AudioApi;
+    gameInfo: GameInfoApi;
     utils: TacPhoneUtils;
+}
+
+/** Mission-static game information, loaded once per phone page load. */
+export interface GameInfo {
+    readonly multiplayer: boolean;
+    /** `getPlayerID player`; used by the Map for own-marker filtering. */
+    readonly playerId: string;
+    readonly missionName: string;
+    /** `worldName`. */
+    readonly terrainName: string;
+    /** Human-readable game version, e.g. "2.22.153922". */
+    readonly gameVersion: string;
+    /**
+     * True only when both the game add-on was built with __A3_DEBUG__
+     * (`-debug`) and the server/mission enabled the `allowDebug` CBA setting.
+     */
+    readonly debug: boolean;
+}
+
+export interface GameInfoApi {
+    /** Resolves with the one-time snapshot; safe to call from any app. */
+    whenReady(): Promise<GameInfo>;
+    /** Loaded snapshot, or undefined before the first request finishes. */
+    get(): GameInfo | undefined;
+    /** Convenience: get()?.debug === true. */
+    isDebug(): boolean;
 }
 
 /** Cached display data of one registered panel. */
@@ -265,12 +292,9 @@ export interface Networking {
      * chunks. Host-internal producer path used by the built-in main app; only
      * the in-game transport implements it.
      *
-     * @param debug Enables the per-layer compression-ratio diagnostic. The
-     *   in-game `main` command sets it from the add-on's `__A3_DEBUG__` build
-     *   flag, so a bundled release page can still report it when the game is a
-     *   debug build.
+     * The per-layer compression diagnostic follows `gameInfo.isDebug()`.
      */
-    ReplyTerrainSVG(uid: string | number, config: object, debug?: boolean): Promise<void>;
+    ReplyTerrainSVG(uid: string | number, config: object): Promise<void>;
     OnMessageFromGame(message: object): void;
 }
 

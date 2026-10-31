@@ -75,6 +75,58 @@
   user-select: none;
 }
 
+.marker_group {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.marker_group_header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #334155;
+}
+
+.marker_group_active {
+  font-size: 10px;
+  font-weight: 500;
+  color: #64748b;
+  white-space: nowrap;
+}
+
+.layer_row_channel {
+  display: flex;
+  align-items: center;
+  margin: 6px 0;
+  padding-left: 8px;
+}
+
+.layer_row_channel input[type="checkbox"],
+.layer_row_channel input[type="radio"] {
+  cursor: pointer;
+}
+
+.channel_radio {
+  margin-left: 6px;
+  accent-color: #2563eb;
+}
+
+.layer_row_channel label {
+  margin-left: 8px;
+  font-size: 13px;
+  color: #4a5568;
+  cursor: pointer;
+  user-select: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Optional smooth entrance animation */
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(-5px); }

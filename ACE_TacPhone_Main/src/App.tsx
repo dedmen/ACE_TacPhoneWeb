@@ -323,8 +323,12 @@ class App extends React.Component<{}, {loading: boolean, error: string | undefin
 
             const [layout] = await Promise.all([
                 this.loadLayoutFromGame(),
-                host.apps.LoadAvailableApps()
+                host.gameInfo.whenReady()
             ]);
+
+            // Load apps only after the global game info is available, so every
+            // app's init() can rely on window.TacPhone.gameInfo.get().
+            await host.apps.LoadAvailableApps();
 
             // The layout from the game replaces the model built in the
             // constructor; the directory must follow it or it reports stale rects.

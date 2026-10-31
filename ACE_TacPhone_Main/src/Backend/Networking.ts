@@ -141,13 +141,13 @@ class NetworkingA3 implements Networking {
             .then(splitTerrainSVG);
     }
 
-    async ReplyTerrainSVG(uid: string | number, config: object, debug = false): Promise<void> {
+    async ReplyTerrainSVG(uid: string | number, config: object): Promise<void> {
         // Producer path for the built-in main app: split, compress and send one
         // chunk per layer part. All chunk logic stays private to this module.
-        // `debug` comes from the game add-on's __A3_DEBUG__ build flag; the
-        // bundled in-game page is normally a release web build, so the Vite mode
-        // cannot be used as the gate.
+        // The diagnostic follows the runtime game debug flag; the bundled
+        // in-game page is normally a release web build, so console.warn is used.
         try {
+            const debug = window.TacPhone?.gameInfo?.isDebug() === true;
             const terrain = await this.LoadGameTerrain(config);
             const count = terrain.layers.length;
 
@@ -158,10 +158,8 @@ class NetworkingA3 implements Networking {
                 const parts = splitBase64(data, MAX_TERRAIN_CHUNK_CHARS);
 
                 if (debug) {
-                    // The game add-on only sets this in __A3_DEBUG__ builds. The
-                    // in-game page is normally a bundled release build, which
-                    // strips console.log; use console.warn there so the
-                    // diagnostic still reaches the browser console.
+                    // Release builds strip console.log, so use console.warn for
+                    // the runtime diagnostic.
                     const rawBytes = new TextEncoder().encode(layer.svg).byteLength;
                     const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
                     const compressedBytes = Math.max(
@@ -176,11 +174,7 @@ class NetworkingA3 implements Networking {
                         `(${data.length} base64 chars, ${parts.length} chunk(s)), ` +
                         `ratio ${ratio.toFixed(2)}x, ${saved.toFixed(1)}% saved`;
 
-                    if (import.meta.env.MODE === "release") {
-                        console.warn(message);
-                    } else {
-                        console.log(message);
-                    }
+                    console.warn(message);
                 }
 
                 for (let part = 0; part < parts.length; part++) {
@@ -970,7 +964,7 @@ class NetworkingWebsocket implements Networking {
         throw new Error("The terrain reply has an unexpected format.");
     }
 
-    ReplyTerrainSVG(_uid: string | number, _config: object, _debug = false): Promise<void> {
+    ReplyTerrainSVG(_uid: string | number, _config: object): Promise<void> {
         return Promise.reject(new Error(
             "ReplyTerrainSVG is only available in the in-game transport.",
         ));

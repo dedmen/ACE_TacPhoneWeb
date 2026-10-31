@@ -1,12 +1,26 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { MarkerColor, MarkerType } from './MarkerLayer';
 import type { MarkerCreationData } from './MarkerApi';
+import type { MarkerChannel } from './Channels';
 import DialogStyle from './MarkerCreateDialog.module.scss';
 
+export interface MarkerDialogDraft {
+    position: [number, number];
+    label: string;
+    type: string;
+    color: string;
+    dir: number;
+    size: number;
+    channel: number;
+}
+
 interface MarkerCreateDialogProps {
+    mode: 'create' | 'edit';
     coordinate: [number, number];
     markerTypes: MarkerType[];
     markerColors: MarkerColor[];
+    channels: MarkerChannel[];
+    multiplayer: boolean;
     loadMarkerIcon: (iconPath: string) => Promise<string>;
     onSubmit: (marker: MarkerCreationData) => void;
     onCancel: () => void;
@@ -14,6 +28,14 @@ interface MarkerCreateDialogProps {
     initialLabel?: string;
     initialType?: string;
     initialColor?: string;
+    initialDir?: number;
+    initialScale?: number;
+    initialChannel?: number;
+    /** Marker position in pixels relative to the map container. */
+    anchor: { x: number; y: number } | null;
+    containerSize: { width: number; height: number };
+    onChannelChange?: (channel: number) => void;
+    onDraftChange?: (draft: MarkerDialogDraft) => void;
     title?: string;
     submitLabel?: string;
 }
@@ -247,23 +269,47 @@ function MarkerColorDropdown({ markerColors, selectedColor, onSelect }: MarkerCo
     );
 }
 
+// Remember the last type/color chosen while creating. Module scope keeps it
+// for the current page session; the sandbox has no localStorage.
+let rememberedMarkerType = '';
+let rememberedMarkerColor = '';
+
+function clamp(value: number, min: number, max: number): number {
+    return Math.min(max, Math.max(min, value));
+}
+
 export function MarkerCreateDialog({
+    mode,
     coordinate,
     markerTypes,
     markerColors,
+    channels,
+    multiplayer,
     loadMarkerIcon,
     onSubmit,
     onCancel,
     initialLabel = '',
     initialType = '',
     initialColor = '',
+    initialDir = 0,
+    initialScale = 1,
+    initialChannel,
+    anchor,
+    containerSize,
+    onChannelChange,
+    onDraftChange,
     title = 'Add Marker',
     submitLabel = 'Create',
 }: MarkerCreateDialogProps): React.JSX.Element {
     const [label, setLabel] = useState(initialLabel);
-    const [selectedType, setSelectedType] = useState(initialType);
-    const [selectedColor, setSelectedColor] = useState(initialColor);
+    const [selectedType, setSelectedType] = useState(initialType || rememberedMarkerType || '');
+    const [selectedColor, setSelectedColor] = useState(initialColor || rememberedMarkerColor || '');
+    const [selectedChannel, setSelectedChannel] = useState(initialChannel ?? channels[0]?.id ?? 3);
+    const [dir, setDir] = useState(clamp(Number.isFinite(initialDir) ? initialDir : 0, -180, 180));
+    const [scale, setScale] = useState(clamp(Number.isFinite(initialScale) ? initialScale : 1, 0.5, 2));
+    const [placement, setPlacement] = useState<{ left: number; top: number } | null>(null);
     const inputRef = useRef<HTMLInputElement>(null);
+    const dialogRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
         inputRef.current?.focus();
@@ -282,6 +328,16 @@ export function MarkerCreateDialog({
     }, [markerColors, selectedColor]);
 
     useEffect(() => {
+        if (mode !== 'create' || channels.length === 0) {
+            return;
+        }
+
+        if (!channels.some((channel) => channel.id === selectedChannel)) {
+            setSelectedChannel(channels[0].id);
+        }
+    }, [channels, mode, selectedChannel]);
+
+    useEffect(() => {
         const handleKeyDown = (event: KeyboardEvent): void => {
             if (event.key === 'Escape') {
                 onCancel();
@@ -292,8 +348,110 @@ export function MarkerCreateDialog({
         return () => document.removeEventListener('keydown', handleKeyDown);
     }, [onCancel]);
 
+    // Measure the dialog and place it beside the marker so the icon and label
+    // stay visible. Prefer the left side because the marker label is drawn to
+    // the right of the icon.
+    useLayoutEffect(() => {
+        const dialog = dialogRef.current;
+        if (!dialog) {
+            return;
+        }
+
+        const width = dialog.offsetWidth;
+        const height = dialog.offsetHeight;
+        const containerWidth = Math.max(containerSize.width, width + 24);
+        const containerHeight = Math.max(containerSize.height, height + 24);
+        const margin = 12;
+        const sideGap = 18;
+        const labelGap = 220;
+
+        if (!anchor) {
+            setPlacement({
+                left: Math.max(margin, (containerWidth - width) / 2),
+                top: Math.max(margin, (containerHeight - height) / 2),
+            });
+            return;
+        }
+
+        const spaceLeft = anchor.x - margin;
+        const spaceRight = containerWidth - anchor.x - margin;
+        const fitsLeft = spaceLeft >= width + sideGap;
+        const fitsRight = spaceRight >= width + labelGap;
+        let left: number;
+        let top: number | null = null;
+
+        if (fitsLeft && (!fitsRight || spaceLeft >= spaceRight)) {
+            left = anchor.x - sideGap - width;
+        } else if (fitsRight) {
+            left = anchor.x + labelGap;
+        } else {
+            left = clamp(anchor.x - width / 2, margin, Math.max(margin, containerWidth - width - margin));
+            const below = anchor.y + sideGap;
+            top = below + height <= containerHeight - margin
+                ? below
+                : Math.max(margin, anchor.y - sideGap - height);
+        }
+
+        if (top === null) {
+            top = clamp(
+                anchor.y - height / 2,
+                margin,
+                Math.max(margin, containerHeight - height - margin),
+            );
+        }
+
+        setPlacement({
+            left: clamp(left, margin, Math.max(margin, containerWidth - width - margin)),
+            top,
+        });
+    }, [anchor, containerSize, label, selectedType, selectedColor, selectedChannel, dir, scale]);
+
     const selectedColorInfo = markerColors.find((color) => color.className === selectedColor) ?? null;
     const canSubmit = label.trim().length > 0 && selectedType !== '' && selectedColor !== '';
+    const channelOptions: MarkerChannel[] = channels.slice();
+    if (!channelOptions.some((channel) => channel.id === selectedChannel)) {
+        channelOptions.unshift({
+            id: selectedChannel,
+            label: `Channel ${selectedChannel}`,
+            custom: true,
+            mapMarkersEnabled: true,
+        });
+    }
+
+    const selectType = (className: string): void => {
+        setSelectedType(className);
+        if (mode === 'create') {
+            rememberedMarkerType = className;
+        }
+    };
+
+    const selectColor = (className: string): void => {
+        setSelectedColor(className);
+        if (mode === 'create') {
+            rememberedMarkerColor = className;
+        }
+    };
+
+    const selectChannel = (channel: number): void => {
+        setSelectedChannel(channel);
+        onChannelChange?.(channel);
+    };
+
+    useEffect(() => {
+        if (!onDraftChange || !selectedType || !selectedColor) {
+            return;
+        }
+
+        onDraftChange({
+            position: coordinate,
+            label: label.trim(),
+            type: selectedType,
+            color: selectedColor,
+            dir,
+            size: scale,
+            channel: selectedChannel,
+        });
+    }, [label, selectedType, selectedColor, dir, scale, selectedChannel, coordinate, onDraftChange]);
 
     // The in-game browser sandbox has no 'allow-forms', so a real <form> submit is
     // blocked before any handler runs. Submit from button/Enter handlers instead.
@@ -305,6 +463,9 @@ export function MarkerCreateDialog({
             type: selectedType,
             color: selectedColor,
             position: coordinate,
+            dir,
+            size: [scale, scale],
+            ...(multiplayer ? { channel: selectedChannel } : {}),
         });
     };
 
@@ -324,7 +485,16 @@ export function MarkerCreateDialog({
                 }
             }}
         >
-            <div className={DialogStyle.dialog} role="dialog" aria-modal="true" aria-label={title}>
+            <div
+                ref={dialogRef}
+                className={DialogStyle.dialog}
+                role="dialog"
+                aria-modal="true"
+                aria-label={title}
+                style={placement
+                    ? { left: placement.left, top: placement.top, visibility: 'visible' }
+                    : { left: 0, top: 0, visibility: 'hidden' }}
+            >
                 <div className={DialogStyle.dialog_header}>
                     <h3 className={DialogStyle.dialog_title}>{title}</h3>
                     <button
@@ -359,7 +529,7 @@ export function MarkerCreateDialog({
                         selectedType={selectedType}
                         selectedColor={selectedColorInfo?.color ?? '#ffffff'}
                         loadMarkerIcon={loadMarkerIcon}
-                        onSelect={setSelectedType}
+                        onSelect={selectType}
                     />
                 </div>
 
@@ -368,9 +538,60 @@ export function MarkerCreateDialog({
                     <MarkerColorDropdown
                         markerColors={markerColors}
                         selectedColor={selectedColor}
-                        onSelect={setSelectedColor}
+                        onSelect={selectColor}
                     />
                 </div>
+
+                {multiplayer && (
+                    <label className={DialogStyle.field}>
+                        <span className={DialogStyle.field_label}>Channel</span>
+                        <select
+                            className={DialogStyle.select_input}
+                            value={selectedChannel}
+                            onChange={(event) => selectChannel(Number(event.target.value))}
+                            disabled={channelOptions.length === 0}
+                        >
+                            {channelOptions.length === 0 && <option value={selectedChannel}>Loading channels…</option>}
+                            {channelOptions.map((channel) => (
+                                <option key={channel.id} value={channel.id}>
+                                    {channel.label}
+                                </option>
+                            ))}
+                        </select>
+                    </label>
+                )}
+
+                <label className={DialogStyle.field}>
+                    <span className={DialogStyle.field_label}>
+                        Direction
+                        <span className={DialogStyle.field_value}>{dir}°</span>
+                    </span>
+                    <input
+                        className={DialogStyle.slider}
+                        type="range"
+                        min={-180}
+                        max={180}
+                        step={1}
+                        value={dir}
+                        onChange={(event) => setDir(Number(event.target.value))}
+                    />
+                </label>
+
+                <label className={DialogStyle.field}>
+                    <span className={DialogStyle.field_label}>
+                        Scale
+                        <span className={DialogStyle.field_value}>{scale.toFixed(2)}×</span>
+                    </span>
+                    <input
+                        className={DialogStyle.slider}
+                        type="range"
+                        min={0.5}
+                        max={2}
+                        step={0.05}
+                        value={scale}
+                        onChange={(event) => setScale(Number(event.target.value))}
+                    />
+                </label>
 
                 <div className={DialogStyle.actions}>
                     <button type="button" className={DialogStyle.button} onClick={onCancel}>

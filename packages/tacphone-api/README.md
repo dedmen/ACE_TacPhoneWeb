@@ -21,7 +21,8 @@ consumed through the workspace's TypeScript build, not prebuilt `.d.ts` files.
 | `TACPHONE_API_VERSION` | Contract version (`2`). Every app module must export the same `apiVersion`. |
 | `AppProps` | Props of every panel component: `appId`, `panelId`, `node`, `model`, `panel`. The host is the global `window.TacPhone`. |
 | `AppModule`, `AppPanelInfo`, `AppComponent` | App entry module and panel registration. |
-| `TacPhoneHost` | The `window.TacPhone` object: `apiVersion`, `reactVersion`, `networking`, `apps`, `panels`, `interApp`, `interests`, `notifications`, `utils`. |
+| `TacPhoneHost` | The `window.TacPhone` object: `apiVersion`, `reactVersion`, `networking`, `apps`, `panels`, `interApp`, `interests`, `notifications`, `audio`, `gameInfo`, `utils`. |
+| `GameInfo`, `GameInfoApi` | One-time mission snapshot: `multiplayer`, `playerId`, `missionName`, `terrainName`, `gameVersion`, `debug`; access through `window.TacPhone.gameInfo.whenReady()`, `get()` and `isDebug()`. |
 | `Networking` | `WhenReady`, `Request`, `OnConnectionChange`, `LoadGameFileText`, `LoadGameFileTexture`, `LoadGameTerrain`, `ReplyTerrainSVG`, `OnMessageFromGame`. |
 | `TerrainData`, `TerrainLayer` | Return type of `LoadGameTerrain()`: terrain `width`/`height` and standalone per-layer SVG documents. |
 | `AppCatalog`, `AppInfo`, `PanelMeta` | Read-only app and panel catalog (`window.TacPhone.apps`). |
