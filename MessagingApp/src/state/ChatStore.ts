@@ -74,6 +74,12 @@ import {
     effectiveRoomPresence,
     sortRoomSummaries,
 } from './roomUtils';
+import {
+    decodeChatObjectsFromStorage,
+    encodeChatObjectsForStorage,
+    measureEncodedObjects,
+    resetObjectDecodeCache,
+} from '../objectCodec';
 import { t } from '../i18n';
 
 export type { ChatMessagesByRoom } from './roomUtils';
@@ -120,6 +126,13 @@ export interface ChatStoreState {
 
 /** Callback invoked with the new state after every change. */
 export type ChatStoreListener = (state: ChatStoreState) => void;
+
+/**
+ * Upper bound for the encoded objects of one message, measured in JSON
+ * characters. The game stores messages in memory and the bridge passes text,
+ * so an oversized payload is rejected instead of silently truncated.
+ */
+export const MAX_ENCODED_MESSAGE_CHARS = 96 * 1024;
 
 /** Side-channel events for code that must not re-render on every state change. */
 export type ChatStoreEvent =
@@ -264,6 +277,11 @@ class ChatStoreImpl implements ChatStoreApi {
     private handshakeChain: Promise<void> = Promise.resolve();
     private handshakeQueued = false;
     private startCompleted = false;
+
+    /** FIFO of incoming pushes, so async object decoding cannot reorder them. */
+    private pushQueue: Promise<void> = Promise.resolve();
+    /** Bumped by `reset()`; queued pushes from before it are dropped. */
+    private generation = 0;
 
     private connectionUnsubscribe: (() => void) | undefined;
     private connectionKnown = false;
@@ -538,32 +556,90 @@ class ChatStoreImpl implements ChatStoreApi {
     handleGameMessage(message: GameMessage): void {
         if (!message || typeof message.c !== 'string') return;
 
+        // Every push is queued: decoding stored objects is asynchronous, and a
+        // `ChatState.Room` chunk must never be applied after `ChatState.Done`.
+        const generation = this.generation;
+        this.pushQueue = this.pushQueue
+            .then(() => this.handleQueuedGameMessage(message, generation))
+            .catch((error: unknown) => {
+                console.warn('Messaging: failed to handle a game push:', error);
+            });
+    }
+
+    /** Applies one push after its stored objects were decoded. */
+    private async handleQueuedGameMessage(message: GameMessage, generation: number): Promise<void> {
+        let decoded: GameMessage = message;
+
         switch (message.c) {
             case CMD_CHAT_STATE_ROOM:
-                this.applyChatStateRoom(message as unknown as ChatStateRoomPush);
-                break;
-            case CMD_CHAT_STATE_DONE:
-                this.applyChatStateDone(message as unknown as ChatStateDonePush);
-                break;
-            case CMD_ROOM_UPSERT:
-                this.applyRoomUpsert(message as unknown as RoomUpsertPush);
+                decoded = await this.decodeRoomPush(message as unknown as ChatStateRoomPush) as unknown as GameMessage;
                 break;
             case CMD_MESSAGE_NEW:
-                this.applyMessageNew(message as unknown as MessageNewPush);
+                decoded = await this.decodeMessagePush(message as unknown as MessageNewPush) as unknown as GameMessage;
+                break;
+            default:
+                break;
+        }
+
+        // A reset while the payload was decoding discards the stale push.
+        if (generation !== this.generation) return;
+
+        switch (message.c) {
+            case CMD_CHAT_STATE_ROOM:
+                this.applyChatStateRoom(decoded as unknown as ChatStateRoomPush);
+                break;
+            case CMD_CHAT_STATE_DONE:
+                this.applyChatStateDone(decoded as unknown as ChatStateDonePush);
+                break;
+            case CMD_ROOM_UPSERT:
+                this.applyRoomUpsert(decoded as unknown as RoomUpsertPush);
+                break;
+            case CMD_MESSAGE_NEW:
+                this.applyMessageNew(decoded as unknown as MessageNewPush);
                 break;
             case CMD_PRESENCE_CHANGED:
-                this.applyPresenceChanged(message as unknown as PresenceChangedPush);
+                this.applyPresenceChanged(decoded as unknown as PresenceChangedPush);
                 break;
             case CMD_PLAYER_LIST_STATE:
-                this.applyPlayerList(message as unknown as PlayerListStatePush);
+                this.applyPlayerList(decoded as unknown as PlayerListStatePush);
                 break;
             case CMD_ERROR:
-                this.applyError(message as unknown as ErrorPush);
+                this.applyError(decoded as unknown as ErrorPush);
                 break;
             default:
                 console.debug(`Messaging: ignoring push "${message.c}".`);
                 break;
         }
+    }
+
+    /** Decodes the stored objects of a `Message.New` push. */
+    private async decodeMessagePush(push: MessageNewPush): Promise<MessageNewPush> {
+        if (!push.message) return push;
+
+        const objects = push.message.objects;
+        if (!Array.isArray(objects) || objects.length === 0) return push;
+
+        return {
+            ...push,
+            message: { ...push.message, objects: await decodeChatObjectsFromStorage(objects) },
+        };
+    }
+
+    /** Decodes the stored objects of every message in a `ChatState.Room` chunk. */
+    private async decodeRoomPush(push: ChatStateRoomPush): Promise<ChatStateRoomPush> {
+        if (!Array.isArray(push.messages) || push.messages.length === 0) return push;
+
+        let changed = false;
+        const messages = await Promise.all(push.messages.map(async (message) => {
+            const objects = message?.objects;
+            if (!Array.isArray(objects) || objects.length === 0) return message;
+
+            changed = true;
+
+            return { ...message, objects: await decodeChatObjectsFromStorage(objects) };
+        }));
+
+        return changed ? { ...push, messages } : push;
     }
 
     private applyChatStateRoom(push: ChatStateRoomPush): void {
@@ -844,6 +920,28 @@ class ChatStoreImpl implements ChatStoreApi {
             };
         }
 
+        // The game stores messages in memory: send a compressed copy, but keep
+        // the raw objects for the optimistic message the panel renders.
+        let wireObjects: ChatObject[] | undefined = objectList;
+        if (objectList) {
+            wireObjects = await encodeChatObjectsForStorage(objectList);
+
+            const encodedChars = measureEncodedObjects(wireObjects);
+            if (encodedChars > MAX_ENCODED_MESSAGE_CHARS) {
+                console.warn(
+                    `Messaging: message objects are too large for the game ` +
+                    `(${encodedChars} > ${MAX_ENCODED_MESSAGE_CHARS} characters).`,
+                );
+
+                return {
+                    ok: false,
+                    roomId,
+                    clientMessageId: '',
+                    error: t('STR_ACE_Tacphone_Messenger_Error_MessageRejected'),
+                };
+            }
+        }
+
         const clientMessageId = createClientMessageId();
         this.insertOptimistic(this.createOptimisticMessage(roomId, clientMessageId, text, objectList));
 
@@ -852,7 +950,7 @@ class ChatStoreImpl implements ChatStoreApi {
             roomId,
             clientMessageId,
             content: text,
-            objects: objectList,
+            objects: wireObjects,
         });
 
         if (!result) {
@@ -1130,6 +1228,11 @@ class ChatStoreImpl implements ChatStoreApi {
         this.syncedRoomIds.clear();
         this.syncBuffers.clear();
         this.presenceAnnounced = false;
+        // Queued pushes from before the reset must not repopulate the state,
+        // and their decoded payloads are no longer needed.
+        this.generation++;
+        this.pushQueue = Promise.resolve();
+        resetObjectDecodeCache();
         this.state = INITIAL_STATE;
         this.notifyState();
     }
