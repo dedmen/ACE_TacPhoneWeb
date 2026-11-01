@@ -361,8 +361,10 @@ Add app-facing classes, types, and host members there and in the host runtime
 ([`src/Backend/Host.ts`](src/Backend/Host.ts)); there is no generated declaration
 copy in any app. Import these declarations with `import type`; at runtime the
 host API is accessed through `window.TacPhone`.
-The package also types the shared module globals (`window.React`,
-`window.ReactDOM`, and so on).
+The package also types the shared modules the host serves: `src/main.tsx`
+installs them into the internal `window.TacPhone.modules` map, keyed by the bare
+specifier (`"react"`, `"react-dom"`, `"qrcode-generator"`, …). That map is not
+part of the public `TacPhoneHost` interface; apps import the specifiers normally.
 
 ## Inter-app API
 
@@ -692,19 +694,20 @@ module specifiers:
 ```json
 {
   "imports": {
-    "react": "data:text/javascript,export default window.React; ...",
-    "react-dom": "data:text/javascript,export default window.ReactDOM; ...",
-    "react-dom/client": "data:text/javascript,export default window.ReactDOMClient; ...",
-    "react/jsx-runtime": "data:text/javascript,export default window.ReactJSXRuntime; ...",
-    "react/compiler-runtime": "data:text/javascript,export default window.ReactCompilerRuntime; ..."
+    "react": "data:text/javascript,const __m = window.TacPhone.modules.get(\"react\"); export default __m; ...",
+    "react-dom": "data:text/javascript,const __m = window.TacPhone.modules.get(\"react-dom\"); export default __m; ...",
+    "react-dom/client": "data:text/javascript,const __m = window.TacPhone.modules.get(\"react-dom/client\"); export default __m; ...",
+    "react/jsx-runtime": "data:text/javascript,const __m = window.TacPhone.modules.get(\"react/jsx-runtime\"); export default __m; ...",
+    "react/compiler-runtime": "data:text/javascript,const __m = window.TacPhone.modules.get(\"react/compiler-runtime\"); export default __m; ..."
   }
 }
 ```
 
-The generated modules re-export the values that `src/main.tsx` assigns to
-`window.React`, `window.ReactDOM`, `window.ReactDOMClient`,
-`window.ReactJSXRuntime`, and `window.ReactCompilerRuntime`. The specifier and
-global names live in one list,
+The generated modules read their value from `window.TacPhone.modules`, an
+internal `Map<string, unknown>` that `src/main.tsx` populates from
+`SHARED_MODULES`, keyed by the bare specifier. It is not part of the public host
+API: apps keep importing the bare specifiers and never touch the map. The
+specifiers live in one list,
 [`packages/tacphone-build/shared-modules.js`](../packages/tacphone-build/shared-modules.js)
 (imported as `@ace-tacphone/build/shared-modules`), which drives the host import
 map, `src/main.tsx`, and the app build externals.
@@ -722,7 +725,8 @@ Rules for app builds:
   file paths.
 - If another shared dependency is needed, it must either be bundled or added to
   [`packages/tacphone-build/shared-modules.js`](../packages/tacphone-build/shared-modules.js)
-  and assigned in `src/main.tsx`; apps cannot add mappings themselves.
+  and installed into the module map in `src/main.tsx`; apps cannot add mappings
+  themselves.
 - React Compiler users: keep `react/compiler-runtime` external as well; the host
   maps it to the compiler runtime that belongs to the same React instance.
 

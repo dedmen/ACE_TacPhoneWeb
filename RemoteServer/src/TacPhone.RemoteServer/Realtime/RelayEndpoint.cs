@@ -45,6 +45,7 @@ public sealed class RelayEndpoint
     private readonly AttachRateLimiters _limiters;
     private readonly TerrainCache _terrainCache;
     private readonly TextureCache _textureCache;
+    private readonly FileCache _fileCache;
     private readonly TimeProvider _time;
     private readonly ILogger<RelayEndpoint> _logger;
 
@@ -57,6 +58,7 @@ public sealed class RelayEndpoint
         AttachRateLimiters limiters,
         TerrainCache terrainCache,
         TextureCache textureCache,
+        FileCache fileCache,
         TimeProvider time,
         ILogger<RelayEndpoint> logger)
     {
@@ -66,6 +68,7 @@ public sealed class RelayEndpoint
         _limiters = limiters ?? throw new ArgumentNullException(nameof(limiters));
         _terrainCache = terrainCache ?? throw new ArgumentNullException(nameof(terrainCache));
         _textureCache = textureCache ?? throw new ArgumentNullException(nameof(textureCache));
+        _fileCache = fileCache ?? throw new ArgumentNullException(nameof(fileCache));
         _time = time ?? throw new ArgumentNullException(nameof(time));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -305,6 +308,7 @@ public sealed class RelayEndpoint
                 // Only the session that is still registered owns the terrain pin.
                 // A displaced session must not clear the replacement's pin.
                 _terrainCache.Unpin(hostId);
+                _fileCache.UnpinHost(hostId);
                 _logger.LogInformation("Game host disconnected");
                 await CloseHostClientsAsync(session, RejectionReasons.HostStop).ConfigureAwait(false);
             }
@@ -370,6 +374,14 @@ public sealed class RelayEndpoint
 
                 case ControlTypes.Kick:
                     await HandleKickAsync(session, GetString(root, "peerId"), cancellationToken).ConfigureAwait(false);
+                    return;
+
+                case ControlTypes.Files:
+                    if (ParseFileManifest(root) is { } files)
+                    {
+                        _fileCache.ObserveManifest(session.HostId, files);
+                    }
+
                     return;
 
                 default:
@@ -456,6 +468,18 @@ public sealed class RelayEndpoint
         {
             var contentHash = TerrainCache.ComputeContentHash(terrainData);
             _terrainCache.Pin(terrainHostId, terrainConfigHash, contentHash, terrainData);
+        }
+
+        if (_fileCache.Enabled &&
+            _fileCache.HasPending &&
+            FileRequest.TryReadReply(payload.Span, out var fileKey, out var fileData) &&
+            _fileCache.TakePending(peerId, fileKey, out var fileHostId, out var filePath))
+        {
+            if (!string.IsNullOrEmpty(fileData))
+            {
+                _fileCache.TryGetExpected(fileHostId, filePath, out var manifestHash);
+                _fileCache.Store(fileHostId, filePath, fileData, manifestHash);
+            }
         }
 
         // A full queue aborts the peer; its receive loop then detaches it.
@@ -1003,6 +1027,25 @@ public sealed class RelayEndpoint
                     }
                 }
 
+                if (_fileCache.Enabled &&
+                    FileRequest.TryParse(frame.Payload, out var fileKey, out var filePath))
+                {
+                    _fileCache.SweepPending(_options.FileCache.PendingTimeout());
+
+                    if (_fileCache.TryGetPinned(host.HostId, filePath, out var cachedFile))
+                    {
+                        client.Socket.TryEnqueueBinary(FileRequest.BuildReply(fileKey, cachedFile));
+                        continue; // instant, never reaches the game
+                    }
+
+                    if (!_terrainCache.IsPending(client.PeerId, fileKey) &&
+                        !_textureCache.IsPending(client.PeerId, fileKey) &&
+                        !_fileCache.IsPending(client.PeerId, fileKey))
+                    {
+                        _fileCache.AddPending(client.PeerId, fileKey, host.HostId, filePath);
+                    }
+                }
+
                 var envelope = FrameCodec.EncodeGameFrame(client.PeerId, frame.Payload);
                 if (!host.Game.TryEnqueueBinary(envelope))
                 {
@@ -1017,6 +1060,7 @@ public sealed class RelayEndpoint
             // not, so only the pending maps are dropped here.
             _terrainCache.DropPeer(client.PeerId);
             _textureCache.DropPeer(client.PeerId);
+            _fileCache.DropPeer(client.PeerId);
 
             if (host.Clients.TryRemove(client.PeerId, out _))
             {
@@ -1040,6 +1084,7 @@ public sealed class RelayEndpoint
         // Abandoned transfers expire even when no new request arrives.
         _terrainCache.SweepPending(_options.TerrainCache.PendingTimeout());
         _textureCache.SweepPending(_options.TextureCache.PendingTimeout());
+        _fileCache.SweepPending(_options.FileCache.PendingTimeout());
 
         foreach (var host in _registry.Snapshot())
         {
@@ -1414,6 +1459,34 @@ public sealed class RelayEndpoint
         element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString()
             : null;
+
+    private static List<(string Path, string Hash)>? ParseFileManifest(JsonElement root)
+    {
+        if (!root.TryGetProperty("files", out var files) || files.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        var manifest = new List<(string Path, string Hash)>();
+        foreach (var item in files.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            var path = GetString(item, "path");
+            var hash = GetString(item, "hash");
+            if (string.IsNullOrEmpty(path) || string.IsNullOrEmpty(hash))
+            {
+                continue;
+            }
+
+            manifest.Add((path, hash));
+        }
+
+        return manifest;
+    }
 
     private static int? GetInt(JsonElement element, string name) =>
         element.TryGetProperty(name, out var value)

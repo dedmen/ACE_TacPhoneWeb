@@ -6,7 +6,9 @@ import { createHash } from 'node:crypto'
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { discoverDevApps } from './dev-apps.js'
 
-// These are added to global window, see main.tsx
+// Namespaces published on the internal window.TacPhone.modules map, see
+// src/Backend/SharedModules.ts. They are imported here only to enumerate the
+// export names the generated import map has to re-export.
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import * as ReactDOMClient from 'react-dom/client';
@@ -16,6 +18,8 @@ import qrcode from 'qrcode-generator';
 import { SHARED_MODULES } from '@ace-tacphone/build/shared-modules';
 
 // TypeScript checks that this map covers every specifier in SHARED_MODULES.
+// The namespaces are only enumerated here to generate the import map; the
+// runtime values are installed by src/Backend/SharedModules.ts.
 const sharedModuleNamespaces: Record<(typeof SHARED_MODULES)[number]['specifier'], object> = {
     'react': React,
     'react-dom': ReactDOM,
@@ -195,20 +199,22 @@ export default defineConfig(async ({ mode }): Promise<UserConfig> => {
                     const skippedKeys = new Set(['__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED', '__CLIENT_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE', '__COMPILER_RUNTIME', 'default', 'module.exports']);
 
                     const generateExports = (x: any, locName: string) => {
-                        return `export default ${locName}; `
+                        return `const __m = ${locName}; export default __m; `
                         +
                         Object.keys(x || {})
                         .filter(key => !skippedKeys.has(key))
-                        .map(key => `export const ${key} = ${locName}.${key};`)
+                        .map(key => `export const ${key} = __m.${key};`)
                         .join(' ');
                     }
 
                     // 2. Build the import map from the shared module list.
                     // The same list drives the app build externals, so the two cannot drift apart.
+                    // The namespaces live on the internal window.TacPhone.modules map,
+                    // keyed by the bare specifier.
                     const imports: Record<string, string> = {};
-                    for (const { specifier, global } of SHARED_MODULES) {
+                    for (const { specifier } of SHARED_MODULES) {
                         const namespace = sharedModuleNamespaces[specifier];
-                        imports[specifier] = `data:text/javascript,${generateExports(namespace, `window.${global}`)}`;
+                        imports[specifier] = `data:text/javascript,${generateExports(namespace, `window.TacPhone.modules.get(${JSON.stringify(specifier)})`)}`;
                     }
 
                     const importMap = { imports };

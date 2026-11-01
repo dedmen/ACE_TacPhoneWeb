@@ -70,9 +70,15 @@ Apps (`ACE_TacPhone_Map`, `MessagingApp`, `SampleApp`), run from the app folder:
 ```powershell
 npm run build          # tsc -b + vite + shared-import check + bundle-api-types
 Copy-Item dist\ace_tacphone_map.js ..\..\apps\map\data\ace_tacphone_map.js
+Copy-Item dist\ace_tacphone_ol.js ..\..\apps\map\data\ace_tacphone_ol.js
 Copy-Item dist\ace_tacphone_messaging.js ..\..\apps\messaging\data\ace_tacphone_messaging.js
 Copy-Item dist\ace_tacphone_sampleapp.js ..\..\apps\SampleApp\data\ace_tacphone_sampleapp.js
 ```
+
+The Map app's build also runs `tacphone-build facade build` after `vite build`
+and writes `dist\ace_tacphone_ol.js`; that artifact is a normal
+`TACPHONE-BUNDLE:` file and goes into the app's game `data\` folder like the app
+bundle. See [`apps.md`](apps.md#runtime-dependencies).
 
 All copy destinations are git-ignored in ACE3. The build does not copy them for
 you. A successful app build also emits the generated `dist/<name>.d.ts` used by
@@ -141,16 +147,19 @@ import that file.
 Read [`packages/tacphone-build/README.md`](../packages/tacphone-build/README.md)
 before changing it. The parts that affect day-to-day work:
 
-- `shared-modules.js` is the sole source for the host import map, the host
-  `window` globals, Vite dedupe, app build externals, and the checker. To add a
-  shared module, update this file **and** assign its global in
-  `ACE_TacPhone_Main/src/main.tsx`; apps cannot add mappings.
+- `shared-modules.js` is the sole source for the host import map, the host module
+  map (`window.TacPhone.modules`), Vite dedupe, app build externals, and the
+  checker. To add a shared module, update this file **and** publish its namespace
+  in `ACE_TacPhone_Main/src/Backend/SharedModules.ts`; apps cannot add mappings.
 - `singlefile.ts` (`@ace-tacphone/build/singlefile`) inlines CSS/assets for app
   bundles. The host uses `vite-plugin-singlefile` instead; do not swap them.
 - `tacphone-build bundle-api-types --app . --entry src/api.ts --name <Name>`
   bundles an app's inter-app types into `dist/<name>.d.ts`.
 - `tacphone-build sync-api-types <source.d.ts> <target...>` copies an already
   generated app declaration to consumers. Never hand-edit a synced copy.
+- `tacphone-build facade build --app <dir> --package <name> --prefix <prefix>
+  --out <file>` turns the specifiers a `tacphoneFacade()` build externalized into
+  one compressed facade module; the Map app runs it after `vite build`.
 - `tacphone-build check-shared-imports` validates the host import map and every
   discovered app bundle; it also runs at the end of every build.
 

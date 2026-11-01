@@ -357,3 +357,118 @@ Optional locations:
   `panel`); they are no longer called with no props. The host is the global
   `window.TacPhone`. `window.TacPhone.utils.usePanel()` returns the same
   `PanelInstance` for code that is a component below the panel.
+
+## Adding a runtime dependency
+
+Besides the shared modules the host always provides, an app can declare its own
+bare dependencies. The host imports each one once per app (identical file
+content is deduplicated), so a large library such as OpenLayers does not get
+inlined into the app bundle.
+
+### 1. Declare it in the game config
+
+Nest the dependency classes under the app's entry in the app's
+`ace_tacphone_apps.hpp`:
+
+```cpp
+class EGVAR(tacphone,dependencies) {
+    class some_library {
+        name = "some-library";                          // bare specifier
+        file = QPATHTOF(data\some-library.js);           // required
+    };
+    class second_library {
+        name = "second-library";
+        file = QPATHTOF(data\second-library.js);
+    };
+};
+```
+
+- `name` is the bare specifier the app imports. It defaults to the class name
+  when omitted.
+- `file` is required; a dependency without one is logged and skipped.
+- **Config definition order is the execution order.** Declare transitive
+  dependencies first (a library that `second-library` imports must appear
+  before it); the module bodies then run in the order you wrote them.
+- The game sends the list as `dependencies: [{ name, file }]` inside the
+  `GetAvailableApps` metadata, so nothing else has to be registered.
+
+### 2. Declare it in `package.json`
+
+The web package lists the same specifiers under `tacphone.dependencies`. The key
+is the bare specifier; the value is an object (empty for a normal library):
+
+```json
+"tacphone": {
+  "app": "SampleApp",
+  "dependencies": {
+    "some-library": {},
+    "tacphone-ol-core": { "facade": "tacphone-ol/" }
+  }
+}
+```
+
+The optional `"facade": "<prefix>/"` marks a facade bundle (see
+`PLAN_APP_DEPENDENCIES.md`): the runtime registers the core file, and every
+specifier under that prefix resolves to a generated `data:` adapter.
+`check-shared-imports` accepts the declared keys and the facade prefixes and
+rejects any other bare specifier.
+
+### 3. Keep it external in the Vite build
+
+Add the declared specifiers to `rollupOptions.external`, next to the host shared
+modules:
+
+```ts
+const provided = Object.keys(pkg.tacphone?.dependencies ?? {});
+
+rollupOptions: {
+    external: [...SHARED_MODULE_SPECIFIERS, ...provided],
+    output: { codeSplitting: false },
+}
+```
+
+Reading `SHARED_MODULE_SPECIFIERS` from `@ace-tacphone/build/shared-modules`
+also keeps the host-provided modules external. Never leave a dependency out of
+`external`: it would be bundled (and then rejected or duplicated) instead of
+resolved by the host.
+
+### 4. Build and copy
+
+A dependency file is built like an app: one ESM file with
+`build.lib.formats: ['es']`, `codeSplitting: false`, and
+`@ace-tacphone/build/singlefile` to inline CSS/assets. Copy the output into the
+app's `data/` folder under the name used by `file` in the config:
+
+```powershell
+npm run build -w ace-tacphone-<app>
+Copy-Item data\some-library.js ..\..\apps\<AppName>\data\some-library.js
+```
+
+The facade tool (`tacphone-build facade build --app . --package <pkg> --prefix
+<prefix> --out data/<core>.js`) produces the facade core file the same way.
+Dependency outputs are git-ignored, like the app bundle.
+
+### Development vs production
+
+- **Development** (`npm run dev`): the host dev server resolves the specifier
+  from `node_modules` as a normal Vite module, so edits hot-reload. The game
+  config is not involved.
+- **Production**: the host reads the file from the game (the config `file` for
+  the specifier `name`), deduplicates identical content (SHA-256 inside the
+  game, normalized path outside it), imports it with `importShim`, and maps the
+  specifier to the resulting blob URL.
+
+### File format and import rules
+
+- A dependency may be **plain ESM** or a `TACPHONE-BUNDLE` compressed bundle,
+  exactly like an app bundle.
+- It must be **one self-contained ESM file**: no relative imports, no dynamic
+  chunk imports, no `new URL(..., import.meta.url)`.
+- Only bare specifiers are allowed, and only the shared modules or specifiers
+  this app declared. Specifiers under a declared facade prefix are allowed too.
+- `data:` and `blob:` specifiers are allowed. Relative (`./`, `../`, `/`) and
+  network/file schemes (`http:`, `https:`, `//`, `file:`, `ws:`) are rejected,
+  and dynamic imports need a literal specifier.
+- Per-app versions of the same specifier are kept apart with import-map scopes;
+  a shared dependency that itself needs conflicting transitive versions is an
+  explicit error, so keep it app-local.

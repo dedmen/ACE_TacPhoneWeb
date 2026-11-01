@@ -482,6 +482,21 @@ Remaining work:
 - [ ] **[decision]** Attach rate limiting is per IP (10/min) and counts
   successful attaches, so several devices behind one NAT share the budget.
   Revisit if a household hits it.
-- [ ] **[cleanup]** `RemoteServer/wwwroot/index.html` is a placeholder. The
-  server README documents replacing it with the host build.
+- [ ] **[deploy]** `RemoteServer/wwwroot/index.html` is generated: copy
+  `ACE_TacPhone_Main/dist/index.html` there after every host change.
+
+## React-free host base (spike)
+
+Explore splitting the host bootstrap so it does not import React:
+
+- a no-React `main` that only builds `window.TacPhone` and the module map,
+- React/ReactDOM loaded as host runtime dependencies instead of bundled imports,
+- the React UI bundle inlined as a JS string in `index.html` and imported through
+  `importShim` from a blob URL,
+- `Host.ts` no longer importing React for the version check or
+  `PanelContext`/`usePanel`,
+- the host dependency manifest including the React files.
+
+Goal: let the phone shell and app loading start before (or without) the React UI
+bundle.
 

@@ -25,12 +25,24 @@ import { audio } from "./Audio";
 import { CommandRegistry } from "./MessageRouter";
 import { PanelContext, usePanel } from "../Panels/PanelContext";
 import { compressAndToBase64, decompressFromBase64 } from "./Compression";
+import { sharedModules } from "./SharedModules";
+
+/**
+ * The host object plus the internal module registry.
+ *
+ * `modules` is deliberately not part of the public `TacPhoneHost` contract: it
+ * only exists so the generated import map entries and the dependency loader can
+ * read the host-provided namespaces. Apps import bare specifiers instead.
+ */
+type InternalTacPhoneHost = TacPhoneHost & {
+    readonly modules: ReadonlyMap<string, unknown>;
+};
 
 /** The host object, once it was built. */
-let host: TacPhoneHost | undefined;
+let host: InternalTacPhoneHost | undefined;
 
 /** Builds the host object from the singleton services. */
-function createHost(): TacPhoneHost {
+function createHost(): InternalTacPhoneHost {
     if (React.version.split('.')[0] !== '19') {
         console.error(
             `TacPhone expects React 19, but the host loaded React ${React.version}. `
@@ -49,6 +61,7 @@ function createHost(): TacPhoneHost {
         notifications: notificationCenter,
         audio,
         gameInfo,
+        modules: sharedModules,
         utils: {
             CommandRegistry,
             PanelContext,
@@ -64,7 +77,7 @@ function createHost(): TacPhoneHost {
  *
  * Host modules use this instead of `window.TacPhone`; apps read the global.
  */
-export function GetTacPhoneHost(): TacPhoneHost {
+export function GetTacPhoneHost(): InternalTacPhoneHost {
     if (!host) {
         host = createHost();
         window.TacPhone = host;

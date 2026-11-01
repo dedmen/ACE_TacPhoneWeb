@@ -127,12 +127,22 @@ export interface AppCatalog {
     LoadAvailableApps(): Promise<void>;
 }
 
+/** One runtime module dependency declared by an app's game config. */
+export interface AppDependency {
+    /** Bare module specifier the dependency provides. */
+    name: string;
+    /** Packaged file inside the game PBO. */
+    file: string;
+}
+
 /** One successfully loaded app. */
 export interface AppInfo {
     /** Development entry file, relative to the app folder. */
     devfile: string;
     /** Packaged entry file inside the game PBO. */
     file: string;
+    /** Runtime module dependencies, in game-config definition order. */
+    dependencies: Array<AppDependency>;
     module: AppModule;
     panels: Array<AppPanelInfo>;
 }

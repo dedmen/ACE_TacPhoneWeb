@@ -31,7 +31,7 @@ is opened. It stays connected until `Stop` or mission end.
 | Web transport | `ACE_TacPhone_Main/src/Backend/Networking.ts` (`NetworkingWebsocket` with `direct`/`remote` modes, `remoteSession`) |
 | Pairing gate | `ACE_TacPhone_Main/src/Panels/RemotePairingScreen.tsx` |
 | In-game panel | `ACE_TacPhone_Main/src/MainApps/RemoteAccessPanel.tsx` |
-| QR shared module | `packages/tacphone-build/shared-modules.js` (`qrcode-generator` → `window.QRCode`) |
+| QR shared module | `packages/tacphone-build/shared-modules.js` (specifier `qrcode-generator`; the host serves it through the internal `window.TacPhone.modules` map, not `window.QRCode`) |
 | SQF | `addons/tacphone/initSettings.inc.sqf`, `functions/fnc_remoteAccess.sqf`, `fnc_processBrowserRequest.sqf`, `XEH_postInit.sqf` |
 
 ## Protocol (summary)
@@ -40,6 +40,14 @@ Control frames are text JSON with `t`. Application frames are binary
 `0x01 | peerIdLen | peerId | app JSON` on the game link and raw app JSON on the
 relay plugin/browser link. The server also accepts text `<peerId>\n<app JSON>`
 for the future SQF client.
+
+Game → server control frames: `auth`, `code-new`, `share-create`,
+`share-revoke`, `kick`, `ping`, and the file manifest
+`{ "t": "files", "files": [{ "path", "hash" }] }`. The extension sends the
+manifest after `auth-ok` and again on every relay reconnect, from the SHA-256
+list the page passes to `RemoteAccess.Start` (`appDirectory.getFileManifest()`).
+The relay only uses it to learn the expected hash of a path; an empty list is
+not sent.
 
 The application payload is the existing `{k, d}` protocol. The extension injects
 `"s" = peerId` exactly like the LAN path, so SQF and apps are unchanged.
@@ -99,8 +107,9 @@ work in multiplayer.
 `Networking.ts` picks `remote` mode when the page is not `blob:`, not
 `http://localhost`, and not a loopback/LAN/mDNS host. `RemotePairingScreen`
 overlays the app until the session attaches and shows the Patreon supporter
-note. App bundles are loaded with `GetFile` over the relay, not from the static
-host.
+note. App bundles and their dependency files are loaded with `GetFile` over the
+relay, not from the static host; the relay answers repeat requests from its
+[file cache](#file-cache).
 
 ## Testing
 
@@ -169,6 +178,37 @@ host.
   callback; SQF buffers them and the in-game page writes them to its dev console
   and shows warnings/errors as notifications. `GetHostLog` replays the buffer on
   page boot.
+
+## File cache
+
+The relay caches the `.js` files the game serves for apps and their runtime
+dependencies, so a page reload or a second device does not pull them through the
+game again. `RemoteServer/src/TacPhone.RemoteServer/Realtime/FileCache.cs` owns
+the state; `FileRequest.cs` recognizes the frames.
+
+- A browser `{"a":"main","c":"GetFile","path":"….js"}` (only `.js`, never a path
+  with `..`) is answered from the cache or forwarded to the game and stored when
+  the reply arrives.
+- Content is pooled globally by the SHA-256 of the original text; pins are keyed
+  by `(hostId, normalized path)`, and the `files` manifest supplies the expected
+  hash per path. A reply whose hash differs is logged as a warning but is still
+  cached.
+- Plain ESM is stored Brotli (`SmallestSize`) and decompressed on a hit;
+  `TACPHONE-BUNDLE:` payloads are already compressed and stored verbatim.
+- Eviction drops unpinned entries first (fewest observations, then oldest
+  access) and pinned entries last. Content stays resident after the host
+  disconnects, and its observation count survives; only the pin and the expected
+  hash go away.
+- `UnpinHost` runs on host disconnect and `DropPeer` when a client detaches;
+  forwarded requests still waiting for a reply are swept after
+  `PendingTimeoutSeconds`.
+- `TacPhone:FileCache:{Enabled,MaxTotalBytes,MaxEntries,MaxEntryBytes,
+  PendingTimeoutSeconds}`, defaults `true`, 128 MiB, 512 entries, 16 MiB per
+  entry, 60 s. `/health` reports `fileCacheEntries/Bytes/Hits/Misses/Evictions/
+  Pending/Pinned/Sticky/Expected`; `Sticky` counts observed content that is
+  currently unpinned.
+- Tests: `RemoteServer/tests/TacPhone.RemoteServer.Tests/Realtime/FileCacheTests.cs`
+  and `FileRequestTests.cs`.
 
 ## Known follow-ups
 

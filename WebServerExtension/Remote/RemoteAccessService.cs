@@ -37,6 +37,7 @@ namespace ArmaServerSide.Remote
         int _codeTtlSeconds;
         string _shareKey = "";
         DateTimeOffset _shareExpiresAt;
+        JsonArray _fileManifest = new();
 
         public RemoteAccessService(WebSocketConnectionManager connections)
         {
@@ -51,7 +52,7 @@ namespace ArmaServerSide.Remote
                 {
                     case "Start":
                         return args.Count >= 2
-                            ? Start(args[0], args[1])
+                            ? Start(args[0], args[1], args.Count >= 3 ? args[2] : "[]")
                             : Error("missing host or identity");
 
                     case "Stop":
@@ -87,42 +88,63 @@ namespace ArmaServerSide.Remote
             }
         }
 
-        string Start(string host, string identityJson)
+        string Start(string host, string identityJson, string manifestJson)
         {
+            var manifest = ParseFileManifest(manifestJson);
+
+            // Never send while holding _gate: the send is async and may await.
+            RelayConnection? manifestTarget = null;
+            string status;
+
             lock (_gate)
             {
+                _fileManifest = manifest;
+
                 if (_armed)
-                    return BuildStatusJsonLocked();
+                {
+                    // Already armed: keep the new manifest and push it if online.
+                    if (_state == "online")
+                        manifestTarget = _connection;
 
-                var uri = BuildRelayUri(host, out var publicBase);
-                if (uri is null)
-                    return Error("invalid relay host");
+                    status = BuildStatusJsonLocked();
+                }
+                else
+                {
+                    var uri = BuildRelayUri(host, out var publicBase);
+                    if (uri is null)
+                        return Error("invalid relay host");
 
-                var identity = RelayProtocol.ParseObject(identityJson);
-                _host = host.Trim();
-                _publicBase = publicBase;
+                    var identity = RelayProtocol.ParseObject(identityJson);
+                    _host = host.Trim();
+                    _publicBase = publicBase;
 
-                // The RemoteIdentity callback (and the SQF profileNamespace value)
-                // uses "hostId". Accept "id" as a fallback for older stored values.
-                _hostId = identity.String("hostId");
-                if (_hostId.Length == 0)
-                    _hostId = identity.String("id");
-                _hostSecret = identity.String("secret");
-                _armed = true;
-                _state = "connecting";
-                _error = "";
-                _code = "";
-                _codeExpiresAt = default;
-                _codeTtlSeconds = 0;
-                _shareKey = "";
-                _shareExpiresAt = default;
+                    // The RemoteIdentity callback (and the SQF profileNamespace value)
+                    // uses "hostId". Accept "id" as a fallback for older stored values.
+                    _hostId = identity.String("hostId");
+                    if (_hostId.Length == 0)
+                        _hostId = identity.String("id");
+                    _hostSecret = identity.String("secret");
+                    _armed = true;
+                    _state = "connecting";
+                    _error = "";
+                    _code = "";
+                    _codeExpiresAt = default;
+                    _codeTtlSeconds = 0;
+                    _shareKey = "";
+                    _shareExpiresAt = default;
 
-                _cts = new CancellationTokenSource();
-                var token = _cts.Token;
-                _supervisor = Task.Run(() => SuperviseAsync(uri, token));
+                    _cts = new CancellationTokenSource();
+                    var token = _cts.Token;
+                    _supervisor = Task.Run(() => SuperviseAsync(uri, token));
 
-                return BuildStatusJsonLocked();
+                    status = BuildStatusJsonLocked();
+                }
             }
+
+            if (manifestTarget is not null)
+                _ = SendFileManifestAsync(manifestTarget);
+
+            return status;
         }
 
         internal void Stop()
@@ -139,6 +161,7 @@ namespace ArmaServerSide.Remote
                 _code = "";
                 _codeTtlSeconds = 0;
                 _shareKey = "";
+                _fileManifest = new();
                 connection = _connection;
                 _connection = null;
                 cts = _cts;
@@ -374,6 +397,10 @@ namespace ArmaServerSide.Remote
 
                     if (identityChanged)
                         NotifyIdentity();
+
+                    var connection = CurrentConnection();
+                    if (connection is not null)
+                        _ = SendFileManifestAsync(connection);
                     break;
                 }
 
@@ -549,6 +576,91 @@ namespace ArmaServerSide.Remote
 
         static string Error(string message)
             => new JsonObject { ["ok"] = false, ["error"] = message }.ToJsonString();
+
+        /// <summary>
+        /// Parses the manifest the web UI sends with RemoteAccess.Start:
+        /// a JSON array of { "path": "...", "hash": "<lowercase hex>" }.
+        /// Invalid entries are skipped; the list is capped so a broken client cannot
+        /// grow the control frame without bound.
+        /// </summary>
+        static JsonArray ParseFileManifest(string json)
+        {
+            const int MaxEntries = 512;
+            const int MaxPathLength = 512;
+
+            var result = new JsonArray();
+            if (string.IsNullOrWhiteSpace(json))
+                return result;
+
+            JsonArray? parsed;
+            try
+            {
+                parsed = JsonNode.Parse(json) as JsonArray;
+            }
+            catch (Exception)
+            {
+                ExtensionLog.Warn("Ignoring a malformed file manifest");
+                return result;
+            }
+
+            if (parsed is null)
+                return result;
+
+            foreach (var node in parsed)
+            {
+                if (result.Count >= MaxEntries)
+                    break;
+
+                if (node is not JsonObject entry)
+                    continue;
+
+                var path = entry["path"]?.GetValue<string>();
+                var hash = entry["hash"]?.GetValue<string>();
+                if (string.IsNullOrWhiteSpace(path) || string.IsNullOrWhiteSpace(hash) || path.Length > MaxPathLength)
+                    continue;
+
+                result.Add((JsonNode)new JsonObject
+                {
+                    ["path"] = path,
+                    ["hash"] = hash.Trim().ToLowerInvariant(),
+                });
+            }
+
+            return result;
+        }
+
+        JsonObject BuildFileManifestFrameLocked()
+        {
+            var files = new JsonArray();
+            foreach (var node in _fileManifest)
+            {
+                if (node is not null)
+                    files.Add(node.DeepClone());
+            }
+
+            return new JsonObject { ["t"] = "files", ["files"] = files };
+        }
+
+        async Task SendFileManifestAsync(RelayConnection connection)
+        {
+            JsonObject frame;
+            lock (_gate)
+            {
+                if (_fileManifest.Count == 0)
+                    return;
+
+                frame = BuildFileManifestFrameLocked();
+            }
+
+            try
+            {
+                await connection.SendControlAsync(frame).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                ExtensionLog.Error("Could not send the file manifest", ex);
+            }
+        }
 
         /// <summary>
         /// Accepts `tacphone.arma3.io`, `https://host`, `wss://host/ws`, ... and

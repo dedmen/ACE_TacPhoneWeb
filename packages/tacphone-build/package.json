@@ -11,6 +11,7 @@
     ".": "./index.js",
     "./bundle-format": "./bundle-format.js",
     "./bundle-format/node": "./bundle-format.node.mjs",
+    "./facade": "./facade.js",
     "./shared-modules": "./shared-modules.js",
     "./singlefile": "./singlefile.ts"
   },
@@ -22,6 +23,7 @@
   ],
   "dependencies": {
     "@microsoft/api-extractor": "^7.60.0",
+    "es-module-lexer": "^1.7.0",
     "micromatch": "^4.0.8",
     "rollup": "^4.62.2",
     "typescript": "~6.0.2",

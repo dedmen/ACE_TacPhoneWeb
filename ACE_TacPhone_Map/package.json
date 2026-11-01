@@ -4,7 +4,12 @@
   "version": "0.0.0",
   "type": "module",
   "tacphone": {
-    "app": "ACE_TacPhone_Map"
+    "app": "ACE_TacPhone_Map",
+    "dependencies": {
+      "tacphone-ol-core": {
+        "facade": "tacphone-ol/"
+      }
+    }
   },
   "main": "./dist/ace_tacphone_map.js",
   "types": "./dist/ace_tacphone_map.d.ts",
@@ -24,8 +29,8 @@
   },
   "scripts": {
     "dev": "npm --prefix ../ACE_TacPhone_Main run dev --",
-    "build": "tsc -b && vite build --mode release && tacphone-build check-shared-imports && tacphone-build bundle-api-types --app . --entry src/api.ts --name ACE_TacPhone_Map",
-    "build:debug": "tsc -b && vite build --mode debug && tacphone-build check-shared-imports && tacphone-build bundle-api-types --app . --entry src/api.ts --name ACE_TacPhone_Map",
+    "build": "tsc -b && vite build --mode release && tacphone-build facade build --app . --package ol --prefix tacphone-ol --out dist/ace_tacphone_ol.js && tacphone-build check-shared-imports && tacphone-build bundle-api-types --app . --entry src/api.ts --name ACE_TacPhone_Map",
+    "build:debug": "tsc -b && vite build --mode debug && tacphone-build facade build --app . --package ol --prefix tacphone-ol --out dist/ace_tacphone_ol.js && tacphone-build check-shared-imports && tacphone-build bundle-api-types --app . --entry src/api.ts --name ACE_TacPhone_Map",
     "check:importmap": "tacphone-build check-shared-imports",
     "check": "tsc -b",
     "lint": "oxlint",

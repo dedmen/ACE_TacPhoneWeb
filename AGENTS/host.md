@@ -16,6 +16,8 @@ reference is [`ACE_TacPhone_Main/README.md`](../ACE_TacPhone_Main/README.md).
 | Panel directory (list/focus/open/floats) | `src/Backend/PanelDirectory.ts` |
 | App chooser | `src/Panels/AppChooserPanel.tsx` |
 | App discovery, loading, icons, failed apps | `src/Backend/AppDirectory.ts` |
+| App runtime dependencies, shim import map, facade adapters | `src/Backend/ModuleRegistry.ts` |
+| Host shared modules (`window.TacPhone.modules`) | `src/Backend/SharedModules.ts` |
 | Transport selection and request/response | `src/Backend/Networking.ts` |
 | In-game `window.A3API` shim | `src/Backend/A3API.ts` |
 | Game → app message routing | `src/Backend/AppMessaging.ts`, `src/Backend/MessageRouter.ts` |
@@ -30,10 +32,12 @@ reference is [`ACE_TacPhone_Main/README.md`](../ACE_TacPhone_Main/README.md).
 
 ## Boot
 
-1. `src/main.tsx` imports React and assigns `window.React`, `window.ReactDOM`,
-   `window.ReactDOMClient`, `window.ReactJSXRuntime`, and
-   `window.ReactCompilerRuntime` from `SHARED_MODULES` in
-   `@ace-tacphone/build/shared-modules`.
+1. `src/Backend/SharedModules.ts` holds the `SHARED_MODULES` namespaces in an
+   internal `window.TacPhone.modules` map (`Map<string, unknown>`, keyed by the
+   bare specifier such as `"react"` or `"qrcode-generator"`); `Backend/Host.ts`
+   installs it as `window.TacPhone.modules`. There are no per-module window
+   globals: the host import map's `data:` entries read the values back with
+   `window.TacPhone.modules.get(...)`.
 2. Importing `src/Backend/Host.ts` builds `window.TacPhone` from the service
    singletons (lazy and idempotent; also installed on a microtask).
 3. `App.tsx` creates the flexlayout model, attaches it to `panelDirectory`,
@@ -42,13 +46,53 @@ reference is [`ACE_TacPhone_Main/README.md`](../ACE_TacPhone_Main/README.md).
    and renders the app chooser panels. Game info is available before any app
    `init()` runs.
 4. The app loader asks the game `{a:"main", c:"GetAvailableApps"}`, which returns
-   `{ file, devfile, icon }` per app. Each module is loaded from the packaged
-   file, or from `/devapps/<Name>/<devfile>` in development, checked against
-   `TACPHONE_API_VERSION`, and asked for `GetTacPhoneApps()`.
+   `{ file, devfile, icon, dependencies }` per app. Every app's metadata is
+   parsed first so all dependency declarations are known, then
+   `Backend/ModuleRegistry.ts` reads and imports the dependency files and
+   registers the shim import map (see below). Each app module is loaded from the
+   packaged file, or from `/devapps/<Name>/<devfile>` in development, imported
+   through `importShim`, checked against `TACPHONE_API_VERSION`, and asked for
+   `GetTacPhoneApps()`.
 5. `GetGameInfo` is called once through `main` and caches multiplayer, player id,
    mission name, `worldName`, game version and the debug flag. Debug is true only
    for an `__A3_DEBUG__` build with the server/mission `allowDebug` CBA setting
    enabled.
+
+## App modules and dependencies (`Backend/ModuleRegistry.ts`)
+
+`index.html` sets `window.esmsInitOptions = { shimMode: true }` in a plain
+`<script>` before the module entry. A native import map must exist before the
+first module is fetched and cannot be extended afterwards, but app dependencies
+are only known at runtime. The host page itself stays a native module on the
+native import map; only app and dependency modules go through `importShim`.
+
+- `AppDirectory` parses every app's metadata (including the ordered
+  `dependencies: [{ name, file }]`) before importing anything, then
+  `moduleRegistry.registerDependencies()` starts one `LoadGameFileText` per
+  declared dependency file in parallel, decodes and imports them in declaration
+  order, and only then loads the apps (in parallel).
+- Identical file content is imported once: in-game the dedupe key is the
+  SHA-256 of the raw game file text (`crypto.subtle`), computed while the modules
+  load and awaited before the loader returns so the manifest is complete;
+  outside the game hashing is skipped and the normalized game path is the key.
+- A dependency file is either plain ESM or `TACPHONE-BUNDLE:1:gzip:<base64>`;
+  anything else fails that dependency.
+- The shim is seeded with the host shared-module import map, then gets one import
+  map with per-app scopes keyed by the app/dependency blob URL, so two apps can
+  ship different versions of the same specifier.
+- A facade core's `__tacphoneFacade` export is expanded into one tiny adapter
+  module per specifier (used by the Map app's OpenLayers core).
+- A failed dependency fails only the apps that declared it. A shared dependency
+  that would need conflicting transitive versions reports a clear error.
+- `AppDirectory.getFileManifest()` returns the SHA-256 of every app and
+  dependency file read; the Remote Access panel sends it with
+  `RemoteAccess.Start`, and the relay caches the files it names (see
+  [`remote.md`](remote.md#file-cache)).
+- Development (`IsLocalDev()`) resolves dependencies from `node_modules` through
+  the Vite dev server and never reads or hashes game files.
+
+Declaration and authoring rules are in
+[`apps.md`](apps.md#runtime-dependencies).
 
 ## Layout and panels
 

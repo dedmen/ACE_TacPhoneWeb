@@ -4,6 +4,7 @@ import react, { reactCompilerPreset } from '@vitejs/plugin-react'
 import babel from '@rolldown/plugin-babel'
 import { libInjectCss } from 'vite-plugin-lib-inject-css'
 import { viteSingleFile } from '@ace-tacphone/build/singlefile'
+import { tacphoneFacade } from '@ace-tacphone/build/facade'
 import Inspect from 'vite-plugin-inspect'
 import { SHARED_MODULE_SPECIFIERS } from '@ace-tacphone/build/shared-modules'
 
@@ -17,6 +18,10 @@ export default defineConfig(({ mode, command }) => {
     react(),
     libInjectCss(),
     babel({ presets: [reactCompilerPreset()] }),
+    // OpenLayers is a subpath-heavy library; one facade file ships it as an app
+    // dependency and every `ol/...` import becomes `tacphone-ol/...` in the
+    // bundle. See packages/tacphone-build/README.md.
+    tacphoneFacade({ packageName: 'ol', prefix: 'tacphone-ol' }),
     viteSingleFile({ failOnNotInlined: isRelease }),
   ];
 

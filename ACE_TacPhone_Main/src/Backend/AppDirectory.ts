@@ -23,6 +23,7 @@ import {
 import { IsLocalDev, networking, IsArma } from "./Networking";
 import { decompressFromBase64 } from "./Compression";
 import { GetTacPhoneHost } from "./Host";
+import { hashGameFile, moduleRegistry, type DependencyDeclaration, type FileHash } from "./ModuleRegistry";
 
 /**
  * Icon URL prefixes that can be used directly as `<img src>` values.
@@ -50,7 +51,15 @@ const ICON_MAX_SIZE = 512;
  */
 const ICON_LOAD_WAIT_MS = 2000;
 
-type AppInfoSource = Pick<AppInfo, "devfile" | "file">;
+type AppInfoSource = Pick<AppInfo, "devfile" | "file" | "dependencies">;
+
+/** One app after metadata parsing; `error` means it cannot be loaded. */
+interface ParsedApp {
+    name: string;
+    icon: string;
+    appInfoSource?: AppInfoSource;
+    error?: string;
+}
 
 function errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
@@ -127,6 +136,8 @@ export class AppDirectory implements AppCatalog {
     /** Icon resolution per panel id, so an icon is requested only once. */
     private readonly iconPromises: Map<string, Promise<string | undefined>>;
     private readonly listeners: Set<(panels: PanelMeta[]) => void>;
+    /** SHA-256 of every app and dependency file read from the game, per game path. */
+    private readonly fileHashes: Map<string, string>;
     /** In-flight LoadAvailableApps() call; concurrent callers share it. */
     private loading: Promise<void> | undefined;
 
@@ -140,6 +151,7 @@ export class AppDirectory implements AppCatalog {
         this.panelMeta = new Map();
         this.iconPromises = new Map();
         this.listeners = new Set();
+        this.fileHashes = new Map();
     }
 
     private async fetchExternalModule(name: string, appInfo: AppInfoSource): Promise<any> {
@@ -175,10 +187,29 @@ export class AppDirectory implements AppCatalog {
 
         //#TODO we need a global module/app directory, where we can look up from classname to in-game path
         const content = await networking.LoadGameFileText(appInfo.file); //  `/z/ace/addons/tacphone/apps/${name}.js`
+
+        // Start hashing before the bundle decode and the import. Only the
+        // in-game page hashes files; external pages skip this entirely.
+        const hashPromise = this.recordAppHash(appInfo.file, content);
+
         const source = await decodeAppBundleSource(content, name, appInfo.file);
-        // Store it in a blob url and then return it
+        // Store it in a blob url and then import it through the shim so the app's
+        // runtime dependencies resolve from the import map.
         const url = URL.createObjectURL(new Blob([source], {type: 'application/javascript'}));
-        return import(/* @vite-ignore */ url);
+
+        try {
+            return await moduleRegistry.importApp(url, name);
+        } finally {
+            // The manifest must be complete before the app reports itself loaded.
+            await hashPromise;
+        }
+    }
+
+    /** Hashes an app file for the remote-access manifest; never rejects. */
+    private async recordAppHash(path: string, text: string): Promise<void> {
+        const hash = await hashGameFile(path, text);
+        if (hash)
+            this.fileHashes.set(path, hash);
     }
 
     private getModule(name: string, appInfo: AppInfoSource): Promise<AppModule> {
@@ -219,11 +250,43 @@ export class AppDirectory implements AppCatalog {
         const file = typeof data.file === "string" ? data.file : "";
         const devfile = typeof data.devfile === "string" ? data.devfile : "";
         const icon = typeof data.icon === "string" ? data.icon : "";
+        const dependencies = this.parseDependencies(name, data.dependencies);
 
         if (name !== "main" && file.length === 0)
             throw new Error(`App "${name}" does not define a file to load`);
 
-        return { file, devfile, icon };
+        return { file, devfile, icon, dependencies };
+    }
+
+    /**
+     * Parses the ordered dependency list the game returns for an app.
+     *
+     * The order is the game config's definition order and is the load order:
+     * a dependency must be declared before the module that imports it.
+     */
+    private parseDependencies(name: string, raw: unknown): Array<DependencyDeclaration> {
+        if (raw === undefined || raw === null)
+            return [];
+
+        if (!Array.isArray(raw))
+            throw new Error(`App "${name}" has invalid dependency metadata; expected an array`);
+
+        return raw.map((entry, index) => {
+            if (typeof entry !== "object" || entry === null || Array.isArray(entry))
+                throw new Error(`App "${name}" dependency at index ${index} is not an object`);
+
+            const candidate = entry as Record<string, unknown>;
+            const specifier = candidate.name;
+            const file = candidate.file;
+
+            if (typeof specifier !== "string" || specifier.length === 0)
+                throw new Error(`App "${name}" dependency at index ${index} has no valid name`);
+
+            if (typeof file !== "string" || file.length === 0)
+                throw new Error(`App "${name}" dependency "${specifier}" has no valid file`);
+
+            return { name: specifier, file };
+        });
     }
 
     private validatePanels(appName: string, panels: unknown): Array<AppPanelInfo> {
@@ -287,10 +350,65 @@ export class AppDirectory implements AppCatalog {
         this.panelOwners.clear();
         this.appIcons.clear();
         this.iconPromises.clear();
+        this.fileHashes.clear();
+
+        // Parse every app first: all dependency declarations must be known before
+        // the first app module is imported. A malformed app fails alone.
+        const parsed: ParsedApp[] = entries.map(([name, rawInfo]) => {
+            try {
+                const { icon, ...appInfoSource } = this.parseAppInfo(name, rawInfo);
+                return { name, icon, appInfoSource };
+            } catch (error) {
+                return { name, icon: "", error: errorMessage(error) };
+            }
+        });
+
+        // Development resolves dependencies from node_modules through the app's
+        // own Vite dev server, so the game dependency files are not read.
+        if (!IsLocalDev()) {
+            let graphError: string | undefined;
+
+            try {
+                await moduleRegistry.registerDependencies(
+                    parsed
+                        .filter((entry): entry is ParsedApp & { appInfoSource: AppInfoSource } =>
+                            entry.appInfoSource !== undefined)
+                        .map(entry => ({ key: entry.name, dependencies: entry.appInfoSource.dependencies })),
+                );
+            } catch (error) {
+                // A broken dependency graph (for example a shared module that
+                // needs conflicting transitive versions) fails the apps that
+                // declare dependencies, not the whole phone.
+                graphError = errorMessage(error);
+                console.error("TacPhone could not register app dependencies:", error);
+            }
+
+            for (const { path, hash } of moduleRegistry.getFileHashes())
+                this.fileHashes.set(path, hash);
+
+            // A failed dependency fails only the apps that declared it.
+            for (const entry of parsed) {
+                if (!entry.appInfoSource)
+                    continue;
+
+                const failure = graphError ?? entry.appInfoSource.dependencies
+                    .map(dependency => moduleRegistry.dependencyError(dependency))
+                    .find(message => message !== undefined);
+
+                if (failure) {
+                    entry.error = `dependency failed: ${failure}`;
+                    entry.appInfoSource = undefined;
+                }
+            }
+        }
 
         // Load every app in parallel. One broken app must not prevent the rest from starting.
-        const results = await Promise.allSettled(entries.map(async ([name, rawInfo]) => {
-            const { icon, ...appInfoSource } = this.parseAppInfo(name, rawInfo);
+        const results = await Promise.allSettled(parsed.map(async (entry) => {
+            if (!entry.appInfoSource)
+                throw new Error(entry.error ?? `App "${entry.name}" has no metadata`);
+
+            const { name } = entry;
+            const appInfoSource = entry.appInfoSource;
             const module = await this.getModule(name, appInfoSource);
 
             if (typeof module?.GetTacPhoneApps !== "function")
@@ -307,13 +425,13 @@ export class AppDirectory implements AppCatalog {
                 panels
             };
 
-            return { name, appInfo, icon };
+            return { name, appInfo, icon: entry.icon };
         }));
 
         const failedApps = new Map<string, string>();
 
         results.forEach((result, index) => {
-            const name = entries[index][0];
+            const name = parsed[index].name;
 
             if (result.status === "rejected") {
                 const message = errorMessage(result.reason);
@@ -488,6 +606,18 @@ export class AppDirectory implements AppCatalog {
     /** Every registered panel, with cached display data. */
     listPanels(): PanelMeta[] {
         return this.knownPanels.size === 0 ? [] : [...this.panelMeta.values()];
+    }
+
+    /**
+     * SHA-256 manifest of every app and dependency file read from the game.
+     *
+     * Sorted for a deterministic request. Empty outside the in-game browser,
+     * where hashing is skipped.
+     */
+    getFileManifest(): FileHash[] {
+        return [...this.fileHashes]
+            .map(([path, hash]) => ({ path, hash }))
+            .sort((a, b) => a.path.localeCompare(b.path));
     }
 
     /**

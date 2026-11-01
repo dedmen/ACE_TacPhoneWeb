@@ -15,6 +15,7 @@
   "dependencies": {
     "@ace-tacphone/api": "*",
     "dockview-react": "^7.0.3",
+    "es-module-shims": "^2.6.2",
     "flexlayout-react": "^0.10.1",
     "qrcode-generator": "^2.0.4",
     "react": "^19.2.7",

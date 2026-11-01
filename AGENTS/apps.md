@@ -156,8 +156,12 @@ so it must be one self-contained ES module:
 - Keep `react`, `react-dom`, `react-dom/client`, `react/jsx-runtime`, and
   `react/compiler-runtime` external. The host import map provides them. A second
   React copy breaks hooks/context.
-- `qrcode-generator` is also provided by the host import map (`window.QRCode`),
-  so apps can render QR codes without bundling another copy.
+- `qrcode-generator` is also provided by the host import map, so apps can render
+  QR codes without bundling another copy. The host installs every shared module
+  in the internal `window.TacPhone.modules` map (`Map<string, unknown>` keyed by
+  the bare specifier) from `src/Backend/SharedModules.ts`; that map is
+  implementation detail, not public host API, so import `qrcode-generator`
+  normally and never read the map.
 - Extra JavaScript/CSS files may be shipped separately and loaded through
   `window.TacPhone.networking.LoadGameFileText`; they are still leaf modules with
   no relative imports. Cache them and expect an extra game-file read.
@@ -166,6 +170,80 @@ so it must be one self-contained ES module:
 
 The host build uses `vite-plugin-singlefile`; apps use the shared
 `@ace-tacphone/build/singlefile` plugin. Do not swap them.
+
+## Runtime dependencies
+
+Beyond the fixed shared modules, an app may ship extra runtime modules (a large
+library, one shim, a facade core). They are declared in the game config and
+loaded before the app module.
+
+Shared modules themselves are no longer window globals: the host publishes each
+namespace on the internal `window.TacPhone.modules` map (`Map<string, unknown>`,
+keyed by bare specifier) from `ACE_TacPhone_Main/src/Backend/SharedModules.ts`.
+That map is implementation detail, not part of `TacPhoneHost`. Import the bare
+specifier and let the host import map resolve it; never read the map.
+
+Game config, as nested classes under the app class (`configClasses` definition
+order is the execution order, so declare a transitive dependency before the
+module that imports it):
+
+```cpp
+class EGVAR(tacphone,dependencies) {
+    class some_library {
+        name = "some-library";                  // bare specifier; defaults to the class name
+        file = QPATHTOF(data\some-library.js);  // required
+    };
+};
+```
+
+The game sends `dependencies: [{ name, file }]` in the `GetAvailableApps`
+metadata, so the host knows what to load for each app.
+
+`package.json` declares the same specifiers for the build (`facade` marks a
+prefix the facade build provides):
+
+```json
+"tacphone": {
+  "app": "ACE_TacPhone_Map",
+  "dependencies": {
+    "some-library": {},
+    "tacphone-ol-core": { "facade": "tacphone-ol/" }
+  }
+}
+```
+
+- A `facade` value is a prefix. The build check accepts the prefix itself
+  (`tacphone-ol`) and anything under it (`tacphone-ol/Map`), whether it is
+  written with or without a trailing slash.
+- The app's Vite `external` list is
+  `[...SHARED_MODULE_SPECIFIERS, ...Object.keys(pkg.tacphone.dependencies)]`, or
+  the facade plugin supplies the external ids itself (the Map app does that with
+  `tacphoneFacade`).
+- Dev resolves the specifier from `node_modules`; production loads the game file
+  named in the config. A dependency file may be plain ESM or a
+  `TACPHONE-BUNDLE:1:gzip:<base64>` bundle.
+- Import rules are the same as for the app bundle: single-file ESM only, no
+  relative imports, no `http:`/`https:`/`ws:`/`wss:`/`file:` specifiers, no
+  computed dynamic imports (`data:` and `blob:` URLs are allowed). Only shared
+  specifiers and declared bare specifiers resolve.
+- Identical file content is imported once (SHA-256 in game, normalized path
+  outside the game). Per-app versions use import-map scopes; one dependency file
+  shared by apps that need conflicting transitive versions is an explicit error.
+
+Build steps (the facade line is only for an app that uses one):
+
+```powershell
+npm run build     # tsc -b + vite build (+ check-shared-imports, bundle-api-types)
+tacphone-build facade build --app . --package ol --prefix tacphone-ol --out dist/ace_tacphone_ol.js
+```
+
+A facade is one library behind one dependency: `tacphoneFacade()` externalizes
+`ol` and `ol/*` (except `.css`) as `tacphone-ol/...` and writes a manifest to
+`node_modules/.tacphone-facade/<package>.json`; the CLI turns that manifest into
+one compressed facade file exporting `__tacphoneFacade`, and the host expands it
+into per-specifier adapters. One facade core per app; apps do not coordinate.
+The output is a normal `TACPHONE-BUNDLE:` file copied into the app's game
+`data/` folder and declared as a dependency as shown above.
 
 ## StrictMode and lifecycle
 

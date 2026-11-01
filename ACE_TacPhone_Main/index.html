@@ -6,6 +6,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>ace-tacphone-main</title>
 
+    <!--
+      Shim mode: apps and their runtime dependencies are imported through
+      es-module-shims, because a native import map cannot be extended after the
+      first module was fetched. The host itself stays a normal native module.
+    -->
+    <script>window.esmsInitOptions = { shimMode: true };</script>
+
     <!-- Note vite.config.ts plugin will fill in a importmap here! -->
 </head>
 

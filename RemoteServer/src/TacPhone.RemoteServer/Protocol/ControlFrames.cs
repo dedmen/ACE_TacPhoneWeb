@@ -16,6 +16,7 @@ public static class ControlTypes
     public const string ShareRevoke = "share-revoke";
     public const string Kick = "kick";
     public const string Ping = "ping";
+    public const string Files = "files";
 
     // browser -> server
     public const string Attach = "attach";

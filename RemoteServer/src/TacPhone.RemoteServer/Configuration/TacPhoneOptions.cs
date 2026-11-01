@@ -61,6 +61,9 @@ public sealed class TacPhoneOptions
     /// <summary>Global LRU cache for the game's RequestTexture replies.</summary>
     public TextureCacheOptions TextureCache { get; set; } = new();
 
+    /// <summary>Per-host pinned, content-addressed cache for the game's GetFile replies.</summary>
+    public FileCacheOptions FileCache { get; set; } = new();
+
     /// <summary>The URL passed to <c>UseUrls</c>.</summary>
     public string ListenUrl() => $"http://{FormattedBindAddress()}:{Port}";
 
@@ -204,6 +207,26 @@ public sealed class TacPhoneOptions
             problems.Add("TacPhone:TextureCache:PendingTimeoutSeconds must be at least 1.");
         }
 
+        if (FileCache.MaxTotalBytes < 0)
+        {
+            problems.Add("TacPhone:FileCache:MaxTotalBytes must not be negative.");
+        }
+
+        if (FileCache.MaxEntries < 0)
+        {
+            problems.Add("TacPhone:FileCache:MaxEntries must not be negative.");
+        }
+
+        if (FileCache.MaxEntryBytes < 0)
+        {
+            problems.Add("TacPhone:FileCache:MaxEntryBytes must not be negative.");
+        }
+
+        if (FileCache.PendingTimeoutSeconds < 1)
+        {
+            problems.Add("TacPhone:FileCache:PendingTimeoutSeconds must be at least 1.");
+        }
+
         if (LogFileMaxBytes < 0)
         {
             problems.Add("TacPhone:LogFileMaxBytes must not be negative.");
@@ -230,7 +253,10 @@ public sealed class TacPhoneOptions
         $"terrainCacheMaxBytes={TerrainCache.MaxTotalBytes} terrainCachePendingTimeout={TerrainCache.PendingTimeoutSeconds}s " +
         $"textureCache={(TextureCache.Enabled ? "on" : "off")} " +
         $"textureCacheMaxBytes={TextureCache.MaxTotalBytes} textureCacheMaxEntries={TextureCache.MaxEntries} " +
-        $"textureCacheMaxEntryBytes={TextureCache.MaxEntryBytes} textureCachePendingTimeout={TextureCache.PendingTimeoutSeconds}s";
+        $"textureCacheMaxEntryBytes={TextureCache.MaxEntryBytes} textureCachePendingTimeout={TextureCache.PendingTimeoutSeconds}s " +
+        $"fileCache={(FileCache.Enabled ? "on" : "off")} " +
+        $"fileCacheMaxBytes={FileCache.MaxTotalBytes} fileCacheMaxEntries={FileCache.MaxEntries} " +
+        $"fileCacheMaxEntryBytes={FileCache.MaxEntryBytes} fileCachePendingTimeout={FileCache.PendingTimeoutSeconds}s";
 
     private string FormattedBindAddress()
     {
@@ -307,6 +333,31 @@ public sealed class TextureCacheOptions
 
     /// <summary>A payload larger than this is forwarded but not cached.</summary>
     public long MaxEntryBytes { get; set; } = 8L * 1024 * 1024;
+
+    /// <summary>How long a forwarded request may wait for its reply before it is forgotten.</summary>
+    public int PendingTimeoutSeconds { get; set; } = 60;
+
+    /// <summary><see cref="PendingTimeoutSeconds"/> as a duration.</summary>
+    public TimeSpan PendingTimeout() => TimeSpan.FromSeconds(Math.Max(1, PendingTimeoutSeconds));
+}
+
+/// <summary>
+/// Per-host pinned file cache section. Entries are pinned by normalized path and
+/// their content is pooled globally by hash and evicted least-recently-used.
+/// </summary>
+public sealed class FileCacheOptions
+{
+    /// <summary>When false every file request is forwarded as before.</summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>Total cap on pooled content bytes. 0 caches nothing new.</summary>
+    public long MaxTotalBytes { get; set; } = 128L * 1024 * 1024;
+
+    /// <summary>Maximum number of pooled content entries. 0 caches nothing new.</summary>
+    public int MaxEntries { get; set; } = 512;
+
+    /// <summary>A payload larger than this is pinned but not stored.</summary>
+    public long MaxEntryBytes { get; set; } = 16L * 1024 * 1024;
 
     /// <summary>How long a forwarded request may wait for its reply before it is forgotten.</summary>
     public int PendingTimeoutSeconds { get; set; } = 60;

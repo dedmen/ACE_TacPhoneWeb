@@ -27,7 +27,7 @@ The full reference is [`ACE_TacPhone_Map/README.md`](../ACE_TacPhone_Map/README.
 | Game → app command routing | `src/CommandRegistry.ts` |
 | Messenger sharing and `map.marker` renderer | `src/MessagingBridge.ts` |
 | Inter-app service types | `src/api.ts` (source of `dist/ace_tacphone_map.d.ts`) |
-| Generated/copied output | `dist/ace_tacphone_map.js`, `dist/ace_tacphone_map.d.ts`, `../../apps/map/data/ace_tacphone_map.js` |
+| Generated/copied output | `dist/ace_tacphone_map.js`, `dist/ace_tacphone_ol.js` (facade core), `dist/ace_tacphone_map.d.ts`, `../../apps/map/data/ace_tacphone_map.js`, `../../apps/map/data/ace_tacphone_ol.js` |
 
 The map panel reads its live handle from `this.props.panel` and the host from
 `window.TacPhone`. It creates the OpenLayers map, registers the `map` service,
@@ -275,12 +275,23 @@ for the config fields.
 ```powershell
 npm run build          # from this folder, or npm run build -w ace-tacphone-map
 Copy-Item dist\ace_tacphone_map.js ..\..\apps\map\data\ace_tacphone_map.js
+Copy-Item dist\ace_tacphone_ol.js ..\..\apps\map\data\ace_tacphone_ol.js
 ```
 
-The build runs `tsc -b`, Vite, `tacphone-build check-shared-imports`, and
-`bundle-api-types`, producing `dist/ace_tacphone_map.js` and
+The build runs `tsc -b`, Vite, `tacphone-build facade build`, `tacphone-build
+check-shared-imports`, and `bundle-api-types`, producing
+`dist/ace_tacphone_map.js`, `dist/ace_tacphone_ol.js`, and
 `dist/ace_tacphone_map.d.ts`. The `.d.ts` is generated from `src/api.ts`; never
-hand-edit it or a synced copy. The copied JS is git-ignored.
+hand-edit it or a synced copy. The copied JS files are git-ignored.
+
+The Map app externalizes OpenLayers behind the `tacphone-ol` facade
+(`tacphoneFacade({ packageName: 'ol', prefix: 'tacphone-ol' })` in
+`ACE_TacPhone_Map/vite.config.ts`), so `src` keeps ordinary `ol/...` imports and
+the plugin rewrites them to `tacphone-ol/...` at build time. The built
+`ace_tacphone_ol.js` ships as the `tacphone-ol-core` dependency declared in
+`../../apps/map/ace_tacphone_apps.hpp`; `ol/ol.css` stays a normal CSS import
+that the single-file plugin inlines. See
+[`apps.md`](apps.md#runtime-dependencies).
 
 ## Traps
 

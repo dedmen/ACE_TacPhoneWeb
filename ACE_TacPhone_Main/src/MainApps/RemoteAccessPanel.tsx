@@ -1,6 +1,8 @@
 import React from "react";
 import type { AppProps } from "@ace-tacphone/api";
 import { IsArma } from "../Backend/Networking";
+import { appDirectory } from "../Backend/AppDirectory";
+import { sharedModules } from "../Backend/SharedModules";
 
 type RemotePeer = {
     id: string;
@@ -38,10 +40,16 @@ const TTL_OPTIONS = [
 ];
 
 async function remoteCall(command: string, extra: object = {}): Promise<RemoteStatus> {
+    // Start initializes the relay connection, so the file manifest is pulled at
+    // that moment and travels with the request. No extra game round-trip.
+    const payload = command === "Start"
+        ? { ...extra, files: appDirectory.getFileManifest() }
+        : extra;
+
     return await window.TacPhone.networking.Request({
         a: "main",
         c: `RemoteAccess.${command}`,
-        ...extra,
+        ...payload,
     }) as RemoteStatus;
 }
 
@@ -170,7 +178,9 @@ const styles = {
 
 function QrCode({ text }: { text: string }): React.ReactElement | null {
     const svg = React.useMemo(() => {
-        const lib = (window as unknown as { QRCode?: any }).QRCode;
+        const lib = sharedModules.get("qrcode-generator") as
+            | ((typeNumber: number, errorCorrectionLevel: string) => any)
+            | undefined;
         if (!lib || !text) return "";
 
         try {

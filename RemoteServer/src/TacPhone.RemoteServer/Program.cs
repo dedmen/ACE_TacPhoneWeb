@@ -44,6 +44,7 @@ builder.Services.AddSingleton<HostRegistry>();
 builder.Services.AddSingleton<AttachRateLimiters>();
 builder.Services.AddSingleton<TerrainCache>();
 builder.Services.AddSingleton<TextureCache>();
+builder.Services.AddSingleton<FileCache>();
 builder.Services.AddSingleton<RelayEndpoint>();
 builder.Services.AddHostedService<RelayMaintenanceService>();
 
@@ -139,10 +140,11 @@ app.UseStaticFiles(new StaticFileOptions
     },
 });
 
-app.MapGet("/health", (ServerInfo info, HostRegistry registry, TerrainCache terrainCache, TextureCache textureCache, TimeProvider time) =>
+app.MapGet("/health", (ServerInfo info, HostRegistry registry, TerrainCache terrainCache, TextureCache textureCache, FileCache fileCache, TimeProvider time) =>
 {
     var cache = terrainCache.Snapshot();
     var textures = textureCache.Snapshot();
+    var files = fileCache.Snapshot();
 
     return Results.Json(new
     {
@@ -164,6 +166,15 @@ app.MapGet("/health", (ServerInfo info, HostRegistry registry, TerrainCache terr
         textureCacheMisses = textures.Misses,
         textureCacheEvictions = textures.Evictions,
         textureCachePending = textures.Pending,
+        fileCacheEntries = files.Entries,
+        fileCacheBytes = files.Bytes,
+        fileCacheHits = files.Hits,
+        fileCacheMisses = files.Misses,
+        fileCacheEvictions = files.Evictions,
+        fileCachePending = files.Pending,
+        fileCachePinned = files.Pinned,
+        fileCacheSticky = files.Sticky,
+        fileCacheExpected = files.Expected,
     });
 });
 
