@@ -1,10 +1,17 @@
 /**
- * Minimal TacPhone WebSocket client for the Main/host runtime tests.
+ * Minimal TacPhone WebSocket client for the shared test harness.
+ *
+ * This is the one copy used by the host, Map and Messenger Node suites (the app
+ * test folders import it from `ACE_TacPhone_Main/test/lib/ws-client.mjs`).
  *
  * Wire format:
- *   request  -> { k: "<unique key>", d: { a: "main", c: "...", ... } }
+ *   request  -> { k: "<unique key>", d: { a: "<app>", c: "...", ... } }
  *   reply    -> { k: "<same key>", d: <result> }
- *   push     -> { k: "command", d: { a: "main", c: "...", ... } }
+ *   push     -> { k: "command", d: { a: "<app>", c: "...", ... } }
+ *
+ * The client defaults to `a: "main"`; pass `options.app` for the connection's
+ * default app and `{ app }` per request to override it. Binary frames (the
+ * public relay sends raw JSON as binary) are decoded as UTF-8 by RawWebSocket.
  *
  * The TacPhone web host rejects WebSocket handshakes without an allowed
  * `Origin` header, so this uses a small RFC 6455 client over `https.request()`
@@ -40,6 +47,27 @@ export function originFor(url) {
     const scheme = parsed.protocol === 'wss:' ? 'https:' : 'http:';
 
     return `${scheme}//${parsed.host}`;
+}
+
+/** Reads a text frame from any message shape the transports use. */
+function decodeMessageData(data) {
+    if (typeof data === 'string') {
+        return data;
+    }
+
+    if (data instanceof ArrayBuffer) {
+        return new TextDecoder().decode(data);
+    }
+
+    if (ArrayBuffer.isView(data)) {
+        return new TextDecoder().decode(data);
+    }
+
+    if (typeof Blob !== 'undefined' && data instanceof Blob) {
+        return data.text();
+    }
+
+    return String(data);
 }
 
 function certificateHint(message) {
@@ -236,6 +264,11 @@ export class WsClient {
         return this._open;
     }
 
+    /** Number of queued pushes not yet consumed by waitForPush(). */
+    get pendingPushCount() {
+        return this._pushes.length;
+    }
+
     async open() {
         if (this._open) return this;
 
@@ -314,7 +347,9 @@ export class WsClient {
                 socket = new RawWebSocket(upgradedSocket, head);
                 this._socket = socket;
 
-                socket.on('message', event => this._handleText(event.data));
+                socket.on('message', event => {
+                    this._handleData(event.data);
+                });
                 socket.on('close', event => {
                     const description =
                         `WebSocket to ${this.url} closed (code ${event.code}` +
@@ -429,6 +464,23 @@ export class WsClient {
         });
     }
 
+    _handleData(raw) {
+        const decoded = decodeMessageData(raw);
+
+        if (typeof decoded !== 'string') {
+            void decoded
+                .then(text => this._handleText(text))
+                .catch(error => {
+                    if (this.debug) {
+                        console.warn(`[${this.name}] could not read binary frame:`, error);
+                    }
+                });
+            return;
+        }
+
+        this._handleText(decoded);
+    }
+
     _handleText(text) {
         let frame;
 
@@ -474,10 +526,15 @@ export class WsClient {
 
         if (frame.k === 'command') {
             const data = frame.d;
+
+            if (this.debug) {
+                console.log(`[${this.name}] push`, data?.c, data);
+            }
+
             this._pushes.push({ command: data?.c, receivedAt: Date.now(), data });
 
-            if (this._pushes.length > 1000) {
-                this._pushes.splice(0, this._pushes.length - 1000);
+            if (this._pushes.length > 2000) {
+                this._pushes.splice(0, this._pushes.length - 2000);
             }
 
             this._flushWaiters();
@@ -487,10 +544,20 @@ export class WsClient {
         if (typeof frame.k !== 'string') return;
 
         const pending = this._pending.get(frame.k);
-        if (!pending) return;
+        if (!pending) {
+            if (this.debug) {
+                console.warn(`[${this.name}] reply for unknown key`, frame.k, frame.d);
+            }
+            return;
+        }
 
         this._pending.delete(frame.k);
         clearTimeout(pending.timer);
+
+        if (this.debug) {
+            console.log(`[${this.name}] reply`, pending.command, frame.d);
+        }
+
         pending.resolve(frame.d);
     }
 
@@ -501,13 +568,31 @@ export class WsClient {
 
     _flushWaiters() {
         for (const waiter of [...this._waiters]) {
-            const index = this._pushes.findIndex(entry =>
-                this._matches(entry, waiter.command, waiter.predicate),
-            );
+            let matchedIndex = -1;
+            let predicateError;
 
-            if (index < 0) continue;
+            for (let index = 0; index < this._pushes.length; index += 1) {
+                try {
+                    if (this._matches(this._pushes[index], waiter.command, waiter.predicate)) {
+                        matchedIndex = index;
+                        break;
+                    }
+                } catch (error) {
+                    predicateError = error;
+                    break;
+                }
+            }
 
-            const [entry] = this._pushes.splice(index, 1);
+            if (predicateError) {
+                clearTimeout(waiter.timer);
+                this._waiters.delete(waiter);
+                waiter.reject(predicateError);
+                continue;
+            }
+
+            if (matchedIndex < 0) continue;
+
+            const [entry] = this._pushes.splice(matchedIndex, 1);
             clearTimeout(waiter.timer);
             this._waiters.delete(waiter);
             waiter.resolve(entry.data);
@@ -530,10 +615,21 @@ export class WsClient {
         const waitTimeout = timeout ?? this.pushTimeout;
         const expected = command || 'any command';
 
-        const index = this._pushes.findIndex(entry => this._matches(entry, command, predicate));
-        if (index >= 0) {
-            const [entry] = this._pushes.splice(index, 1);
-            return Promise.resolve(entry.data);
+        // Check already queued pushes first. A predicate that throws rejects the
+        // wait instead of being swallowed.
+        for (let index = 0; index < this._pushes.length; index += 1) {
+            let matched = false;
+
+            try {
+                matched = this._matches(this._pushes[index], command, predicate);
+            } catch (error) {
+                return Promise.reject(error);
+            }
+
+            if (matched) {
+                const [entry] = this._pushes.splice(index, 1);
+                return Promise.resolve(entry.data);
+            }
         }
 
         return new Promise((resolve, reject) => {
@@ -553,6 +649,11 @@ export class WsClient {
         });
     }
 
+    /** Alias for {@link waitForPush}; both names are used in scenario files. */
+    waitForCommand(command, predicate, timeout) {
+        return this.waitForPush(command, predicate, timeout);
+    }
+
     /** Sends one `{ k, d }` request and resolves with the matching reply. */
     async request(command, payload = {}, options = {}) {
         if (!this._open) {
@@ -565,11 +666,12 @@ export class WsClient {
 
         const key = options.key || `${this.name}-${++this._nextRequestId}-${randomUUID().slice(0, 8)}`;
         const timeout = options.timeout ?? this.requestTimeout;
+        const app = options.app || this.app;
 
         const frame = {
             k: key,
             d: {
-                a: this.app,
+                a: app,
                 c: command,
                 ...payload,
             },
@@ -600,6 +702,17 @@ export class WsClient {
                 reject(new WsError(`Could not send "${command}": ${error.message}`, { cause: error }));
             }
         });
+    }
+
+    /** Removes queued pushes, either all of them or only the listed commands. */
+    clearPushes(commands) {
+        if (!commands) {
+            this._pushes = [];
+            return;
+        }
+
+        const set = new Set(Array.isArray(commands) ? commands : [commands]);
+        this._pushes = this._pushes.filter(entry => !set.has(entry.command));
     }
 
     _rejectAll(error) {
@@ -666,10 +779,75 @@ export class WsClient {
             // The socket may already be gone.
         }
     }
+
+    /** Closes and reopens the same logical client, optionally clearing old pushes. */
+    async reconnect(options = {}) {
+        const { clearPushes = true } = options;
+
+        await this.close();
+
+        if (clearPushes) {
+            this.clearPushes();
+        }
+
+        await this.open();
+        return this;
+    }
 }
 
 export async function openClient(url = DEFAULT_URL, options = {}) {
     const client = new WsClient(url, options);
     await client.open();
     return client;
+}
+
+/**
+ * Requests a full chat state and collects the chunked `ChatState.Room` pushes
+ * until `ChatState.Done` arrives (Messenger game-side protocol).
+ *
+ * @returns {Promise<{done: object, rooms: Map<string, {
+ *   room: object, messages: object[], chunks: number, receivedChunks: number
+ * }>}>}
+ */
+export async function collectChatState(client, options = {}) {
+    const { clearBefore = true, timeout = client.pushTimeout } = options;
+
+    if (clearBefore) {
+        client.clearPushes(['ChatState.Room', 'ChatState.Done']);
+    }
+
+    const deadline = Date.now() + timeout;
+    const rooms = new Map();
+
+    for (;;) {
+        const remaining = Math.max(1, deadline - Date.now());
+        const push = await client.waitForPush(
+            null,
+            data => data?.c === 'ChatState.Room' || data?.c === 'ChatState.Done',
+            remaining,
+        );
+
+        if (push.c === 'ChatState.Done') {
+            return { done: push, rooms };
+        }
+
+        const roomId = push.room?.id;
+
+        if (!roomId) {
+            continue;
+        }
+
+        const entry = rooms.get(roomId) || {
+            room: push.room,
+            messages: [],
+            chunks: push.chunks,
+            receivedChunks: 0,
+        };
+
+        entry.room = push.room;
+        entry.chunks = push.chunks;
+        entry.receivedChunks += 1;
+        entry.messages.push(...(push.messages || []));
+        rooms.set(roomId, entry);
+    }
 }

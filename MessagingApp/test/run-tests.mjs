@@ -18,9 +18,9 @@ import {
     WsClient,
     collectChatState,
     openClient,
-} from './lib/ws-client.mjs';
+} from '../../ACE_TacPhone_Main/test/lib/ws-client.mjs';
 import { FakePlayers } from './lib/fake-players.mjs';
-import { runSuite } from './lib/assertions.mjs';
+import { runSuite } from '../../ACE_TacPhone_Main/test/lib/assertions.mjs';
 
 import * as connection from './scenarios/connection.test.mjs';
 import * as rooms from './scenarios/rooms.test.mjs';
@@ -242,6 +242,7 @@ async function main() {
     console.log(`Target: ${options.url}`);
 
     const client = new WsClient(options.url, {
+        app: 'Messaging',
         name: 'main',
         connectTimeout: options.timeout,
         requestTimeout: options.timeout,
@@ -275,6 +276,7 @@ async function main() {
             options,
             openClient: overrides =>
                 openClient(options.url, {
+                    app: 'Messaging',
                     name: 'secondary',
                     connectTimeout: options.timeout,
                     requestTimeout: options.timeout,

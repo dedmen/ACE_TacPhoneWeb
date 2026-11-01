@@ -7,7 +7,7 @@ import {
     equal,
     includes,
     ok,
-} from '../lib/assertions.mjs';
+} from '../../../ACE_TacPhone_Main/test/lib/assertions.mjs';
 import {
     FAKE_GROUPS,
     FAKE_UIDS,

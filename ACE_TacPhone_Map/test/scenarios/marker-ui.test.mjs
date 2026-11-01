@@ -9,7 +9,7 @@
  *   npm run test:map -- --scenario marker-ui
  */
 
-import { assert, deepEqual, equal, isType } from '../lib/assertions.mjs';
+import { assert, deepEqual, equal, isType } from '../../../ACE_TacPhone_Main/test/lib/assertions.mjs';
 import { openMapPage, parseArmaColor } from '../lib/map-page.mjs';
 
 export const name = 'marker-ui';

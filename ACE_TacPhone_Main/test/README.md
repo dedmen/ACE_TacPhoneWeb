@@ -52,12 +52,17 @@ From `websource`:
 
 ```powershell
 npm run test:host
+npm run test:host-ui
 node ACE_TacPhone_Main/test/run-tests.mjs --list
 node ACE_TacPhone_Main/test/run-tests.mjs --scenario layout-options --verbose
+node ACE_TacPhone_Main/test/run-browser-tests.mjs --scenario audio --slow
 ```
 
 `npm run test:all` runs this suite together with the Messenger and Map suites
-and prints one summary; `-- --suite host` narrows it.
+and prints one summary; `-- --suite host` (or `-- --suite host-ui`) narrows it.
+`test:host-ui` is the host's Playwright suite (currently the audio unlock
+scenario) and uses the same prerequisites as the other browser suites: the game
+web host and the host dev page.
 
 Useful options:
 
@@ -71,27 +76,41 @@ Useful options:
 
 ## Layout
 
+The `lib/` folder is the **shared** test harness for every browser/Node suite:
+the Map and Messenger tests import it instead of keeping copies. Host test code
+must never import `ACE_TacPhone_Map`, `MessagingApp` or `SampleApp`.
+
 ```text
 test/
-├── run-tests.mjs                    # CLI, connection, scenario runner
+├── run-tests.mjs                    # Node CLI, connection, scenario runner
+├── run-browser-tests.mjs            # Playwright CLI for the host page
 ├── lib/
+│   ├── browser.mjs                  # DEFAULT_PAGE_URL, channel, launchBrowser
+│   ├── host-page.mjs                # launchHostPage, openAppThroughChooser, activatePanelTab, requestApp
+│   ├── skip.mjs                     # SkipError / skip()
 │   ├── ws-client.mjs                # raw RFC 6455 client with Origin header
 │   └── assertions.mjs               # assertion helpers + runSuite
 ├── scenarios/
 │   ├── apps.test.mjs                # GetAvailableApps includes main/Map/Messaging
 │   ├── layout-options.test.mjs      # options envelope survives SaveLayout/GetLayout
 │   ├── remote-access.test.mjs       # relay start, share link, remote clients, dead-peer cleanup
-│   └── display-mode.test.mjs        # Debug.SetLocalDisplayMode CLOSED/HUD/DIALOG/HIDDEN
+│   ├── display-mode.test.mjs        # Debug.SetLocalDisplayMode CLOSED/HUD/DIALOG/HIDDEN
+│   └── audio.test.mjs               # Playwright: first-gesture unlock, keep-alive, pending sound
 └── browser/
     └── options-checklist.md         # manual Options panel / Map settings checks
 ```
+
+App-specific helpers stay in the app's own `test/lib/` (the Map keeps
+`map-page.mjs` with `openMapPage`, `getMapState`, `getMapView` and the
+marker/polyline protocol helpers).
 
 ## Adding a scenario
 
 1. Create `scenarios/<name>.test.mjs`.
 2. Export `name`, an optional `description`, and `async run({ client })`.
 3. Use `client.request(command, payload)`; `a` is always `main`.
-4. Add the module to `ALL_SCENARIOS` in `run-tests.mjs`.
+4. Add the module to `ALL_SCENARIOS` in `run-tests.mjs` (or
+   `run-browser-tests.mjs` for a Playwright scenario).
 5. Restore any game state you change (`SaveLayout` is the only writable main
    command used today).
 

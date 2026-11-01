@@ -17,18 +17,18 @@
  * The suite never imports app or SQF source and never edits the game.
  */
 
-import { DEFAULT_PAGE_URL, browserChannel } from './lib/browser.mjs';
-import { WsClient } from './lib/ws-client.mjs';
-import { SkipError } from './lib/skip.mjs';
+import { DEFAULT_PAGE_URL, browserChannel } from '../../ACE_TacPhone_Main/test/lib/browser.mjs';
+import { DEFAULT_URL, WsClient } from '../../ACE_TacPhone_Main/test/lib/ws-client.mjs';
+import { SkipError } from '../../ACE_TacPhone_Main/test/lib/skip.mjs';
 
 import * as markerProtocol from './scenarios/marker-protocol.test.mjs';
 import * as markerChannels from './scenarios/marker-channels.test.mjs';
 import * as markerUi from './scenarios/marker-ui.test.mjs';
 import * as polylineDraw from './scenarios/polyline-draw.test.mjs';
+import * as polylineEdit from './scenarios/polyline-edit.test.mjs';
 import * as mapView from './scenarios/map-view.test.mjs';
 
-const DEFAULT_URL = 'wss://localhost:8001/ws';
-const ALL_SCENARIOS = [markerProtocol, markerChannels, markerUi, polylineDraw, mapView];
+const ALL_SCENARIOS = [markerProtocol, markerChannels, markerUi, polylineDraw, polylineEdit, mapView];
 
 function printHelp() {
     console.log(`TacPhone Map runtime tests

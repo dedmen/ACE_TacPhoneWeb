@@ -5,7 +5,7 @@
  * event/track paths only in the A3 debug build.
  */
 
-import { assert, equal, ok } from '../lib/assertions.mjs';
+import { assert, equal, ok } from '../../../ACE_TacPhone_Main/test/lib/assertions.mjs';
 import { uniqueRoomName } from '../lib/fake-players.mjs';
 
 async function createAIGroup(client, fake, name, count = 2) {

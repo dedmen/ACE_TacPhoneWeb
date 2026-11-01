@@ -11,15 +11,17 @@
  *   npm run test:messaging-ui -- --slow
  */
 
-import { assert, equal } from '../../../ACE_TacPhone_Map/test/lib/assertions.mjs';
+import { assert, equal } from '../../../ACE_TacPhone_Main/test/lib/assertions.mjs';
 import {
     activatePanelTab,
+    openAppThroughChooser,
+    requestApp,
+} from '../../../ACE_TacPhone_Main/test/lib/host-page.mjs';
+import {
     createMarker,
     deleteMarker,
     getMapView,
-    openAppThroughChooser,
     openMapPage,
-    requestApp,
     requestMap,
     waitForMapView,
     waitForMapViewDebugState,

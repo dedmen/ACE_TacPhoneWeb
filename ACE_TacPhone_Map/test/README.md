@@ -94,11 +94,7 @@ therefore cannot make a marker or polyline assertion flaky.
 test/
 ├── run-tests.mjs                     # CLI, connection, scenario runner
 ├── lib/
-│   ├── ws-client.mjs                 # raw RFC 6455 client with Origin header
-│   ├── assertions.mjs                # assertion helpers
-│   ├── browser.mjs                   # Playwright launcher (installed channel)
-│   ├── map-page.mjs                  # open Map page + game request/state helpers
-│   └── skip.mjs                      # SkipError for missing prerequisites
+│   └── map-page.mjs                  # open Map page + marker/polyline protocol helpers
 ├── scenarios/
 │   ├── marker-protocol.test.mjs      # types/channels, custom RGBA colors, text clamp
 │   ├── marker-channels.test.mjs      # multiplayer layer visibility + active dimming
@@ -109,6 +105,10 @@ test/
     └── marker-create-checklist.md    # manual fallback checklist
 ```
 
+The shared harness (`browser.mjs`, `host-page.mjs`, `skip.mjs`, `assertions.mjs`,
+`ws-client.mjs`) lives in `ACE_TacPhone_Main/test/lib/` and is imported from
+there; only the Map-specific helpers stay in this folder.
+
 ## Adding a scenario
 
 1. Create `scenarios/<name>.test.mjs`.
@@ -118,8 +118,8 @@ test/
    scenarios receive `{ pageUrl, options, log }`.
 4. Add the module to `ALL_SCENARIOS` in `run-tests.mjs`.
 5. Restore any game state you change; delete every marker the scenario creates.
-6. Throw `skip('reason')` (from `../lib/skip.mjs`) when a prerequisite is
-   missing instead of failing.
+6. Throw `skip('reason')` (from `ACE_TacPhone_Main/test/lib/skip.mjs`) when a
+   prerequisite is missing instead of failing.
 
 ## Test analysis rules
 

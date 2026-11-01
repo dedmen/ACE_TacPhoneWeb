@@ -7,13 +7,13 @@
  * from regressing back to an invisible bar.
  */
 
-import { assert, equal } from '../../../ACE_TacPhone_Map/test/lib/assertions.mjs';
+import { assert, equal } from '../../../ACE_TacPhone_Main/test/lib/assertions.mjs';
 import {
     launchHostPage,
     openAppThroughChooser,
     requestApp,
-} from '../../../ACE_TacPhone_Map/test/lib/map-page.mjs';
-import { skip } from '../../../ACE_TacPhone_Map/test/lib/skip.mjs';
+} from '../../../ACE_TacPhone_Main/test/lib/host-page.mjs';
+import { skip } from '../../../ACE_TacPhone_Main/test/lib/skip.mjs';
 
 export const name = 'layout-scrollbars';
 export const kind = 'browser';

@@ -8,9 +8,9 @@
  * scheduling code.
  */
 
-import { assert, equal, isType } from '../../../ACE_TacPhone_Map/test/lib/assertions.mjs';
-import { launchHostPage } from '../../../ACE_TacPhone_Map/test/lib/map-page.mjs';
-import { skip } from '../../../ACE_TacPhone_Map/test/lib/skip.mjs';
+import { assert, equal, isType } from '../../../ACE_TacPhone_Main/test/lib/assertions.mjs';
+import { launchHostPage } from '../../../ACE_TacPhone_Main/test/lib/host-page.mjs';
+import { skip } from '../../../ACE_TacPhone_Main/test/lib/skip.mjs';
 
 export const name = 'audio-notifications';
 export const kind = 'browser';

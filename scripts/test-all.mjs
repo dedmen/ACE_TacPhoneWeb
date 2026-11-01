@@ -4,6 +4,7 @@
  *
  * Runs every app's live suite in one pass:
  *   - host        ACE_TacPhone_Main/test/run-tests.mjs
+ *   - host-ui     ACE_TacPhone_Main/test/run-browser-tests.mjs (Playwright)
  *   - messaging   MessagingApp/test/run-tests.mjs
  *   - messaging-ui MessagingApp/test/run-browser-tests.mjs (Playwright)
  *   - map         ACE_TacPhone_Map/test/run-tests.mjs (protocol + browser)
@@ -33,6 +34,12 @@ const SUITES = [
         script: 'ACE_TacPhone_Main/test/run-tests.mjs',
         description: 'Host page protocol, layout/options, display mode, remote access',
         accepts: ['url', 'timeout', 'verbose'],
+    },
+    {
+        name: 'host-ui',
+        script: 'ACE_TacPhone_Main/test/run-browser-tests.mjs',
+        description: 'Host page Playwright: audio unlock, keep-alive, pending sound',
+        accepts: ['page-url', 'verbose', 'headed', 'slow', 'slow-ms', 'no-browser'],
     },
     {
         name: 'messaging',

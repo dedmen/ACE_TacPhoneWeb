@@ -39,6 +39,7 @@ npm run lint
 npm run check:importmap
 npm run sync:api-types -- <source.d.ts> <target-dir-or-file>...
 npm run test:host      # live host runtime tests; needs the game running
+npm run test:host-ui   # Playwright host page tests (audio); needs the host dev page
 npm run test:messaging # live Messenger WebSocket tests; needs the game running
 npm run test:messaging-ui # Playwright Messenger UI tests; needs the game and host page
 npm run test:map       # Map protocol + Playwright browser tests; needs the game running
@@ -202,12 +203,25 @@ is running.
   `npm run test:messaging-ui` (Playwright Messenger UI, including marker sharing
   and Map focus), and
   `npm run test:map` (see [`ACE_TacPhone_Map/test/README.md`](../ACE_TacPhone_Map/test/README.md);
-  its browser scenario uses Playwright with an installed Chrome channel). The
-  host suite also has a browser checklist for the Options panel and Map settings.
-  `npm run test:all` runs all four sequentially and prints one summary; use
-  `-- --suite host,map`, `-- --no-browser` or `-- --fail-fast` to narrow it.
-  Add `-- --slow` to the browser suites (or `test:all`) to show the Playwright
-  browser and slow every action; `--slow-ms <ms>` changes the delay.
+  its browser scenario uses Playwright with an installed Chrome channel).
+  `npm run test:host-ui` is the host's own Playwright suite (audio unlock,
+  keep-alive and the one pending sound); it takes the same prerequisites as the
+  other browser suites. The host suite also has a browser checklist for the
+  Options panel and Map settings. `npm run test:all` runs all
+  five sequentially and prints one summary; use `-- --suite host,map`,
+  `-- --no-browser` or `-- --fail-fast` to narrow it. Add `-- --slow` to the
+  browser suites (or `test:all`) to show the Playwright browser and slow every
+  action; `--slow-ms <ms>` changes the delay.
+- The shared test harness lives in `ACE_TacPhone_Main/test/lib/`:
+  `browser.mjs` (`DEFAULT_PAGE_URL`, channel, `launchBrowser`), `host-page.mjs`
+  (`launchHostPage`, `openAppThroughChooser`, `activatePanelTab`, `requestApp`),
+  `skip.mjs` (`SkipError`/`skip`), `assertions.mjs` and `ws-client.mjs` (the one
+  RFC 6455 client, with per-request `{ app }` and the Messenger push helpers).
+  App test folders import it and keep only app-specific helpers (the Map keeps
+  `map-page.mjs` with `openMapPage`, `getMapState`, `getMapView` and the
+  marker/polyline protocol helpers; the Messenger keeps `fake-players.mjs`).
+  Never keep a second copy of a shared helper, and `ACE_TacPhone_Main/test` must
+  not import `ACE_TacPhone_Map`, `MessagingApp` or `SampleApp`.
 
 ## `@ace-tacphone/api`
 

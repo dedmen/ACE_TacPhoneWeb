@@ -1,5 +1,8 @@
 /**
- * Playwright bootstrap for the Map browser scenario.
+ * Playwright bootstrap for the TacPhone browser test suites.
+ *
+ * This is the shared harness for the host, Map and Messenger browser scenarios;
+ * app test folders import it instead of keeping a copy.
  *
  * Uses an installed browser channel (`chrome` by default) instead of
  * downloading a Playwright browser build:
@@ -8,7 +11,7 @@
  *
  * Override the channel with `TACPHONE_TEST_BROWSER` (or `PLAYWRIGHT_CHANNEL`).
  * A missing package or browser is a skip, not a failure: the Node marker
- * protocol scenario and the manual checklist stay usable without it.
+ * protocol scenario and the manual checklists stay usable without it.
  */
 
 import { SkipError } from './skip.mjs';
@@ -33,7 +36,7 @@ async function loadPlaywright() {
     throw new SkipError(
         'Playwright is not installed. Install it with ' +
             '`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install -D playwright` and rerun, ' +
-            'or use the manual checklist in ACE_TacPhone_Map/test/browser/.',
+            'or use the manual checklist of the suite you are running.',
     );
 }
 
@@ -57,7 +60,7 @@ export async function launchBrowser(options = {}) {
         throw new SkipError(
             `Could not launch the "${channel}" browser: ${error?.message || String(error)}. ` +
                 'Set TACPHONE_TEST_BROWSER to an installed channel (for example chrome or msedge), ' +
-                'or run the manual checklist in ACE_TacPhone_Map/test/browser/.',
+                'or use the manual checklist of the suite you are running.',
         );
     }
 }

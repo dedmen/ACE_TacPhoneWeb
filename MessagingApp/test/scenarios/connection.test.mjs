@@ -9,8 +9,8 @@ import {
     isString,
     ok,
     oneOf,
-} from '../lib/assertions.mjs';
-import { collectChatState } from '../lib/ws-client.mjs';
+} from '../../../ACE_TacPhone_Main/test/lib/assertions.mjs';
+import { collectChatState } from '../../../ACE_TacPhone_Main/test/lib/ws-client.mjs';
 
 export const name = 'connection';
 export const description = 'Hello returns identity/time/setting and RequestChatState ends with Done.';

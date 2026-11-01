@@ -7,7 +7,7 @@
  * allow-list used only by the test command.
  */
 
-import { assert, ok } from '../lib/assertions.mjs';
+import { assert, ok } from '../../../ACE_TacPhone_Main/test/lib/assertions.mjs';
 import { uniqueRoomName } from '../lib/fake-players.mjs';
 
 export const name = 'group-events';

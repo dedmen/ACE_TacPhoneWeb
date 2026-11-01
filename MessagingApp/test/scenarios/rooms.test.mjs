@@ -10,7 +10,7 @@ import {
     isBoolean,
     isString,
     ok,
-} from '../lib/assertions.mjs';
+} from '../../../ACE_TacPhone_Main/test/lib/assertions.mjs';
 import { fakePlayersForSide, uniqueRoomName } from '../lib/fake-players.mjs';
 
 export const name = 'rooms';

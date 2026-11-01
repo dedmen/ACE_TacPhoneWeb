@@ -14,7 +14,10 @@ Arma's in-game browser.
 - **App settings**: a built-in Options panel, opened from the app chooser. Apps
   register their own options and presets; values persist with the layout.
 - **Notifications and sounds**: toast banners with optional tap actions and
-  built-in synthesised notification sounds.
+  built-in synthesised notification sounds. The phone must be clicked once
+  before autonomous sounds can play: browsers only unlock audio on a user
+  gesture, and later sounds (including app-driven ones) reuse that unlocked
+  context.
 - **Inter-app services**: apps can expose versioned APIs to each other, for
   example Messenger opening a marker on the Map.
 - **Demand-driven data**: apps announce interests so the game only streams data

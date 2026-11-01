@@ -6,7 +6,7 @@
  * verifies the flag and that AI members are not added.
  */
 
-import { assert, equal, ok } from '../lib/assertions.mjs';
+import { assert, equal, ok } from '../../../ACE_TacPhone_Main/test/lib/assertions.mjs';
 import { uniqueRoomName } from '../lib/fake-players.mjs';
 
 export const name = 'groups';

@@ -9,8 +9,8 @@
  * it never imports app or SQF source. Every marker it creates is deleted again.
  */
 
-import { assert, equal, includes, isString, isType } from '../lib/assertions.mjs';
-import { skip } from '../lib/skip.mjs';
+import { assert, equal, includes, isString, isType } from '../../../ACE_TacPhone_Main/test/lib/assertions.mjs';
+import { skip } from '../../../ACE_TacPhone_Main/test/lib/skip.mjs';
 
 export const name = 'marker-protocol';
 export const kind = 'node';

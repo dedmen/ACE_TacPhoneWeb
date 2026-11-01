@@ -13,7 +13,7 @@
  * dimming and resolved colors that the OpenLayers style functions apply.
  */
 
-import { assert, equal } from '../lib/assertions.mjs';
+import { assert, equal } from '../../../ACE_TacPhone_Main/test/lib/assertions.mjs';
 import {
     colorToHex,
     createMarker,

@@ -10,7 +10,7 @@
  * the next game push (usually `PlayerList.State`, `Room.Upsert` or `Message.New`).
  */
 
-import { collectChatState } from './ws-client.mjs';
+import { collectChatState } from '../../../ACE_TacPhone_Main/test/lib/ws-client.mjs';
 
 /** Debug command names, mirroring `MessagingApp/src/debug.ts`. */
 export const DEBUG_COMMANDS = {
@@ -92,7 +92,7 @@ export function delay(milliseconds) {
     return new Promise(resolve => setTimeout(resolve, milliseconds));
 }
 
-/** Thin wrapper around a connected {@link import('./ws-client.mjs').WsClient}. */
+/** Thin wrapper around a connected {@link import('../../../ACE_TacPhone_Main/test/lib/ws-client.mjs').WsClient}. */
 export class FakePlayers {
     constructor(client, options = {}) {
         this.client = client;

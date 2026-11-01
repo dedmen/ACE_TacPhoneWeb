@@ -41,6 +41,16 @@ the add-on stringtable; see [`localization.md`](localization.md).
   debug-only `Debug.RoomInfo`.
 - Room invites use the chat object kind `messaging.room_invite` with
   `{ roomId, roomName, inviteKey?, kind?, inviterName? }`.
+- Chat objects are stored compressed (`MessagingApp/src/objectCodec.ts`): the
+  `SendMessage` payload carries `kind`/`version`/`preview` plus a
+  gzip+base64 envelope `__tacphoneObject { v: 1, codec: 'gzip', enc: 'base64', d }`
+  holding `{ data, action }`. Payloads under 512 JSON characters, and payloads
+  that do not shrink, stay plain; an object that already has the envelope is
+  never compressed again (forwarding). `ChatStore` decodes every `Message.New`
+  and `ChatState.Room` object through a FIFO push queue, caches decoded payloads
+  and enforces `MAX_ENCODED_MESSAGE_CHARS` (96 KiB per message) before sending;
+  a broken payload falls back to `{ kind, version, preview }`. The game stores
+  the envelope opaquely and has no size or type checks.
 - The `messenger` service (version `1`) implements `MessengerApi` and is
   registered from the panel lifecycle. `shareObject()` opens the target selector
   through `dialogBus.ts` and resolves on send or cancel; other apps register

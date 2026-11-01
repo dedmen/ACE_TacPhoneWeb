@@ -16,7 +16,10 @@ markers. The web half lives here; the game half is the server-authoritative
 - Optional debug toolbar in `__A3_DEBUG__` builds with `allowDebug` enabled.
 - Chat objects: messages can carry shared cards from other apps. The Map app
   uses this to share markers, with a click action that focuses the marker on the
-  Map.
+  Map. Object payloads are gzip+base64 encoded for storage
+  (`src/objectCodec.ts`); the game never inspects them and Messenger decodes
+  them again before rendering, so providers always hand over a plain
+  `ChatObject`.
 
 ## Usage
 

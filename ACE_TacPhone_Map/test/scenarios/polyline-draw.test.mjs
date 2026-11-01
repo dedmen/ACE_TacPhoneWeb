@@ -16,7 +16,7 @@
  *   npm run test:map -- --scenario polyline-draw
  */
 
-import { assert, equal } from '../lib/assertions.mjs';
+import { assert, equal } from '../../../ACE_TacPhone_Main/test/lib/assertions.mjs';
 import {
     deleteMarker,
     getAllMarkers,

@@ -12,8 +12,8 @@
  * `Messaging.Debug.*` commands, and the host page must serve the Messenger app.
  */
 
-import { SkipError } from '../../ACE_TacPhone_Map/test/lib/skip.mjs';
-import { DEFAULT_PAGE_URL } from '../../ACE_TacPhone_Map/test/lib/browser.mjs';
+import { SkipError } from '../../ACE_TacPhone_Main/test/lib/skip.mjs';
+import { DEFAULT_PAGE_URL } from '../../ACE_TacPhone_Main/test/lib/browser.mjs';
 import * as browserUi from './scenarios/browser-ui.test.mjs';
 import * as layoutScrollbars from './scenarios/layout-scrollbars.test.mjs';
 import * as audioNotifications from './scenarios/audio-notifications.test.mjs';

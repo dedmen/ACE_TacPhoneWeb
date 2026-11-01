@@ -323,11 +323,31 @@ remain visible.
 
 Sounds are synthesised with oscillators and gain envelopes: there are no audio
 assets and no `new Audio()` elements. The single `AudioContext` is created
-lazily, and `pointerdown`/`keydown` listeners installed at module load create and
-resume it, so the autoplay policy is satisfied by the first user gesture.
-`play()` never queues on a suspended context (a queued sound would only fire on a
-later click); it tries to resume and drops that sound. Without Web Audio the
-engine logs one warning and becomes a no-op.
+lazily on the first user gesture (`pointerdown`/`keydown`/`touchstart`/
+`mousedown`, installed at module load with capture + passive), and the gesture
+listeners stay installed for the page lifetime. `visibilitychange` and `focus`
+also resume a context that backgrounding suspended, so a returning page keeps
+autonomous sounds working.
+
+`play()` drops the sound before the first gesture: the browser autoplay policy
+would only release it on some later random click. After the first gesture, a
+suspended context keeps **at most one pending preset**: `play()` stores it,
+resumes, and schedules it when `resume()` settles within ~500 ms; otherwise the
+pending sound is dropped. A running context plays immediately. The per-preset
+cooldown (400 ms) is the burst guard. Without Web Audio the engine logs one
+warning and becomes a no-op.
+
+`Backend/AudioTestHooks.ts` installs `window.__TACPHONE_AUDIO_TEST__` only in
+the Vite dev server or a game debug build (same pattern as the Map's
+`__TACPHONE_MAP_TEST__`); `Host.ts` calls it after the host object is built. It
+exposes `getState()` (`state`, `currentTime`, `hasUserGesture`, `pending`,
+`scheduled`, `completed`, `lastPeak`), `play(sound)`, `suspend()`, `resume()`
+and `renderOffline(sound)`. Enabling it also turns on a debug analyser tap
+(`gain -> analyser -> destination`) and a `samplePeak()` poll that uses
+`getByteTimeDomainData`, which proves the graph produced non-silent samples;
+`renderOffline()` renders the same `PRESETS` through an `OfflineAudioContext`
+for a deterministic check on a headless (silent) sink. The
+`test/scenarios/audio.test.mjs` Playwright scenario uses them.
 
 Notification sounds and `setSinkId()` share the same context, so a sink change
 applies to every sound. Mirroring Arma's audio output device is future

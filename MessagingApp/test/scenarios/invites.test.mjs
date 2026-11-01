@@ -14,9 +14,9 @@ import {
     isString,
     matchString,
     ok,
-} from '../lib/assertions.mjs';
+} from '../../../ACE_TacPhone_Main/test/lib/assertions.mjs';
 import { fakePlayersForSide, uniqueRoomName } from '../lib/fake-players.mjs';
-import { collectChatState } from '../lib/ws-client.mjs';
+import { collectChatState } from '../../../ACE_TacPhone_Main/test/lib/ws-client.mjs';
 
 export const name = 'invites';
 export const description = 'Invite card object, invalid key rejection and JoinRoom resync.';

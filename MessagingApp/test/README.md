@@ -71,8 +71,6 @@ test/
 ├── run-tests.mjs                  # CLI, opens the connection, runs scenarios
 ├── run-browser-tests.mjs          # Playwright Messenger UI suite
 ├── lib/
-│   ├── ws-client.mjs              # request/reply, push queue, reconnect, chat sync
-│   ├── assertions.mjs             # assert helpers + sequential scenario runner
 │   └── fake-players.mjs           # Messaging.Debug.* helpers and fake fixtures
 ├── scenarios/
 │   ├── connection.test.mjs        # Hello identity, RequestChatState -> Done
@@ -96,17 +94,19 @@ test/
 
 ## How the helpers work
 
-`lib/ws-client.mjs`:
+`ACE_TacPhone_Main/test/lib/ws-client.mjs` (shared harness):
 
-- `new WsClient(url)` / `openClient(url)` connect to
-  `wss://localhost:8001/ws` by default and send the same loopback `Origin` a
-  browser would send.
+- `new WsClient(url, { app: 'Messaging' })` / `openClient(url, { app: 'Messaging' })`
+  connect to `wss://localhost:8001/ws` by default and send the same loopback
+  `Origin` a browser would send. The client defaults to `a: "main"`, so the
+  Messenger suite always passes its app name.
 - `request(command, payload)` sends one request and waits for the reply with the
   matching key, with a clear timeout error.
 - `waitForPush(command, predicate, timeout)` / `waitForCommand(...)` consume the
   next matching game push. `collectChatState(client)` gathers all
   `ChatState.Room` chunks until `ChatState.Done`.
 - `reconnect()` closes and reopens the same client and clears stale pushes.
+- `clearPushes(commands)` and `pendingPushCount` manage the push queue.
 
 `lib/fake-players.mjs`:
 
@@ -123,9 +123,9 @@ test/
   server result (see below). `setLocalDisplayMode()` calls the Main app's
   `Debug.SetLocalDisplayMode` command, because display mode belongs to the host.
 
-`lib/assertions.mjs` provides `assert`/`ok`/`equal`/`deepEqual`/`includes`/
-`isString`/`isNumber`/`isBoolean`/`oneOf`, readable `expected`/`actual` output,
-and `runSuite()`.
+`ACE_TacPhone_Main/test/lib/assertions.mjs` provides `assert`/`ok`/`equal`/
+`deepEqual`/`includes`/`isString`/`isNumber`/`isBoolean`/`oneOf`, readable
+`expected`/`actual` output, and `runSuite()`.
 
 ## Adding a scenario
 

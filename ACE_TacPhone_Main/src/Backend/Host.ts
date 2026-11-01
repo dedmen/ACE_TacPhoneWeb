@@ -23,6 +23,7 @@ import { notificationCenter } from "./Notifications";
 import { gameInfo } from "./GameInfo";
 import { localization } from "./Localization";
 import { audio } from "./Audio";
+import { installAudioTestHooks } from "./AudioTestHooks";
 import { appOptions } from "./AppOptions";
 import { CommandRegistry } from "./MessageRouter";
 import { PanelContext, usePanel } from "../Panels/PanelContext";
@@ -99,4 +100,6 @@ export function GetTacPhoneHost(): InternalTacPhoneHost {
 // is in its temporal dead zone.
 queueMicrotask(() => {
     GetTacPhoneHost();
+    // Debug-only `window.__TACPHONE_AUDIO_TEST__`; see Backend/AudioTestHooks.ts.
+    installAudioTestHooks();
 });

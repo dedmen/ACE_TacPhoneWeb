@@ -5,7 +5,7 @@
  * in-game group was invited cannot leave individually.
  */
 
-import { assert, equal, includes, ok } from '../lib/assertions.mjs';
+import { assert, equal, includes, ok } from '../../../ACE_TacPhone_Main/test/lib/assertions.mjs';
 import { fakePlayersForSide, uniqueRoomName } from '../lib/fake-players.mjs';
 
 export const name = 'leave';

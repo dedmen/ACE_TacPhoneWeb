@@ -74,9 +74,14 @@ section in the same change.
   for a release or shipping build.
 - `dist/`, `data/index.html`, and `apps/*/data/*.js` are generated, git-ignored
   artifacts. Never edit them by hand. Live runtime suites need the game and web
-  host running (`npm run test:host`, `npm run test:messaging`, `npm run test:map`,
-  or `npm run test:all`); release builds strip `console.log/debug/info` and keep
-  `warn`/`error`. Node 20.19+ or 22.12+.
+  host running (`npm run test:host`, `npm run test:host-ui`,
+  `npm run test:messaging`, `npm run test:map`, or `npm run test:all`); release
+  builds strip `console.log/debug/info` and keep `warn`/`error`. Node 20.19+ or
+  22.12+.
+- **Test harness**: the shared browser/Node helpers live in
+  `ACE_TacPhone_Main/test/lib/`; app test folders import them and keep only
+  app-specific helpers. `ACE_TacPhone_Main/test` must not import another app's
+  test code.
 - **Test analysis**: Automated tests must be deterministic and headless-capable.
   Prefer DOM, attribute, geometry and `getComputedStyle()` assertions over pixel
   inspection. OCR/image analysis is allowed only when it runs locally on the test

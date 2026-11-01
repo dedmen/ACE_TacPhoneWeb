@@ -10,13 +10,13 @@ import {
     assert,
     equal,
     ok,
-} from '../lib/assertions.mjs';
+} from '../../../ACE_TacPhone_Main/test/lib/assertions.mjs';
 import {
     delay,
     fakePlayersForSide,
     uniqueRoomName,
 } from '../lib/fake-players.mjs';
-import { collectChatState } from '../lib/ws-client.mjs';
+import { collectChatState } from '../../../ACE_TacPhone_Main/test/lib/ws-client.mjs';
 
 export const name = 'presence';
 export const description = 'Local display modes, external visibility and fake player presence.';

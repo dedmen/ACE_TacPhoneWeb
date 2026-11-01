@@ -9,7 +9,7 @@
  *   npm run test:map -- --scenario map-view --slow
  */
 
-import { assert, equal } from '../lib/assertions.mjs';
+import { assert, equal } from '../../../ACE_TacPhone_Main/test/lib/assertions.mjs';
 import {
     createMarker,
     deleteMarker,
