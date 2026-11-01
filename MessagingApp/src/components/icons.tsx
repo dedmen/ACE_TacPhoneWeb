@@ -139,12 +139,3 @@ export function WarningIcon({ className }: IconProps): JSX.Element {
         </Svg>
     );
 }
-
-export function PinIcon({ className }: IconProps): JSX.Element {
-    return (
-        <Svg className={className}>
-            <path d="M8 14s4.5-4.2 4.5-7.3A4.5 4.5 0 0 0 3.5 6.7C3.5 9.8 8 14 8 14z" />
-            <circle cx="8" cy="6.6" r="1.6" />
-        </Svg>
-    );
-}

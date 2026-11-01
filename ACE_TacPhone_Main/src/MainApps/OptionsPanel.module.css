@@ -174,8 +174,6 @@
 .ResetButton:focus-visible,
 .PresetButton:focus-visible,
 .AppButton:focus-visible,
-.Select:focus-visible,
-.SelectOption:focus-visible,
 .NumberInput:focus-visible,
 .TextInput:focus-visible,
 .Range:focus-visible,
@@ -275,92 +273,9 @@
     cursor: pointer;
 }
 
-.SelectWrap {
+.SelectControl {
     width: 170px;
     max-width: 170px;
-    display: flex;
-    flex-direction: column;
-}
-
-.Select {
-    width: 100%;
-    height: 30px;
-    padding: 0 8px;
-    box-sizing: border-box;
-
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-
-    font: inherit;
-    font-size: 12px;
-    color: #f2f2f5;
-    text-align: left;
-    background-color: #232737;
-    border: 1px solid rgba(255, 255, 255, 0.16);
-    border-radius: 7px;
-    cursor: pointer;
-}
-
-.Select::after {
-    content: "";
-    flex: 0 0 auto;
-    width: 0;
-    height: 0;
-    border-left: 4px solid transparent;
-    border-right: 4px solid transparent;
-    border-top: 5px solid #c7cad6;
-}
-
-.SelectValue {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.SelectMenu {
-    margin-top: 4px;
-    padding: 3px;
-    max-height: 190px;
-    overflow-y: auto;
-
-    display: flex;
-    flex-direction: column;
-
-    background-color: #232737;
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    border-radius: 7px;
-    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
-
-    scrollbar-width: thin;
-    scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
-}
-
-.SelectOption {
-    width: 100%;
-    padding: 6px 8px;
-    box-sizing: border-box;
-
-    font: inherit;
-    font-size: 12px;
-    color: #f2f2f5;
-    text-align: left;
-    background: none;
-    border: 0;
-    border-radius: 5px;
-    cursor: pointer;
-}
-
-.SelectOption:hover {
-    background-color: rgba(255, 255, 255, 0.09);
-}
-
-.SelectOptionSelected,
-.SelectOptionSelected:hover {
-    color: #fff;
-    background-color: rgba(122, 167, 255, 0.3);
 }
 
 .NumberRow {
@@ -408,8 +323,7 @@
 }
 
 .NumberInput:focus,
-.TextInput:focus,
-.Select:focus {
+.TextInput:focus {
     background-color: rgba(255, 255, 255, 0.11);
     border-color: #7aa7ff;
     box-shadow: 0 0 0 3px rgba(122, 167, 255, 0.15);
@@ -447,7 +361,7 @@
         padding: 18px 22px 32px;
     }
 
-    .SelectWrap {
+    .SelectControl {
         width: 210px;
         max-width: 210px;
     }
@@ -497,7 +411,7 @@
         justify-content: flex-start;
     }
 
-    .SelectWrap,
+    .SelectControl,
     .TextInput {
         width: 100%;
         max-width: none;

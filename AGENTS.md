@@ -22,6 +22,7 @@ its own file map, rules, and links to the deeper READMEs.
 | Game side: SQF, config, request/response protocol, interests, extension bridge | [`AGENTS/sqf.md`](AGENTS/sqf.md) |
 | Host UI (`ACE_TacPhone_Main`): panels, layout, app loading, networking, inter-app, notifications | [`AGENTS/host.md`](AGENTS/host.md) |
 | Map app (`ACE_TacPhone_Map`), web UI or game-side handlers | [`AGENTS/map.md`](AGENTS/map.md) |
+| Messenger app (`MessagingApp`) and game-side messaging server | [`AGENTS/messaging.md`](AGENTS/messaging.md) |
 | App contract, packaging, creating an app, SampleApp | [`AGENTS/apps.md`](AGENTS/apps.md) |
 | Workspace commands, packages, build/release, tooling | [`AGENTS/build.md`](AGENTS/build.md) |
 | Development server, app discovery, VS Code debugging | [`AGENTS/dev.md`](AGENTS/dev.md) |
@@ -63,8 +64,9 @@ section in the same change.
   when the user explicitly asks for a release or shipping build.
 - `dist/`, `data/index.html`, and `apps/*/data/*.js` are generated, git-ignored
   artifacts. Never edit them by hand. Live runtime suites need the game and web
-  host running (`npm run test:host`, `npm run test:messaging`); release builds
-  strip `console.log/debug/info` and keep `warn`/`error`. Node 20.19+ or 22.12+.
+  host running (`npm run test:host`, `npm run test:messaging`, `npm run test:map`,
+  or `npm run test:all`); release builds strip `console.log/debug/info` and keep
+  `warn`/`error`. Node 20.19+ or 22.12+.
 - **Test analysis**: Automated tests must be deterministic and headless-capable.
   Prefer DOM, attribute, geometry and `getComputedStyle()` assertions over pixel
   inspection. OCR/image analysis is allowed only when it runs locally on the test
@@ -75,11 +77,17 @@ section in the same change.
 
 ## Deeper reference
 
-- [`ACE_TacPhone_Main/README.md`](ACE_TacPhone_Main/README.md) — host contract,
-  app authoring, inter-app API, interests, notifications, packaging.
-- [`ACE_TacPhone_Map/README.md`](ACE_TacPhone_Map/README.md) — reference app.
-- [`SampleApp/README.md`](SampleApp/README.md) — minimal end-to-end app and the
-  new-app checklist.
+- [`AGENTS/host.md`](AGENTS/host.md) — host internals: panels, layout, loader,
+  transport, inter-app registry, interests, notifications, options.
+- [`AGENTS/apps.md`](AGENTS/apps.md) — app contract, services, interests,
+  packaging, runtime dependencies, creating/renaming an app.
+- [`AGENTS/map.md`](AGENTS/map.md) — Map app internals and game-side handlers.
+- [`AGENTS/messaging.md`](AGENTS/messaging.md) — Messenger internals and its
+  game-side server.
+- [`ACE_TacPhone_Main/README.md`](ACE_TacPhone_Main/README.md) — host overview,
+  development and build.
+- [`ACE_TacPhone_Map/README.md`](ACE_TacPhone_Map/README.md) — Map features and usage.
+- [`SampleApp/README.md`](SampleApp/README.md) — minimal end-to-end app.
 - [`packages/tacphone-api/README.md`](packages/tacphone-api/README.md) — exported
   contract types.
 - [`packages/tacphone-build/README.md`](packages/tacphone-build/README.md) —

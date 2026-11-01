@@ -27,6 +27,7 @@ import { CommandRegistry } from "./MessageRouter";
 import { PanelContext, usePanel } from "../Panels/PanelContext";
 import { compressAndToBase64, decompressFromBase64 } from "./Compression";
 import { sharedModules } from "./SharedModules";
+import { SelectMenu } from "../Components/SelectMenu";
 
 /**
  * The host object plus the internal module registry.
@@ -64,6 +65,9 @@ function createHost(): InternalTacPhoneHost {
         gameInfo,
         options: appOptions,
         modules: sharedModules,
+        components: {
+            SelectMenu,
+        },
         utils: {
             CommandRegistry,
             PanelContext,

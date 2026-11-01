@@ -170,15 +170,14 @@ check does not hide the next.
       Expected: the marker card still renders from the stored preview even if
       the Map app is not open.
 
-## 8. Deleted marker and "Show last known position"
+## 8. Deleted marker fallback (owned by the Map app)
 
 - [ ] Share a marker, then delete that marker in the Map app.
 - [ ] Click the marker card in Messenger.
-      Expected: Messenger reports "This marker was deleted" (or equivalent),
-      keeps the card visible, and offers "Show last known position".
-- [ ] Click "Show last known position".
-      Expected: the Map app opens/focuses and centers on the stored
-      `data.position` using `flyTo`; no error is raised.
+      Expected: the Map app opens/focuses, centers on the stored `data.position`,
+      draws the temporary highlight and shows "Marker no longer exists / Showing
+      its last known position." Messenger keeps the card and shows no map-specific
+      "Show last known position" UI; that logic lives in the Map app.
 - [ ] With no Map panel open, click the card.
       Expected: the host opens/activates a Map panel first, then focuses the
       marker (or falls back after `focusMarker` returns false).
@@ -197,7 +196,7 @@ check does not hide the next.
 - [ ] Cancel the chooser.
       Expected: no panel changes; the marker card remains usable.
 - [ ] Delete the marker, repeat the click and choose a Map panel.
-      Expected: the deleted-marker fallback from section 7 still applies to the
+      Expected: the deleted-marker fallback from section 8 still applies to the
       chosen panel.
 
 ## 10. Release build has no debug UI

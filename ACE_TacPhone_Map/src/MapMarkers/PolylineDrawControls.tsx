@@ -1,5 +1,7 @@
 import React from 'react';
 import type { MarkerColor } from './MarkerLayer';
+import { ColorSwatchPicker } from './ColorSwatchPicker';
+import { parseMarkerColor } from './MarkerColorUtils';
 import PolylineStyle from './PolylineDrawControls.module.scss';
 
 export interface PolylineDrawControlsProps {
@@ -79,18 +81,21 @@ export function PolylineDrawControls({
                         <div className={PolylineStyle.panel_muted}>Loading colors…</div>
                     ) : (
                         <div className={PolylineStyle.swatch_grid}>
-                            {colors.map((color) => (
-                                <button
-                                    key={color.className}
-                                    type="button"
-                                    className={`${PolylineStyle.swatch}${color.className === selectedColor ? ` ${PolylineStyle.swatch_selected}` : ''}`}
-                                    style={{ backgroundColor: color.color }}
-                                    title={color.name || color.className}
-                                    aria-label={color.name || color.className}
-                                    aria-pressed={color.className === selectedColor}
-                                    onClick={() => onSelectColor(color.className)}
-                                />
-                            ))}
+                            <ColorSwatchPicker
+                                colors={colors}
+                                selectedColor={selectedColor}
+                                onSelect={onSelectColor}
+                                excludeClassName="Default"
+                                onCustomColorChange={onSelectColor}
+                                customColor={parseMarkerColor(selectedColor) ? selectedColor : undefined}
+                                testId="polyline-color-picker"
+                                swatchTestId="polyline-color-swatch"
+                                customTestId="polyline-color-custom"
+                                customInputTestId="polyline-color-custom-input"
+                                customAlphaTestId="polyline-color-custom-alpha"
+                                customPopoverTestId="polyline-color-custom-popover"
+                                ariaLabel="Polyline color"
+                            />
                         </div>
                     )}
 

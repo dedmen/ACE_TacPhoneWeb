@@ -1,144 +1,113 @@
-# Messenger app (TacPhone)
+# Messenger app
 
-Messaging/chat app for TacPhone. This folder is the web half; the game half
-lives in `addons/tacphone/apps/messaging`.
+Messaging/chat app for TacPhone: direct and group rooms, invites, member
+management, forwarding, presence, unread badges and shared objects such as map
+markers. The web half lives here; the game half is the server-authoritative
+`Messaging` app in `addons/tacphone/apps/messaging`.
 
-| Item | Value |
-| --- | --- |
-| Visible app / tab title | `Messenger` |
-| Config class / routing key / panel id | `Messaging` |
-| Inter-app service | `messenger` (version `1`) |
-| npm package | `ace-tacphone-messaging` |
-| Build output | `dist/ace_tacphone_messaging.js` |
-| Generated declarations | `dist/ace_tacphone_messaging.d.ts` |
-| Game copy target | `addons/tacphone/apps/messaging/data/ace_tacphone_messaging.js` |
-| Dev entry (`ace_tacphone_devFile`) | `src\main.tsx` |
+## Features
+
+- Direct and group rooms with a searchable room list, last-message preview and
+  unread counts.
+- Create rooms, add/remove participants (players or whole groups), leave rooms.
+- Invites with Join cards and group membership system messages.
+- Message forwarding, including forwarding into a new room.
+- Presence (`available`, `minimized`, `offline`) and side filtering.
+- Optional debug toolbar in `__A3_DEBUG__` builds with `allowDebug` enabled.
+- Chat objects: messages can carry shared cards from other apps. The Map app
+  uses this to share markers, with a click action that focuses the marker on the
+  Map.
+
+## Usage
+
+Open **Messenger** from the app chooser. On a wide panel the room list and chat
+share the screen; on a narrow panel the chat replaces the list and a back button
+returns to it. Enter sends a message.
+
+Room actions are in the room header and the compose area: add participants,
+members/leave, forward a message, and share an object (when another app offers
+one). The target selector can send to an existing room or create a new one.
 
 ## Development
 
 `websource` is an npm workspace: install once at its root.
 
 ```powershell
-cd websource
 npm install
 npm run dev -w ace-tacphone-messaging
 ```
 
-`npm run dev` forwards to `../ACE_TacPhone_Main`, so the app runs inside the
-host page with `window.TacPhone` and the host import map. Open the printed URL
-(normally `http://localhost:5173`) and pick **Messenger** in the app chooser.
-
-Discovery uses `package.json`:
-
-```json
-"tacphone": { "app": "Messaging" }
-```
+`npm run dev` forwards to the host, so the app runs inside the host page with
+`window.TacPhone`, the host import map and the WebSocket connection. Open the
+printed URL (normally `http://localhost:5173`) and pick **Messenger** in the app
+chooser. The host discovers the folder through
+`"tacphone": { "app": "Messaging" }` in `package.json`.
 
 ## Build
 
 ```powershell
 npm run build:debug -w ace-tacphone-messaging   # default for development
-npm run build -w ace-tacphone-messaging         # release, only when explicitly requested
+npm run build -w ace-tacphone-messaging         # release, only when requested
 ```
 
-Both run `tsc -b`, `vite build`, the shared-import check and
-`tacphone-build bundle-api-types`. The result is one self-contained ESM bundle
-plus the generated service declarations.
+The build emits a single self-contained `dist/ace_tacphone_messaging.js` and the
+generated `dist/ace_tacphone_messaging.d.ts` service types. The root
+`npm run build:debug` also copies the bundle into
+`addons/tacphone/apps/messaging/data/`. Packaging rules are in
+[`AGENTS/apps.md`](../AGENTS/apps.md).
 
-The root `npm run build:debug` / `build:apps` scripts also run
-`scripts/copy-data.mjs`, which copies the JS into `apps\messaging\data\`.
-Building this package directly does not copy; use `npm run copy:data` from the
-workspace root if needed. The output path is already in the ACE3 root
-`.gitignore`.
+The game side must be built and loaded: build the PBO from the ACE3 root
+(`hemtt build --no-bin` for a local build) and restart Arma after changing the
+app registration.
 
-For a full development build, run this from `websource`; the script builds every
-app and copies all game-side outputs:
+## Inter-app service
+
+Each mounted Messenger panel registers the `messenger` service (version `1`):
+
+| Method | Meaning |
+| --- | --- |
+| `getRooms()` / `getRoom(id)` | Room summaries, newest message first. |
+| `openRoom(id)` | Select a room in the panel, opening Messenger if needed. |
+| `sendMessage(roomId, content, objects?)` | Send text with optional chat objects. |
+| `shareObject(object, options?)` | Open the target selector and resolve on send/cancel; pass `roomId` to send directly. |
+| `joinRoom(roomId, inviteKey?)` | Join through an invite. |
+| `registerObjectRenderer(renderer)` | Render a chat object kind and own its click behavior (`activate`); returns the unregister function. |
+
+The app that provides an object kind registers its renderer and activation. For
+example, the Map app owns `map.marker` previews and focusing the marker;
+Messenger contains no kind-specific routing.
+
+Resolve it with
+`window.TacPhone.interApp.resolveAsync({ service: 'messenger', panelId: 'Messaging', openIfMissing: true })`.
+Types come from the generated declaration.
+
+## Tests
 
 ```powershell
-npm run check
-npm run build:debug
-npm run check:importmap
+npm run test:messaging
+npm run test:messaging-ui
+npm run test:all
 ```
 
-Use `npm run build` only when the user explicitly asks for a release build.
+`test:messaging` is the Node WebSocket suite; `test:messaging-ui` drives the
+Messenger panel with Playwright (rooms, messages, marker sharing and the Map
+focus highlight). Both need a running `__A3_DEBUG__` game, the TacPhone web host
+and a trusted local HTTPS certificate. Add `-- --slow` to the UI suite to watch
+the browser.
 
-Then run `hemtt check` and `hemtt build --no-bin` from the ACE3 root. The PBO
-contains `apps\messaging\data\ace_tacphone_messaging.js` and registers the
-`Messaging` app through `apps\messaging\ace_tacphone_apps.hpp`.
+## Limitations
 
-## Status
+- Message history is not persisted across sessions yet; the game-side
+  persistence is scaffolding and disabled.
+- Relayed requests answer `pending: true` immediately, so dialogs that need the
+  server's new room id cannot select or report it from the response.
+- Participant group colors are not available yet.
+- The last open room is not restored after the app remounts.
 
-Implemented (web side):
+## Related documentation
 
-- app registration (`GetTacPhoneApps`, panel id `Messaging`, title `Messenger`),
-  one `OnMessageFromGame` routed through `window.TacPhone.utils.CommandRegistry`;
-- the public inter-app contract in `src/api.ts` (kept import-free) and the
-  internal request/push types in `src/protocol.ts`;
-- a module-level `chatStore` in `src/state/ChatStore.ts`: chunked
-  `ChatState.*` sync, `Room.Upsert`/`Presence.Changed`/`PlayerList.State`
-  merging, optimistic sends reconciled through `clientMessageId`, failed-send
-  marking, unread counts, active room, panel visibility, page visibility
-  (`SetClientPresence`) and reconnect re-`Hello` + re-sync;
-- `src/notifications.ts`: `Message.New`/invite notifications with
-  `sound: "message"` and tap-to-open routing through
-  `interApp.resolveAsync({ service: 'messenger', panelId: 'Messaging' })`;
-- `src/debug.ts`: `Messaging.Debug.*` helpers behind
-  `window.TacPhone.gameInfo.isDebug()` (an `__A3_DEBUG__` game build **and**
-  the server/mission `allowDebug` CBA setting);
-- `init()` in `src/main.tsx` (idempotent under StrictMode);
-- room/message helpers in `src/state/roomUtils.ts` (titles, previews, presence,
-  invite detection);
-- the Messenger panel (`src/MessengerApp.tsx`): two-pane room list + chat on a
-  wide panel, single pane with a back button below 560 px;
-- `src/components/`:
-  - `RoomList` (search, last message, relative time, unread badge, presence),
-  - `ChatView`/`MessageItem`/`Composer` (grouped messages, sender/group names,
-    group colour accents, forwarded banner, Enter to send),
-  - `ChatObjectCard` (generic object cards, room-invite Join card, texture icon
-    cache, deleted-marker fallback) and `objectActions.ts`,
-  - `CreateRoomDialog`, `AddParticipantsDialog`, `MemberListDialog` and the
-    shared `TargetSelectorDialog` (forward/invite/share, room list plus
-    "New room" with the searchable player/group picker),
-  - `FloatingDialog` (portal to `document.body`, z-index 950: above
-    notifications, below the host target chooser),
-  - `ParticipantPicker` (Players/Groups tabs, case-insensitive name search),
-  - `DebugToolbar` (only when `gameInfo.isDebug()` is true);
-- `src/service.ts`: the `messenger` inter-app service (version 1) implementing
-  `MessengerApi`, registered from the panel lifecycle; `shareObject()` opens the
-  target selector through `src/dialogBus.ts` and resolves on send or cancel;
-- panel lifecycle reporting (`setPanelState`) for notification suppression;
-- CSS modules under `src/components/` and `src/styles/theme.module.css`.
-
-Implemented (game side): `addons/tacphone/apps/messaging` is a
-server-authoritative backend (rooms, messages, invites, presence, forwarding,
-player list, debug commands) registered as the `Messaging` app. Its README is
-the wire/behaviour reference.
-
-Map integration: marker sharing and the `map.marker` object renderer live in
-`ACE_TacPhone_Map/src/MessagingBridge.ts`; neither app imports the other.
-
-Release bundle: `npm run build` no longer tree-shakes the debug toolbar or its
-`Messaging.Debug.*` strings out of `dist/ace_tacphone_messaging.js`; the runtime
-`gameInfo.isDebug()` check hides the toolbar unless the game is an `__A3_DEBUG__`
-build with `allowDebug` enabled. The single-file build also keeps the bundle
-pure ASCII.
-
-Known limitations (tracked in `websource/TODO.md`):
-
-- game-side persistence in `missionProfileNamespace` is scaffolding only and
-  disabled; save triggers, migration and size limits are undecided;
-- relayed game commands answer `{ ok: true, pending: true }` immediately. Flows
-  that need the server result synchronously (the new `roomId` of `CreateRoom`,
-  `JoinRoom` or forward-to-new-room) do not get one; the push carries the room,
-  but the dialogs cannot select or report it from the response;
-- `GetPlayerList` is answered by a `PlayerList.State` push; the request reply
-  has no list, so the store keeps the pushed state instead of applying an empty
-  one;
-- participant `groupColor` is empty until the future group member colour system
-  exists;
-- the last open room is not remembered across remounts;
-- `Messaging.Debug.Reset` does not send a `Room.Remove` push, so a page keeps
-  stale rooms until it re-syncs;
-- the stored Node WebSocket suite lives in `test/` (see `test/README.md`); it
-  needs a running `__A3_DEBUG__` game and is not part of the workspace build.
-
+- [`AGENTS/messaging.md`](../AGENTS/messaging.md) — internals, protocol and known
+  limitations.
+- [`../../apps/messaging/README.md`](../../apps/messaging/README.md) — game-side
+  wire and behaviour reference.
+- [`AGENTS/apps.md`](../AGENTS/apps.md) — app contract and services.

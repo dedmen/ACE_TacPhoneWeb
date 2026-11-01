@@ -39,9 +39,9 @@
 /* Persistent drawing panel; never auto-closes. */
 .polyline_panel {
   margin-top: 8px;
-  width: 200px;
+  width: 236px;
   box-sizing: border-box;
-  padding: 10px;
+  padding: 8px;
   background: #ffffff;
   border: 1px solid #e2e8f0;
   border-radius: 6px;
@@ -52,8 +52,8 @@
 }
 
 .panel_header {
-  margin: 0 0 8px 0;
-  padding-bottom: 6px;
+  margin: 0 0 6px 0;
+  padding-bottom: 4px;
   font-size: 13px;
   font-weight: 700;
   color: #333333;
@@ -64,7 +64,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  margin: 0 0 8px;
+  margin: 0 0 6px;
   color: #475569;
   font-size: 11px;
   cursor: pointer;
@@ -78,35 +78,10 @@
 }
 
 .swatch_grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 8px;
-  /* Keep the persistent panel small on phones; touch scrolling stays inside. */
-  max-height: 112px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding-right: 2px;
-}
-
-.swatch {
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  box-sizing: border-box;
-  border: 1px solid #94a3b8;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: box-shadow 0.15s;
-}
-
-.swatch:hover {
-  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.25);
-}
-
-.swatch_selected {
-  outline: 2px solid #2563eb;
-  outline-offset: 1px;
+  margin-bottom: 6px;
+  /* Wide enough to show the full CfgMarkerColors grid without scrolling. */
+  overflow: visible;
+  padding-right: 0;
 }
 
 .panel_muted {

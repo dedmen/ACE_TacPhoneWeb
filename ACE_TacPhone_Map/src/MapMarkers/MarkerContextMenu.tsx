@@ -18,8 +18,11 @@ interface MarkerContextMenuProps {
      * {@link MarkerContextMenuProps.canShare} is true.
      */
     onShare?: () => void;
-    /** True for a shareable icon marker while the Messenger app is installed. */
+    /** True for a shareable marker while the Messenger app is installed. */
     canShare?: boolean;
+    /** Point markers can be edited; polylines only offer sharing. */
+    canEdit?: boolean;
+    canDelete?: boolean;
     onClose: () => void;
 }
 
@@ -38,6 +41,8 @@ export function MarkerContextMenu({
     onDelete,
     onShare,
     canShare = false,
+    canEdit = true,
+    canDelete = true,
     onClose,
 }: MarkerContextMenuProps): React.JSX.Element {
     const menuRef = useRef<HTMLDivElement>(null);
@@ -145,6 +150,7 @@ export function MarkerContextMenu({
                 role="menuitem"
                 data-action="edit"
                 className={MenuStyle.item}
+                style={canEdit ? undefined : { display: 'none' }}
                 onPointerDown={handleItemPointerDown}
                 onPointerUp={handleItemPointerUp}
                 onPointerCancel={() => { pressedRef.current = null; }}
@@ -158,6 +164,7 @@ export function MarkerContextMenu({
                 role="menuitem"
                 data-action="delete"
                 className={`${MenuStyle.item} ${MenuStyle.item_danger}`}
+                style={canDelete ? undefined : { display: 'none' }}
                 onPointerDown={handleItemPointerDown}
                 onPointerUp={handleItemPointerUp}
                 onPointerCancel={() => { pressedRef.current = null; }}

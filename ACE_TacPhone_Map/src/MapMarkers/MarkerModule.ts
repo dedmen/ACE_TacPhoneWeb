@@ -13,6 +13,7 @@ import type { FeatureLike } from 'ol/Feature';
 import DragPan from 'ol/interaction/DragPan';
 
 import {
+    isEditableMarkerName,
     MarkerLayerManager,
     type MarkerChatData,
     type MarkerColor,
@@ -24,12 +25,23 @@ import { PolylineDrawing, simplifyPolyline } from './PolylineDrawing';
 import { createMarker, createPolylineMarker, type MarkerCreationData } from './MarkerApi';
 import { normalizeDirectionForGame, type MarkerChannel } from './Channels';
 import { resolveTerrainHeights } from './TerrainHeightApi';
+import { markerColorToCss, parseMarkerColor } from './MarkerColorUtils';
+import type { MapBoundingBox, MapFlyToOptions, MapFocusMarkerOptions } from '../api';
+import {
+    registerMapTestManager,
+    unregisterMapTestManager,
+    type MapDebugState,
+} from './MapTestHooks';
 
 const LONG_PRESS_DURATION_MS = 600;
 const LONG_PRESS_MOVE_TOLERANCE_PX = 10;
 const MARKER_MOVE_HOLD_MS = 100;
 const POLYLINE_FREEHAND_MIN_DISTANCE_M = 5;
 const POLYLINE_SIMPLIFY_TOLERANCE_M = 2;
+/** World-space box used when focusing a marker without an explicit bbox. */
+const MARKER_FOCUS_SIZE_METERS = 800;
+/** Screen-space glow size around a focused icon marker. */
+const MARKER_HIGHLIGHT_SIZE_PX = 48;
 
 /** Kept at module scope so the choice survives Map panel remounts. */
 let polylineClickPerPointMode = false;
@@ -51,7 +63,7 @@ export interface MarkerModuleCallbacks {
     onCloseMarkerMenu(): void;
     onPolylineStateChange(state: PolylineUiState): void;
     /** Normal Map flyTo, used by focusMarker(). */
-    flyTo(position: [number, number]): void;
+    flyTo(options: MapFlyToOptions): void;
 }
 
 interface MarkerHoldState {
@@ -145,6 +157,9 @@ export class MarkerModule {
         viewport.addEventListener('touchmove', this.handleViewportTouchMove, { passive: false });
 
         window.addEventListener('keydown', this.handleWindowKeyDown);
+
+        // Browser tests read the live channel/alpha state through this hook.
+        registerMapTestManager(this);
     }
 
     public destroy(): void {
@@ -153,6 +168,8 @@ export class MarkerModule {
         }
 
         this.destroyed = true;
+
+        unregisterMapTestManager(this);
 
         this.cancelLongPress();
         this.cancelMarkerHold();
@@ -234,6 +251,32 @@ export class MarkerModule {
         return this.manager.getMarkerColors();
     }
 
+    /**
+     * Colors the polyline UI offers. The game's `Default` CfgMarkerColors class
+     * is the same black as `Black`, so it is hidden here; polylines use a real
+     * color class and the marker dialog owns the virtual "type default" entry.
+     */
+    public getPolylineColors(): MarkerColor[] {
+        return this.manager.getMarkerColors().filter((color) => color.className !== 'Default');
+    }
+
+    /** Remembered polyline color, or the first real color (Black) as fallback. */
+    private resolvePolylineColor(): string {
+        const colors = this.getPolylineColors();
+        const remembered = this.polylineState.color;
+
+        if (
+            remembered !== ''
+            && remembered !== 'Default'
+            && (parseMarkerColor(remembered) !== undefined
+                || colors.some((color) => color.className === remembered))
+        ) {
+            return remembered;
+        }
+
+        return colors[0]?.className ?? 'Default';
+    }
+
     public loadMarkerIcon(iconPath: string): Promise<string> {
         return this.manager.loadMarkerIcon(iconPath);
     }
@@ -254,13 +297,74 @@ export class MarkerModule {
         return this.manager.whenMarkersLoaded();
     }
 
-    public async focusMarker(name: string): Promise<boolean> {
+    public async focusMarker(name: string, options?: MapFocusMarkerOptions): Promise<boolean> {
         await this.manager.whenMarkersLoaded();
         if (this.destroyed) {
             return false;
         }
 
-        return this.manager.focusMarker(name, (position) => this.callbacks.flyTo(position));
+        const half = MARKER_FOCUS_SIZE_METERS / 2;
+        const focusBox = (position: [number, number]): MapBoundingBox => options?.bbox
+            ?? [
+                position[0] - half,
+                position[1] - half,
+                position[0] + half,
+                position[1] + half,
+            ];
+
+        const focused = await this.manager.focusMarker(name, (position, geometryBbox) => {
+            const fitBbox: MapBoundingBox = options?.bbox
+                ?? geometryBbox
+                ?? focusBox(position);
+            const wantsSmallHighlight = options?.bbox === undefined && geometryBbox === undefined;
+
+            this.callbacks.flyTo({
+                x: position[0],
+                y: position[1],
+                bbox: fitBbox,
+                animate: true,
+                highlight: options?.highlight,
+                highlightSizePx: wantsSmallHighlight ? MARKER_HIGHLIGHT_SIZE_PX : undefined,
+            });
+        });
+
+        if (focused) {
+            return true;
+        }
+
+        // A shared object can outlive its marker. The provider (this app) owns
+        // the fallback; Messenger does not know anything about map markers.
+        const fallback = options?.fallbackPosition;
+        if (
+            !Array.isArray(fallback)
+            || fallback.length < 2
+            || !Number.isFinite(fallback[0])
+            || !Number.isFinite(fallback[1])
+        ) {
+            return false;
+        }
+
+        const position: [number, number] = [fallback[0], fallback[1]];
+        this.callbacks.flyTo({
+            x: position[0],
+            y: position[1],
+            bbox: focusBox(position),
+            animate: true,
+            highlight: options?.highlight,
+            highlightSizePx: MARKER_HIGHLIGHT_SIZE_PX,
+        });
+
+        try {
+            window.TacPhone.notifications.show({
+                title: 'Marker no longer exists',
+                body: 'Showing its last known position.',
+                app: 'ACE_TacPhone_Map',
+            });
+        } catch (error) {
+            console.warn('Could not show the deleted-marker notification', error);
+        }
+
+        return true;
     }
 
     public deleteMarker(name: string): void {
@@ -319,14 +423,27 @@ export class MarkerModule {
         return { ...this.polylineState };
     }
 
+    /** Debug-only live state for the browser tests. */
+    public getMapDebugState(): MapDebugState {
+        const previewColors = this.polylineDrawing.getDebugColors();
+
+        return {
+            ...this.manager.getDebugSnapshot(),
+            polyline: {
+                ...this.getPolylineState(),
+                previewLineColor: previewColors.line,
+                previewHaloColor: previewColors.halo,
+            },
+        };
+    }
+
     public togglePolyline(): void {
         if (this.polylineState.isActive) {
             this.stopPolyline();
             return;
         }
 
-        const colors = this.manager.getMarkerColors();
-        const color = this.polylineState.color || colors[0]?.className || '';
+        const color = this.resolvePolylineColor();
 
         this.polylineDrawing.clear();
         this.polylineDrawing.setColor(this.getDrawingColorCss(color));
@@ -356,7 +473,7 @@ export class MarkerModule {
             clickPerPoint: polylineClickPerPointMode,
         });
 
-        if (colors.length === 0) {
+        if (this.getPolylineColors().length === 0) {
             this.loadDrawingColorsIfNeeded();
         }
     }
@@ -418,8 +535,8 @@ export class MarkerModule {
             return;
         }
 
-        // 'Default' is the game's CfgMarkerColors fallback.
-        const color = this.polylineState.color || 'Default';
+        // 'Default' is the game's CfgMarkerColors fallback when no color is known.
+        const color = this.resolvePolylineColor() || 'Default';
         const measurements = this.polylineState.clickPerPoint;
         const channel = this.manager.getEffectiveChannelForRequest(this.manager.getActiveChannel());
 
@@ -437,6 +554,11 @@ export class MarkerModule {
     }
 
     public getDrawingColorCss(colorClassName: string): string {
+        const custom = markerColorToCss(colorClassName);
+        if (custom) {
+            return custom;
+        }
+
         const match = this.manager.getMarkerColors().find((color) => color.className === colorClassName);
         return match?.color ?? '#ffffff';
     }
@@ -456,8 +578,7 @@ export class MarkerModule {
                 return;
             }
 
-            const colors = this.manager.getMarkerColors();
-            const color = this.polylineState.color || colors[0]?.className || '';
+            const color = this.resolvePolylineColor();
             this.setPolylineState({ color });
             this.polylineDrawing.setColor(this.getDrawingColorCss(color));
         });
@@ -668,6 +789,12 @@ export class MarkerModule {
         return feature ? this.manager.getEditableMarkerName(feature) : null;
     }
 
+    /** Player marker name (point or polyline) under the pointer, for the menu. */
+    private getContextMarkerNameAtEvent(event: PointerEvent | MouseEvent): string | null {
+        const name = this.getMarkerNameAtEvent(event);
+        return isEditableMarkerName(name) ? name : null;
+    }
+
     private setDragPanActive(active: boolean): void {
         this.map.getInteractions().forEach((interaction) => {
             if (interaction instanceof DragPan && interaction !== this.drawingDragPan) {
@@ -754,7 +881,7 @@ export class MarkerModule {
             return;
         }
 
-        const markerName = this.getEditableMarkerNameAtEvent(event);
+        const markerName = this.getContextMarkerNameAtEvent(event);
         if (markerName) {
             event.preventDefault();
             this.callbacks.onOpenMarkerMenu(markerName, event.clientX, event.clientY);

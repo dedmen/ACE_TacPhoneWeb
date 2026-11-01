@@ -1,7 +1,17 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type { SelectOption } from '@ace-tacphone/api';
 import type { MarkerColor, MarkerType } from './MarkerLayer';
 import type { MarkerCreationData } from './MarkerApi';
 import type { MarkerChannel } from './Channels';
+import { ColorSwatchPicker } from './ColorSwatchPicker';
+import {
+    DEFAULT_MARKER_COLOR,
+    MAX_MARKER_TEXT_LENGTH,
+    clampMarkerText,
+    isDefaultMarkerColor,
+    parseMarkerColor,
+    resolveMarkerColor,
+} from './MarkerColorUtils';
 import DialogStyle from './MarkerCreateDialog.module.scss';
 
 export interface MarkerDialogDraft {
@@ -36,36 +46,86 @@ interface MarkerCreateDialogProps {
     containerSize: { width: number; height: number };
     onChannelChange?: (channel: number) => void;
     onDraftChange?: (draft: MarkerDialogDraft) => void;
+    /** Accessible name of the dialog. */
     title?: string;
     submitLabel?: string;
 }
 
-function useDropdown(): {
-    open: boolean;
-    setOpen: React.Dispatch<React.SetStateAction<boolean>>;
-    containerRef: React.RefObject<HTMLDivElement | null>;
-} {
-    const [open, setOpen] = useState(false);
-    const containerRef = useRef<HTMLDivElement>(null);
+// Icons are cached module wide, so reopening the menu is instant.
+const markerIconCache = new Map<string, string>();
+const tintedIconCache = new Map<string, string>();
 
-    useEffect(() => {
-        if (!open) return;
+/** Parses the small CSS color subset used by marker colors. */
+function parsePreviewColor(value: string): [number, number, number, number] {
+    const hex = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})?$/i.exec(value.trim());
+    if (hex) {
+        return [
+            Number.parseInt(hex[1], 16),
+            Number.parseInt(hex[2], 16),
+            Number.parseInt(hex[3], 16),
+            hex[4] === undefined ? 1 : Number.parseInt(hex[4], 16) / 255,
+        ];
+    }
 
-        const handleMouseDown = (event: MouseEvent): void => {
-            if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
-                setOpen(false);
+    const rgb = /^rgba?\(\s*([0-9.]+)\s*,\s*([0-9.]+)\s*,\s*([0-9.]+)(?:\s*,\s*([0-9.]+))?\s*\)$/i.exec(value.trim());
+    if (rgb) {
+        return [Number(rgb[1]), Number(rgb[2]), Number(rgb[3]), rgb[4] === undefined ? 1 : Number(rgb[4])];
+    }
+
+    return [255, 255, 255, 1];
+}
+
+/**
+ * Multiplies the icon's pixels by the resolved marker color, matching the
+ * OpenLayers Icon tint used on the map. CSS masks flatten the icon to one solid
+ * color (and can show a white box when the source is a white flag), so the
+ * preview is rendered as a tinted PNG instead.
+ */
+function tintMarkerIcon(imageUrl: string, color: string): Promise<string> {
+    const cacheKey = `${imageUrl}|${color}`;
+    const cached = tintedIconCache.get(cacheKey);
+    if (cached) {
+        return Promise.resolve(cached);
+    }
+
+    return new Promise<string>((resolve) => {
+        const image = new Image();
+
+        image.onload = () => {
+            try {
+                const canvas = document.createElement('canvas');
+                canvas.width = Math.max(1, image.naturalWidth);
+                canvas.height = Math.max(1, image.naturalHeight);
+                const context = canvas.getContext('2d');
+                if (!context) {
+                    resolve(imageUrl);
+                    return;
+                }
+
+                context.drawImage(image, 0, 0);
+                const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
+                const [red, green, blue, alpha] = parsePreviewColor(color);
+
+                for (let index = 0; index < pixels.data.length; index += 4) {
+                    pixels.data[index] = Math.round((pixels.data[index] * red) / 255);
+                    pixels.data[index + 1] = Math.round((pixels.data[index + 1] * green) / 255);
+                    pixels.data[index + 2] = Math.round((pixels.data[index + 2] * blue) / 255);
+                    pixels.data[index + 3] = Math.round(pixels.data[index + 3] * alpha);
+                }
+
+                context.putImageData(pixels, 0, 0);
+                const tinted = canvas.toDataURL('image/png');
+                tintedIconCache.set(cacheKey, tinted);
+                resolve(tinted);
+            } catch {
+                resolve(imageUrl);
             }
         };
 
-        document.addEventListener('mousedown', handleMouseDown);
-        return () => document.removeEventListener('mousedown', handleMouseDown);
-    }, [open]);
-
-    return { open, setOpen, containerRef };
+        image.onerror = () => resolve(imageUrl);
+        image.src = imageUrl;
+    });
 }
-
-// Icons are cached module wide, so opening the dropdown again is instant.
-const markerIconCache = new Map<string, string>();
 
 interface MarkerIconPreviewProps {
     icon: string;
@@ -79,6 +139,7 @@ function MarkerIconPreview({ icon, color, loadMarkerIcon, lazy = false }: Marker
     const hostRef = useRef<HTMLSpanElement>(null);
     const [isVisible, setIsVisible] = useState(!lazy);
     const [imageUrl, setImageUrl] = useState<string | null>(() => (icon ? markerIconCache.get(icon) ?? null : null));
+    const [tintedUrl, setTintedUrl] = useState<string | null>(null);
 
     useEffect(() => {
         if (!lazy) {
@@ -92,6 +153,8 @@ function MarkerIconPreview({ icon, color, loadMarkerIcon, lazy = false }: Marker
             return;
         }
 
+        // The select menu is portaled to <body>; its menu element carries
+        // `data-dropdown-menu` so only visible rows load their texture.
         const observer = new IntersectionObserver((entries) => {
             if (entries.some((entry) => entry.isIntersecting)) {
                 setIsVisible(true);
@@ -141,131 +204,36 @@ function MarkerIconPreview({ icon, color, loadMarkerIcon, lazy = false }: Marker
         };
     }, [icon, isVisible, loadMarkerIcon]);
 
+    useEffect(() => {
+        if (!imageUrl) {
+            setTintedUrl(null);
+            return;
+        }
+
+        let cancelled = false;
+        void tintMarkerIcon(imageUrl, color).then((url) => {
+            if (!cancelled) {
+                setTintedUrl(url);
+            }
+        });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [imageUrl, color]);
+
     return (
         <span ref={hostRef} className={DialogStyle.icon_preview}>
             {imageUrl ? (
-                <span
+                <img
                     className={DialogStyle.icon_image}
-                    style={{
-                        backgroundColor: color,
-                        WebkitMaskImage: `url("${imageUrl}")`,
-                        maskImage: `url("${imageUrl}")`,
-                    }}
+                    src={tintedUrl ?? imageUrl}
+                    alt=""
                 />
             ) : (
                 <span className={DialogStyle.icon_placeholder} />
             )}
         </span>
-    );
-}
-
-function ColorSwatch({ color }: { color: string }): React.JSX.Element {
-    return (
-        <span className={DialogStyle.color_swatch_wrap}>
-            <span className={DialogStyle.color_swatch} style={{ backgroundColor: color }} />
-        </span>
-    );
-}
-
-interface MarkerTypeDropdownProps {
-    markerTypes: MarkerType[];
-    selectedType: string;
-    selectedColor: string;
-    loadMarkerIcon: (iconPath: string) => Promise<string>;
-    onSelect: (className: string) => void;
-}
-
-function MarkerTypeDropdown({ markerTypes, selectedType, selectedColor, loadMarkerIcon, onSelect }: MarkerTypeDropdownProps): React.JSX.Element {
-    const { open, setOpen, containerRef } = useDropdown();
-    const selected = markerTypes.find((type) => type.className === selectedType) ?? null;
-
-    return (
-        <div className={DialogStyle.dropdown} ref={containerRef}>
-            <button
-                type="button"
-                className={`${DialogStyle.dropdown_trigger} ${open ? DialogStyle.dropdown_trigger_open : ''}`}
-                onClick={() => setOpen((isOpen) => !isOpen)}
-                disabled={markerTypes.length === 0}
-                aria-expanded={open}
-            >
-                <MarkerIconPreview icon={selected?.icon ?? ''} color={selectedColor} loadMarkerIcon={loadMarkerIcon} />
-                <span className={DialogStyle.dropdown_value}>
-                    {selected ? (selected.name || selected.className) : (markerTypes.length === 0 ? 'Loading marker types…' : 'Select marker type')}
-                </span>
-                <span className={DialogStyle.chevron} aria-hidden="true" />
-            </button>
-
-            {open && (
-                <div className={DialogStyle.dropdown_menu} data-dropdown-menu>
-                    {markerTypes.map((type) => (
-                        <button
-                            key={type.className}
-                            type="button"
-                            aria-pressed={type.className === selectedType}
-                            className={`${DialogStyle.dropdown_option} ${type.className === selectedType ? DialogStyle.dropdown_option_selected : ''}`}
-                            onClick={() => {
-                                onSelect(type.className);
-                                setOpen(false);
-                            }}
-                            title={type.name || type.className}
-                        >
-                            <MarkerIconPreview icon={type.icon} color={selectedColor} loadMarkerIcon={loadMarkerIcon} lazy />
-                            <span className={DialogStyle.option_label}>{type.name || type.className}</span>
-                        </button>
-                    ))}
-                </div>
-            )}
-        </div>
-    );
-}
-
-interface MarkerColorDropdownProps {
-    markerColors: MarkerColor[];
-    selectedColor: string;
-    onSelect: (className: string) => void;
-}
-
-function MarkerColorDropdown({ markerColors, selectedColor, onSelect }: MarkerColorDropdownProps): React.JSX.Element {
-    const { open, setOpen, containerRef } = useDropdown();
-    const selected = markerColors.find((color) => color.className === selectedColor) ?? null;
-
-    return (
-        <div className={DialogStyle.dropdown} ref={containerRef}>
-            <button
-                type="button"
-                className={`${DialogStyle.dropdown_trigger} ${open ? DialogStyle.dropdown_trigger_open : ''}`}
-                onClick={() => setOpen((isOpen) => !isOpen)}
-                disabled={markerColors.length === 0}
-                aria-expanded={open}
-            >
-                <ColorSwatch color={selected?.color ?? 'transparent'} />
-                <span className={DialogStyle.dropdown_value}>
-                    {selected ? (selected.name || selected.className) : (markerColors.length === 0 ? 'Loading marker colors…' : 'Select marker color')}
-                </span>
-                <span className={DialogStyle.chevron} aria-hidden="true" />
-            </button>
-
-            {open && (
-                <div className={DialogStyle.dropdown_menu} data-dropdown-menu>
-                    {markerColors.map((color) => (
-                        <button
-                            key={color.className}
-                            type="button"
-                            aria-pressed={color.className === selectedColor}
-                            className={`${DialogStyle.dropdown_option} ${color.className === selectedColor ? DialogStyle.dropdown_option_selected : ''}`}
-                            onClick={() => {
-                                onSelect(color.className);
-                                setOpen(false);
-                            }}
-                            title={color.name || color.className}
-                        >
-                            <ColorSwatch color={color.color} />
-                            <span className={DialogStyle.option_label}>{color.name || color.className}</span>
-                        </button>
-                    ))}
-                </div>
-            )}
-        </div>
     );
 }
 
@@ -301,9 +269,12 @@ export function MarkerCreateDialog({
     title = 'Add Marker',
     submitLabel = 'Create',
 }: MarkerCreateDialogProps): React.JSX.Element {
+    const SelectMenu = window.TacPhone.components.SelectMenu;
+
     const [label, setLabel] = useState(initialLabel);
     const [selectedType, setSelectedType] = useState(initialType || rememberedMarkerType || '');
-    const [selectedColor, setSelectedColor] = useState(initialColor || rememberedMarkerColor || '');
+    // "Default" means "use the marker type's own color[]".
+    const [selectedColor, setSelectedColor] = useState(initialColor || rememberedMarkerColor || 'Default');
     const [selectedChannel, setSelectedChannel] = useState(initialChannel ?? channels[0]?.id ?? 3);
     const [dir, setDir] = useState(clamp(Number.isFinite(initialDir) ? initialDir : 0, -180, 180));
     const [scale, setScale] = useState(clamp(Number.isFinite(initialScale) ? initialScale : 1, 0.5, 2));
@@ -322,8 +293,21 @@ export function MarkerCreateDialog({
     }, [markerTypes, selectedType]);
 
     useEffect(() => {
-        if (markerColors.length > 0 && !markerColors.some((color) => color.className === selectedColor)) {
-            setSelectedColor(markerColors[0].className);
+        if (markerColors.length === 0) {
+            return;
+        }
+
+        if (isDefaultMarkerColor(selectedColor)) {
+            return;
+        }
+
+        // A custom RGBA value is not a CfgMarkerColors class name; keep it.
+        if (parseMarkerColor(selectedColor)) {
+            return;
+        }
+
+        if (!markerColors.some((color) => color.className === selectedColor)) {
+            setSelectedColor('Default');
         }
     }, [markerColors, selectedColor]);
 
@@ -340,6 +324,11 @@ export function MarkerCreateDialog({
     useEffect(() => {
         const handleKeyDown = (event: KeyboardEvent): void => {
             if (event.key === 'Escape') {
+                // An open SelectMenu owns Escape: it must close the menu without
+                // also closing the dialog that contains the trigger.
+                if (document.querySelector('[data-dropdown-menu]'))
+                    return;
+
                 onCancel();
             }
         };
@@ -348,9 +337,10 @@ export function MarkerCreateDialog({
         return () => document.removeEventListener('keydown', handleKeyDown);
     }, [onCancel]);
 
-    // Measure the dialog and place it beside the marker so the icon and label
-    // stay visible. Prefer the left side because the marker label is drawn to
-    // the right of the icon.
+    // Measure the dialog and place it bottom-right of the marker so the icon
+    // and its label stay visible. The label is drawn to the right of the icon
+    // and above the dialog, so typing never has to move it. Only values that
+    // change the dialog's size (scale affects the icon clearance) re-place it.
     useLayoutEffect(() => {
         const dialog = dialogRef.current;
         if (!dialog) {
@@ -363,58 +353,54 @@ export function MarkerCreateDialog({
         const containerHeight = Math.max(containerSize.height, height + 24);
         const margin = 12;
         // Clear the marker icon at its current scale.
-        const sideGap = 24 + 16 * scale;
-        // The marker label is drawn to the right of the icon. Keep the dialog
-        // close when the label is empty, and move it just past the label when
-        // one is being typed.
-        const labelWidth = label.trim().length === 0
-            ? 0
-            : Math.min(300, label.trim().length * 10 + 20);
-        const rightGap = sideGap + labelWidth;
+        const gap = 18 + 12 * scale;
+
+        const clampX = (value: number): number => clamp(value, margin, Math.max(margin, containerWidth - width - margin));
+        const clampY = (value: number): number => clamp(value, margin, Math.max(margin, containerHeight - height - margin));
 
         if (!anchor) {
             setPlacement({
-                left: Math.max(margin, (containerWidth - width) / 2),
-                top: Math.max(margin, (containerHeight - height) / 2),
+                left: clampX((containerWidth - width) / 2),
+                top: clampY((containerHeight - height) / 2),
             });
             return;
         }
 
-        const spaceLeft = anchor.x - margin;
-        const spaceRight = containerWidth - anchor.x - margin;
-        const fitsLeft = spaceLeft >= width + sideGap;
-        const fitsRight = spaceRight >= width + rightGap;
-        let left: number;
-        let top: number | null = null;
+        const fits = (left: number, top: number): boolean => (
+            left >= margin
+            && top >= margin
+            && left + width <= containerWidth - margin
+            && top + height <= containerHeight - margin
+        );
 
-        if (fitsLeft && (!fitsRight || spaceLeft >= spaceRight)) {
-            left = anchor.x - sideGap - width;
-        } else if (fitsRight) {
-            left = anchor.x + rightGap;
-        } else {
-            left = clamp(anchor.x - width / 2, margin, Math.max(margin, containerWidth - width - margin));
-            const below = anchor.y + sideGap;
-            top = below + height <= containerHeight - margin
-                ? below
-                : Math.max(margin, anchor.y - sideGap - height);
-        }
+        // Preference order: bottom-right, bottom-left, top-right, top-left.
+        const candidates: Array<{ left: number; top: number }> = [
+            { left: anchor.x + gap, top: anchor.y + gap },
+            { left: anchor.x - gap - width, top: anchor.y + gap },
+            { left: anchor.x + gap, top: anchor.y - gap - height },
+            { left: anchor.x - gap - width, top: anchor.y - gap - height },
+        ];
 
-        if (top === null) {
-            top = clamp(
-                anchor.y - height / 2,
-                margin,
-                Math.max(margin, containerHeight - height - margin),
-            );
-        }
+        const chosen = candidates.find((candidate) => fits(candidate.left, candidate.top));
 
-        setPlacement({
-            left: clamp(left, margin, Math.max(margin, containerWidth - width - margin)),
-            top,
-        });
-    }, [anchor, containerSize, label, selectedType, selectedColor, selectedChannel, dir, scale]);
+        setPlacement(chosen
+            ? { left: chosen.left, top: chosen.top }
+            : { left: clampX(anchor.x - width / 2), top: clampY(anchor.y - height / 2) });
+        // Content lengths are layout inputs, not values: the dialog can only
+        // grow when the color grid or the channel row appears.
+    }, [anchor, containerSize, scale, markerColors.length, markerTypes.length, multiplayer]);
 
-    const selectedColorInfo = markerColors.find((color) => color.className === selectedColor) ?? null;
-    const canSubmit = label.trim().length > 0 && selectedType !== '' && selectedColor !== '';
+    const selectedTypeInfo = markerTypes.find((type) => type.className === selectedType) ?? null;
+    // Color the type icons/swatch would get: the selected color, or the
+    // selected type's own color[] while "Default" is active.
+    const typeDefaultColor = selectedTypeInfo?.color || DEFAULT_MARKER_COLOR;
+    const effectiveColor = resolveMarkerColor(
+        selectedColor,
+        markerColors.find((color) => color.className === selectedColor)?.color,
+        typeDefaultColor,
+    );
+
+    const canSubmit = selectedType !== '';
     const channelOptions: MarkerChannel[] = channels.slice();
     if (!channelOptions.some((channel) => channel.id === selectedChannel)) {
         channelOptions.unshift({
@@ -445,7 +431,7 @@ export function MarkerCreateDialog({
     };
 
     useEffect(() => {
-        if (!onDraftChange || !selectedType || !selectedColor) {
+        if (!onDraftChange || !selectedType) {
             return;
         }
 
@@ -466,7 +452,7 @@ export function MarkerCreateDialog({
         if (!canSubmit) return;
 
         onSubmit({
-            label: label.trim(),
+            label: clampMarkerText(label.trim()),
             type: selectedType,
             color: selectedColor,
             position: coordinate,
@@ -483,6 +469,49 @@ export function MarkerCreateDialog({
         }
     };
 
+    const typeOptions: SelectOption[] = markerTypes.map((type) => ({
+        value: type.className,
+        label: type.name || type.className,
+    }));
+
+    const typeColorFor = (option: SelectOption): string => {
+        if (!isDefaultMarkerColor(selectedColor)) {
+            return effectiveColor;
+        }
+
+        return markerTypes.find((type) => type.className === option.value)?.color || DEFAULT_MARKER_COLOR;
+    };
+
+    const renderTypeOption = (option: SelectOption): React.ReactNode => (
+        <>
+            <MarkerIconPreview
+                icon={markerTypes.find((type) => type.className === option.value)?.icon ?? ''}
+                color={typeColorFor(option)}
+                loadMarkerIcon={loadMarkerIcon}
+                lazy
+            />
+            <span className={DialogStyle.option_label}>{option.label}</span>
+        </>
+    );
+
+    const renderTypeValue = (option: SelectOption | undefined): React.ReactNode => (
+        <>
+            <MarkerIconPreview
+                icon={markerTypes.find((type) => type.className === option?.value)?.icon ?? ''}
+                color={effectiveColor}
+                loadMarkerIcon={loadMarkerIcon}
+            />
+            <span className={DialogStyle.option_label}>
+                {option ? option.label : (markerTypes.length === 0 ? 'Loading types…' : 'Select marker type')}
+            </span>
+        </>
+    );
+
+    const channelSelectOptions: SelectOption[] = channelOptions.map((channel) => ({
+        value: channel.id,
+        label: channel.label,
+    }));
+
     return (
         <div
             className={DialogStyle.overlay}
@@ -498,31 +527,19 @@ export function MarkerCreateDialog({
                 role="dialog"
                 aria-modal="true"
                 aria-label={title}
+                data-testid="marker-create-dialog"
                 style={placement
                     ? { left: placement.left, top: placement.top, visibility: 'visible' }
                     : { left: 0, top: 0, visibility: 'hidden' }}
             >
-                <div className={DialogStyle.dialog_header}>
-                    <h3 className={DialogStyle.dialog_title}>{title}</h3>
-                    <button
-                        type="button"
-                        className={DialogStyle.close_button}
-                        onClick={onCancel}
-                        aria-label="Close marker dialog"
-                        title="Close"
-                    >
-                        ×
-                    </button>
-                </div>
-
                 <label className={DialogStyle.field}>
-                    <span className={DialogStyle.field_label}>Marker Name</span>
+                    <span className={DialogStyle.field_label}>Marker Name (optional)</span>
                     <input
                         ref={inputRef}
                         className={DialogStyle.text_input}
                         type="text"
                         value={label}
-                        maxLength={128}
+                        maxLength={MAX_MARKER_TEXT_LENGTH}
                         placeholder="Enter marker name"
                         onChange={(event) => setLabel(event.target.value)}
                         onKeyDown={handleInputKeyDown}
@@ -531,41 +548,66 @@ export function MarkerCreateDialog({
 
                 <div className={DialogStyle.field}>
                     <span className={DialogStyle.field_label}>Marker Type</span>
-                    <MarkerTypeDropdown
-                        markerTypes={markerTypes}
-                        selectedType={selectedType}
-                        selectedColor={selectedColorInfo?.color ?? '#ffffff'}
-                        loadMarkerIcon={loadMarkerIcon}
-                        onSelect={selectType}
+                    <SelectMenu
+                        value={selectedType}
+                        options={typeOptions}
+                        onChange={(value) => selectType(String(value))}
+                        placeholder="Select marker type"
+                        disabled={markerTypes.length === 0}
+                        searchable
+                        searchPlaceholder="Search types…"
+                        size="compact"
+                        testId="marker-type-select"
+                        ariaLabel="Marker type"
+                        emptyMessage="No marker types match"
+                        className={DialogStyle.select_control}
+                        buttonClassName={DialogStyle.select_trigger}
+                        menuClassName={DialogStyle.select_menu}
+                        optionClassName={DialogStyle.select_option}
+                        renderOption={renderTypeOption}
+                        renderValue={renderTypeValue}
                     />
                 </div>
 
                 <div className={DialogStyle.field}>
                     <span className={DialogStyle.field_label}>Marker Color</span>
-                    <MarkerColorDropdown
-                        markerColors={markerColors}
+                    <ColorSwatchPicker
+                        colors={markerColors}
                         selectedColor={selectedColor}
                         onSelect={selectColor}
+                        compact
+                        leadingDefault={{ color: typeDefaultColor, label: 'Default (type color)' }}
+                        excludeClassName="Default"
+                        onCustomColorChange={selectColor}
+                        customColor={parseMarkerColor(selectedColor) ? selectedColor : undefined}
+                        testId="marker-color-picker"
+                        swatchTestId="marker-color-swatch"
+                        customTestId="marker-color-custom"
+                        customInputTestId="marker-color-custom-input"
+                        customAlphaTestId="marker-color-custom-alpha"
+                        customPopoverTestId="marker-color-custom-popover"
+                        ariaLabel="Marker color"
                     />
                 </div>
 
                 {multiplayer && (
-                    <label className={DialogStyle.field}>
+                    <div className={DialogStyle.field}>
                         <span className={DialogStyle.field_label}>Channel</span>
-                        <select
-                            className={DialogStyle.select_input}
+                        <SelectMenu
                             value={selectedChannel}
-                            onChange={(event) => selectChannel(Number(event.target.value))}
+                            options={channelSelectOptions}
+                            onChange={(value) => selectChannel(Number(value))}
+                            placeholder="Loading channels…"
                             disabled={channelOptions.length === 0}
-                        >
-                            {channelOptions.length === 0 && <option value={selectedChannel}>Loading channels…</option>}
-                            {channelOptions.map((channel) => (
-                                <option key={channel.id} value={channel.id}>
-                                    {channel.label}
-                                </option>
-                            ))}
-                        </select>
-                    </label>
+                            size="compact"
+                            testId="marker-channel-select"
+                            ariaLabel="Channel"
+                            className={DialogStyle.select_control}
+                            buttonClassName={DialogStyle.select_trigger}
+                            menuClassName={DialogStyle.select_menu}
+                            optionClassName={DialogStyle.select_option}
+                        />
+                    </div>
                 )}
 
                 <label className={DialogStyle.field}>
@@ -601,7 +643,12 @@ export function MarkerCreateDialog({
                 </label>
 
                 <div className={DialogStyle.actions}>
-                    <button type="button" className={DialogStyle.button} onClick={onCancel}>
+                    <button
+                        type="button"
+                        className={DialogStyle.button}
+                        onClick={onCancel}
+                        data-testid="marker-cancel"
+                    >
                         Cancel
                     </button>
                     <button
@@ -609,6 +656,7 @@ export function MarkerCreateDialog({
                         className={`${DialogStyle.button} ${DialogStyle.button_primary}`}
                         onClick={submit}
                         disabled={!canSubmit}
+                        data-testid="marker-submit"
                     >
                         {submitLabel}
                     </button>

@@ -3,8 +3,8 @@
  *
  * This only verifies the wire/storage shape. The live Map panel checks (context
  * menu, focusMarker, deleted marker and flyTo) are in
- * `test/browser/ui-checklist.md`, because they need the Map UI and a real
- * marker in the running mission.
+ * `test/scenarios/browser-ui.test.mjs` (Playwright), because they need the Map
+ * UI and a real marker in the running mission.
  */
 
 import {

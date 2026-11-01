@@ -9,8 +9,8 @@ rename it instead of writing the plumbing from scratch.
 It does **not** use `OnMessageFromGame` (game-pushed messages). It does expose one
 small inter-app service, [`SampleAppApi`](#the-sample-service-api), so the panel
 also demonstrates how a service is registered and released. Both are optional.
-See [`../ACE_TacPhone_Main/README.md`](../ACE_TacPhone_Main/README.md#app-contract)
-for `OnMessageFromGame`, and [`../ACE_TacPhone_Map/README.md`](../ACE_TacPhone_Map/README.md)
+See [`../AGENTS/apps.md`](../AGENTS/apps.md) for the app contract and
+`OnMessageFromGame`, and [`../ACE_TacPhone_Map/README.md`](../ACE_TacPhone_Map/README.md)
 for a full reference app with a larger service API.
 
 ## File map

@@ -37,6 +37,9 @@ node ACE_TacPhone_Main/test/run-tests.mjs --list
 node ACE_TacPhone_Main/test/run-tests.mjs --scenario layout-options --verbose
 ```
 
+`npm run test:all` runs this suite together with the Messenger and Map suites
+and prints one summary; `-- --suite host` narrows it.
+
 Useful options:
 
 ```text

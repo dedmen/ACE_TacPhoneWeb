@@ -13,7 +13,6 @@ import { Circle, Fill, Stroke, Style } from 'ol/style';
 import { createPolylineMeasurementStyles } from './PolylineMeasurements';
 
 const DEFAULT_COLOR = '#ffffff';
-const HALO_COLOR = '#ffffff';
 const HALO_WIDTH = 6;
 const LINE_WIDTH = 3;
 const VERTEX_RADIUS = 4;
@@ -135,6 +134,21 @@ function normalizeColor(cssColor: string | undefined): string {
     return trimmed;
 }
 
+/** Alpha component of a CSS color, used to keep the halo in step with the line. */
+function colorAlpha(cssColor: string): number {
+    const rgba = /^rgba?\(\s*[0-9.]+\s*,\s*[0-9.]+\s*,\s*[0-9.]+\s*,\s*([0-9.]+)\s*\)$/i.exec(cssColor);
+    if (rgba) {
+        const value = Number(rgba[1]);
+        return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 1;
+    }
+
+    if (/^#[0-9a-f]{8}$/i.test(cssColor)) {
+        return Number.parseInt(cssColor.slice(7, 9), 16) / 255;
+    }
+
+    return 1;
+}
+
 /**
  * Holds the in-progress polyline as a single line feature plus a vertex style,
  * so the user sees a colored line with a white halo and dots on every point.
@@ -148,6 +162,7 @@ export class PolylineDrawing {
     private readonly heights: Array<number | null> = [];
     private feature: Feature<LineString> | null = null;
     private color: string;
+    private haloColor: string;
     private baseStyles: Style[] = [];
     private measurementsEnabled = false;
     /** Bumped whenever the points change, to invalidate the label cache. */
@@ -157,6 +172,7 @@ export class PolylineDrawing {
 
     constructor(color?: string) {
         this.color = normalizeColor(color);
+        this.haloColor = `rgba(255, 255, 255, ${colorAlpha(this.color)})`;
         this.baseStyles = this.createStyles();
         this.source = new VectorSource();
         this.layer = new VectorLayer<VectorSource>({
@@ -181,10 +197,19 @@ export class PolylineDrawing {
 
     public setColor(cssColor: string): void {
         this.color = normalizeColor(cssColor);
+        // The halo is white like Arma's marker outline, but it must fade with
+        // the line: a fully opaque halo under a translucent line reads as a
+        // white line that ignores the alpha setting.
+        this.haloColor = `rgba(255, 255, 255, ${colorAlpha(this.color)})`;
         // The render style function reads the cached base styles, so rebuilding
         // them plus changed() repaints without touching the geometry.
         this.baseStyles = this.createStyles();
         this.layer.changed();
+    }
+
+    /** Debug-only: the line and halo colors currently used by the preview. */
+    public getDebugColors(): { line: string; halo: string } {
+        return { line: this.color, halo: this.haloColor };
     }
 
     public addPoint(coordinate: [number, number]): void {
@@ -354,10 +379,11 @@ export class PolylineDrawing {
 
     private createStyles(): Style[] {
         const color = this.color;
+        const haloColor = this.haloColor;
 
         return [
             new Style({
-                stroke: new Stroke({ color: HALO_COLOR, width: HALO_WIDTH }),
+                stroke: new Stroke({ color: haloColor, width: HALO_WIDTH }),
             }),
             new Style({
                 stroke: new Stroke({ color, width: LINE_WIDTH }),
@@ -369,7 +395,7 @@ export class PolylineDrawing {
                 image: new Circle({
                     radius: VERTEX_RADIUS,
                     fill: new Fill({ color }),
-                    stroke: new Stroke({ color: HALO_COLOR, width: VERTEX_BORDER_WIDTH }),
+                    stroke: new Stroke({ color: haloColor, width: VERTEX_BORDER_WIDTH }),
                 }),
             }),
         ];

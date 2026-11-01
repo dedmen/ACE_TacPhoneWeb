@@ -13,6 +13,7 @@
     "dev": "npm run dev -w ace-tacphone-main",
     "build": "npm run build -w ace-tacphone-main && npm run build -w ace-tacphone-map && npm run build -w ace-tacphone-sampleapp && npm run build -w ace-tacphone-messaging && node scripts/copy-data.mjs",
     "build:debug": "npm run build:debug -w ace-tacphone-main && npm run build:debug -w ace-tacphone-map && npm run build:debug -w ace-tacphone-sampleapp && npm run build:debug -w ace-tacphone-messaging && node scripts/copy-data.mjs",
+    "build:all": "node scripts/build-all.mjs",
     "build:host": "npm run build -w ace-tacphone-main && node scripts/copy-data.mjs host",
     "build:host:debug": "npm run build:debug -w ace-tacphone-main && node scripts/copy-data.mjs host",
     "build:apps": "npm run build -w ace-tacphone-map && npm run build -w ace-tacphone-sampleapp && npm run build -w ace-tacphone-messaging && node scripts/copy-data.mjs apps",
@@ -22,7 +23,13 @@
     "check:importmap": "tacphone-build check-shared-imports",
     "lint": "npm run lint --workspaces --if-present",
     "test:messaging": "node MessagingApp/test/run-tests.mjs",
+    "test:messaging-ui": "node MessagingApp/test/run-browser-tests.mjs",
     "test:host": "node ACE_TacPhone_Main/test/run-tests.mjs",
+    "test:map": "node ACE_TacPhone_Map/test/run-tests.mjs",
+    "test:all": "node scripts/test-all.mjs",
     "sync:api-types": "tacphone-build sync-api-types"
+  },
+  "devDependencies": {
+    "playwright": "^1.56.0"
   }
 }

@@ -13,6 +13,10 @@ From `WebServerExtension/`:
 dotnet publish ArmaServerSide.csproj -c Release -p:Platform=x64
 ```
 
+`npm run build:all` from the workspace root does this only when the native
+sources are newer than the publish DLL, then copies it to the Arma root. It
+refuses to install while Arma is running.
+
 Output: `bin\x64\Release\net10.0\win-x64\publish\arma_webhost_x64.dll`.
 
 - `dotnet build` produces managed IL only; use `publish` for the NativeAOT DLL.

@@ -210,9 +210,12 @@ export interface MessengerObjectRenderer {
         data: unknown,
         storedPreview: ChatObjectPreview | undefined,
     ): ChatObjectPreview | Promise<ChatObjectPreview> | undefined;
-    /** Optional click action; when absent the serialized `action` is used. */
-    activate?(data: unknown): void | Promise<void>;
-}
+    /**
+     * Optional click action owned by the app that provides the object kind. It
+     * handles missing/stale targets itself; Messenger only reports a rejection.
+     * When absent, the serialized `action` is used instead.
+     */
+    activate?(data: unknown): void | Promise<void>;}
 
 /** What other apps receive from the Messenger panel. */
 export interface MessengerApi {

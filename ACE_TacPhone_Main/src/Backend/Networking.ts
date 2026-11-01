@@ -918,8 +918,9 @@ class NetworkingWebsocket implements Networking {
         // Ask the webhost (the connected Arma client), to send us the terrain back
         return this.Request({a: "main", c: "RequestTexture", path: path, maxSize: maxSize})
             .then(result => {
-                // MainApps/main.tsx OnMessageFromGame compressed it for us
-                return decompressFromBase64(result as unknown as string);
+                // Textures are WebP data URLs and already compressed. The in-game
+                // page sends them unchanged; do not gzip them again.
+                return result as unknown as string;
             });
     }
 

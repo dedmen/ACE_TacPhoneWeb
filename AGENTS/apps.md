@@ -1,12 +1,12 @@
 # App contract and packaging
 
 Read this when writing or changing any TacPhone app, or when adding a new app.
-Host internals are in [`host.md`](host.md); the Map app's own details are in
-[`map.md`](map.md). The full user-facing reference is
-[`ACE_TacPhone_Main/README.md`](../ACE_TacPhone_Main/README.md#app-contract) and
-[`SampleApp/README.md`](../SampleApp/README.md); the Messenger app is the full
-example of services, notifications and cross-app object renderers
-([`MessagingApp/README.md`](../MessagingApp/README.md)).
+Host internals are in [`host.md`](host.md), the Map app's details are in
+[`map.md`](map.md), and the Messenger's are in [`messaging.md`](messaging.md).
+This file is the complete app-facing contract; the app READMEs
+([`ACE_TacPhone_Map/README.md`](../ACE_TacPhone_Map/README.md),
+[`MessagingApp/README.md`](../MessagingApp/README.md),
+[`SampleApp/README.md`](../SampleApp/README.md)) are usage and setup guides.
 
 ## App module
 
@@ -52,6 +52,7 @@ boundary. Neither stops the other apps from loading.
 | `interests` | Acquire/release demand-driven data interests. |
 | `notifications` | Toast banners. |
 | `options` | Register per-app options shown in the host Options panel, and read/write their values. |
+| `components` | Reusable host UI. `components.SelectMenu` is the portaled listbox select; see [`host.md`](host.md#reusable-host-components-srccomponents). |
 | `utils` | `CommandRegistry`, `PanelContext`, `usePanel()`, `compressAndToBase64`, `decompressFromBase64`. |
 
 Panel components receive the live instance as `props.panel`; deeper components
@@ -118,6 +119,8 @@ export function OnMessageFromGame(message: object): void {
     registry.routeMessage(message as { c: string });
 }
 ```
+
+Panel `id`s are persisted in saved layouts; pick final names before shipping.
 
 ## Inter-app services
 
@@ -292,20 +295,17 @@ double mount.
 
 ## Creating a new app
 
-Use `SampleApp` as the template. The full checklist is
-[`SampleApp/README.md`](../SampleApp/README.md#creating-a-new-tacphone-app).
-The short version:
+Use `SampleApp` as the template. The full checklist, file map and the complete
+rename table are in
+[`SampleApp/README.md`](../SampleApp/README.md#creating-a-new-tacphone-app); use
+it as the canonical guide. In short: pick a config-class name matching
+`/^[A-Za-z_][A-Za-z0-9_]*$/`, copy both halves, rename every occurrence, keep the
+web build and the SQF registration consistent, add the generated JS path to the
+ACE3 root `.gitignore`, build, copy, and verify the app and its request handler
+in game.
 
-1. Pick a config-class name matching `/^[A-Za-z_][A-Za-z0-9_]*$/`; it is the
-   routing key (`a`), the `ace_tacphone_apps` class, and `tacphone.app`.
-2. Copy `websource/SampleApp` and `addons/tacphone/apps/SampleApp`; rename every
-   occurrence using the SampleApp table.
-3. Keep `src/main.tsx`, `src/api.ts`, `package.json` (`main`, `types`, build
-   scripts), `vite.config.ts`, and the SQF registration consistent.
-4. Add the generated JS path to the ACE3 root `.gitignore`.
-5. Build, copy the JS into `apps/<folder>/data/`, verify the app appears in the
-   chooser, and verify the SQF request handler runs in-game.
-6. If the folder is not a sibling of `ACE_TacPhone_Main`, add it to
-   `dev-apps.local.json` or `TACPHONE_DEV_APPS` and restart Vite.
+Nested apps register in their own `ace_tacphone_apps.hpp` (included by their own
+`config.cpp`); nothing is added to the root `tacphone` config. Mission-only apps
+can register the same class in `description.ext` instead of an addon folder.
 
 Panel `id`s are persisted in saved layouts; pick final names before shipping.

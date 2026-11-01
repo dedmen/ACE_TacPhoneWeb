@@ -44,7 +44,11 @@ From `websource`:
 
 ```powershell
 node MessagingApp/test/run-tests.mjs
+npm run test:messaging
 ```
+
+`npm run test:all` runs the host, Messenger and Map suites sequentially and
+prints one summary; `-- --suite messaging` narrows it to this suite.
 
 Useful options:
 
@@ -65,6 +69,7 @@ connection or reconnects).
 ```text
 test/
 ├── run-tests.mjs                  # CLI, opens the connection, runs scenarios
+├── run-browser-tests.mjs          # Playwright Messenger UI suite
 ├── lib/
 │   ├── ws-client.mjs              # request/reply, push queue, reconnect, chat sync
 │   ├── assertions.mjs             # assert helpers + sequential scenario runner
@@ -81,7 +86,10 @@ test/
 │   ├── side-filtering.test.mjs    # players follow enemy chat, groups do not
 │   ├── reconnect-sync.test.mjs    # close/reopen + full history resync
 │   ├── persistence-scaffold.test.mjs # explicit save/load only, no auto-save
-│   └── map-marker.test.mjs        # map.marker object round-trip (protocol only)
+│   ├── map-marker.test.mjs        # map.marker object round-trip (protocol only)
+│   ├── browser-ui.test.mjs        # Playwright: rooms, messages, marker share + focus
+│   ├── layout-scrollbars.test.mjs # Playwright: visible short-panel scrollbars
+│   └── audio-notifications.test.mjs # Playwright: synthesised notification presets
 └── browser/
     └── ui-checklist.md            # manual browser checks with the game running
 ```
@@ -183,7 +191,32 @@ protocol concern.
 
 ## Live UI checks
 
+`run-browser-tests.mjs` is the automated Playwright suite:
+
+```powershell
+npm run test:messaging-ui
+npm run test:messaging-ui -- --slow
+```
+
+It opens Map and Messenger in two flexlayout tabsets, adds fake players, creates
+a room, sends a message, shares a marker through the Map context menu, then
+clicks the marker card and verifies that the Map focuses the marker, fits the
+800 m focus box and shows the temporary highlight. It needs a debug game and the
+host dev page; see `browser-ui.test.mjs`.
+
+`layout-scrollbars.test.mjs` is independent of the Map and terrain. It creates a
+fake room, injects enough messages to overflow a 480x300 panel and asserts that
+the message list has a visible scrollbar color, a reserved gutter in a headed
+browser, and still scrolls with the wheel.
+
+`audio-notifications.test.mjs` instruments Web Audio and plays the `message`,
+`alert` and `success` presets. In a headed run (`--slow`) the three synthesised
+sounds are audible on the default output device; headless Chromium is muted by
+Playwright but still checks the scheduled tones, the per-preset cooldown, device
+enumeration and the `setSinkId("")` error path.
+
 `browser/ui-checklist.md` contains the manual browser checks: notifications and
 sound, presence transitions, dialog search, floating dialogs from a small panel,
-forward/invite flows, marker sharing, deleted-marker fallback, two Map panels
-with the host `TargetChooserDialog`, and the release build's absent debug UI.
+forward/invite flows, marker sharing, deleted-marker fallback (now owned by the
+Map app), two Map panels with the host `TargetChooserDialog`, and the release
+build's absent debug UI.

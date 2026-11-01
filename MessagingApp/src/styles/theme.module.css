@@ -33,6 +33,37 @@
     font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
     font-size: 13px;
     line-height: 1.4;
+
+    /* Keep scrollbars visible in the in-game Chromium, which uses overlay
+       scrollbars by default. Styling the WebKit pseudo-elements forces a
+       classic scrollbar with a reserved gutter, so a short panel still shows
+       that the room list or message list can scroll. */
+    scrollbar-color: rgba(255, 255, 255, 0.28) transparent;
+}
+
+.theme ::-webkit-scrollbar {
+    width: 9px;
+    height: 9px;
+}
+
+.theme ::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.theme ::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 9px;
+    background: rgba(255, 255, 255, 0.28);
+    background-clip: padding-box;
+}
+
+.theme ::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.42);
+    background-clip: padding-box;
+}
+
+.theme ::-webkit-scrollbar-corner {
+    background: transparent;
 }
 
 .theme *,

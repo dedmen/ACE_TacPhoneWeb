@@ -19,19 +19,49 @@ export interface MapViewState {
     resolution: number;
 }
 
+/** World-space box: [minX, minY, maxX, maxY]. */
+export type MapBoundingBox = [number, number, number, number];
+
 export interface MapFlyToOptions {
-    /** Target center X coordinate (map/world units). */
-    x: number;
-    /** Target center Y coordinate (map/world units). */
-    y: number;
-    /** Optional target resolution; if omitted, current resolution is kept. */
+    /** Target center X coordinate (map/world units). Ignored when `bbox` is set. */
+    x?: number;
+    /** Target center Y coordinate (map/world units). Ignored when `bbox` is set. */
+    y?: number;
+    /**
+     * Optional world-space box to fit. The view centers on the box and picks a
+     * resolution that shows the whole box with a small screen margin.
+     */
+    bbox?: MapBoundingBox;
+    /** Optional target resolution; when omitted, the current/fit resolution is used. */
     resolution?: number;
     /** If true (default), animate the transition. Set to false for instant. */
     animate?: boolean;
+    /**
+     * Temporarily draw a glowing box (with `bbox`) or circle (center only)
+     * around the flown-to area. `highlightSizePx` shrinks a bbox highlight to a
+     * screen-space box around the center (used for marker icons).
+     */
+    highlight?: boolean;
+    /** Screen-space size of the highlight box around the final center. */
+    highlightSizePx?: number;
+}
+
+/** Options for {@link MapApi.focusMarker}. */
+export interface MapFocusMarkerOptions {
+    /** Optional world-space box; defaults to a box around the marker. */
+    bbox?: MapBoundingBox;
+    /** Show the temporary glowing highlight. */
+    highlight?: boolean;
+    /**
+     * Position to show when the marker no longer exists. Used by shared chat
+     * objects: the Map opens the stored position and tells the user that the
+     * marker itself is gone.
+     */
+    fallbackPosition?: [number, number];
 }
 
 export interface MapApi {
-    /** Move the map view to the given center and resolution. */
+    /** Move the map view to the given center, bounding box and/or resolution. */
     flyTo(options: MapFlyToOptions): void;
     /** Get the current view state, or undefined if the map is not ready. */
     getView(): MapViewState | undefined;
@@ -45,14 +75,14 @@ export interface MapApi {
      */
     hasMarker(name: string): boolean;
     /**
-     * Move the view to a marker position, keeping the current resolution.
+     * Move the view to a marker position and zoom so the marker is readable.
      *
      * Resolves `false` when the marker does not exist (for example it was
      * deleted) or the marker layer is not ready yet. It waits for the initial
      * marker snapshot before deciding, so a call shortly after opening the Map
      * panel does not report a false negative.
      */
-    focusMarker(name: string): Promise<boolean>;
+    focusMarker(name: string, options?: MapFocusMarkerOptions): Promise<boolean>;
 }
 
 export const MAP_SERVICE = "map";

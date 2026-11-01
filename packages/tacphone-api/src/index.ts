@@ -6,7 +6,7 @@
 
 import './globals';
 
-import type { ComponentType, Context } from 'react';
+import type { ComponentType, Context, ReactNode } from 'react';
 
 /** Version of the app-facing contract. Every app must export the same value. */
 export const TACPHONE_API_VERSION = 2;
@@ -70,6 +70,73 @@ export interface TacPhoneHost {
     gameInfo: GameInfoApi;
     options: AppOptionsApi;
     utils: TacPhoneUtils;
+    components: ComponentsApi;
+}
+
+// ---------------------------------------------------------------------------
+// Host components
+// ---------------------------------------------------------------------------
+
+/** One choice of the host SelectMenu component. */
+export interface SelectOption {
+    /** Value reported to onChange(). */
+    value: string | number;
+    /** Text shown in the trigger and the menu row. */
+    label: string;
+    /** Optional leading texture/icon (data URL), masked with `iconColor`. */
+    icon?: string;
+    /** Optional color overlay for `icon` (for example a marker type preview). */
+    iconColor?: string;
+    /** Optional color swatch shown instead of an icon. */
+    swatch?: string;
+    /** Disabled options are shown but cannot be selected. */
+    disabled?: boolean;
+}
+
+/** Props of the host SelectMenu component (`window.TacPhone.components.SelectMenu`). */
+export interface SelectMenuProps {
+    /** Id of the trigger button; the menu gets `<id>-menu`. */
+    id?: string;
+    /** Currently selected value. */
+    value: string | number | undefined;
+    /** Every choice, in display order. */
+    options: ReadonlyArray<SelectOption>;
+    /** Called with the chosen value. */
+    onChange: (value: string | number) => void;
+    /** Trigger text when no option matches `value`. */
+    placeholder?: string;
+    /** Disables the trigger. */
+    disabled?: boolean;
+    /** Shows a filter field at the top of the menu. */
+    searchable?: boolean;
+    /** Placeholder of the filter field. */
+    searchPlaceholder?: string;
+    /** Compact styling for small dialog layouts. */
+    size?: 'normal' | 'compact';
+    /** Extra class for the wrapper. */
+    className?: string;
+    /** Extra class for the trigger button. */
+    buttonClassName?: string;
+    /** Extra class for the portaled menu. */
+    menuClassName?: string;
+    /** Extra class for every option row. */
+    optionClassName?: string;
+    /** Custom option row content (for example lazily loaded icons). */
+    renderOption?: (option: SelectOption) => ReactNode;
+    /** Custom trigger content for the selected option. */
+    renderValue?: (option: SelectOption | undefined) => ReactNode;
+    /** Stable test hook: trigger uses it verbatim, the menu appends `-menu`. */
+    testId?: string;
+    /** Accessible name of the listbox. */
+    ariaLabel?: string;
+    /** Shown when the filter matches no option. */
+    emptyMessage?: string;
+}
+
+/** Reusable host UI components exposed to apps. */
+export interface ComponentsApi {
+    /** Listbox-style select. The opened menu is portaled to `document.body`. */
+    SelectMenu: ComponentType<SelectMenuProps>;
 }
 
 /** Mission-static game information, loaded once per phone page load. */

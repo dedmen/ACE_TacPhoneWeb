@@ -1,534 +1,157 @@
 # ACE TacPhone Map
 
-The map app for ACE TacPhone. It is also the reference implementation for a
-TacPhone app: it registers panels, draws the map, and exchanges marker data with
-the game through the TacPhone request protocol.
+The Map app for ACE TacPhone: a north-up OpenLayers terrain map with markers,
+multiplayer chat channels, polyline measurement drawing, and marker sharing with
+Messenger.
 
-| Item | Path |
-| --- | --- |
-| App registration | `addons/tacphone/apps/map/ace_tacphone_apps.hpp` |
-| SQF request processor | `addons/tacphone/apps/map/functions/fnc_processBrowserRequest.sqf` |
-| App entry point | `src/main.tsx` |
-| App service types | `src/api.ts` |
-| Map options schema | `src/MapOptions.ts` |
-| Messenger marker sharing | `src/MessagingBridge.ts` |
-| Generated declarations | `dist/ace_tacphone_map.d.ts` |
-| Production bundle | `dist/ace_tacphone_map.js` |
-| File loaded in game | `addons/tacphone/apps/map/data/ace_tacphone_map.js` |
+## Features
 
-## Requirements
+- Terrain rendering from the game's map data, with configurable quality and tile
+  caching for weak phones.
+- Icon markers created from the map, with searchable marker types, color
+  classes, custom RGBA colors, direction, scale and channel.
+- Player-created markers can be dragged, edited and deleted from the phone.
+  Markers placed by the mission are read-only.
+- In multiplayer, one layer per chat channel with layer checkboxes, an active
+  channel and 45% dimming for inactive channels.
+- Polyline drawing in freehand or click-per-point mode, with distances, total,
+  bearings, angles, terrain heights and `Δh` labels.
+- Marker notifications and optional "Share to Messenger" for icon markers.
+- The `map` inter-app service, used by Messenger to open and focus markers.
 
-- Node.js 20.19+ or 22.12+.
-- Arma 3 2.24+ (or the 2.23 dev branch). See the
-  [host README](../ACE_TacPhone_Main/README.md#requirements) for why the phone
-  UI needs this version.
-- Chromium 126+ for the in-game or external browser.
+## Usage
+
+Open **Map** from the app chooser. The map is always north-up; two-finger touch
+gestures pan and zoom only.
+
+### Markers
+
+- **Create**: double-click the map on desktop, or long-press it on touch/pen.
+  The dialog opens next to the marker; the live preview follows type, color,
+  direction and scale.
+- **Edit**: double-click a player marker, or long-press/right-click it and choose
+  Edit. Marker text is optional and limited to 256 characters.
+- **Move**: press and hold a marker briefly, then drag. Touch/pen markers lift with
+  a drop shadow while dragged.
+- **Delete**: hover a marker and press `Delete`, or use the marker context menu.
+- **Colors**: the picker offers the type's own default color, the
+  `CfgMarkerColors` classes and a **Custom** swatch whose popover holds the
+  native color picker and alpha slider. Custom colors use Arma's `#(r,g,b,a)`
+  format; alpha never goes below 20%, and a black type default is not offered a
+  second time.
+- **Share**: for icon markers, the context menu can share the marker to Messenger
+  when Messenger is installed.
+
+### Marker channels (multiplayer)
+
+The layer switcher lists the map layers and the marker channel section:
+
+- checkboxes show/hide a channel layer;
+- the radio button selects the channel used for new markers and polylines;
+- markers on inactive channels are drawn at 45% opacity;
+- custom radio channels appear only while they are in use.
+
+Singleplayer always uses the Group channel; there is no channel selector.
+
+### Polylines
+
+Use the pencil button below the layers button. Drag to draw freehand, or enable
+**Click per point** to tap vertices; dragging then pans the map. Right-drag pans
+while drawing. The panel shows the line color, point count, `Undo`, `Cancel` and
+`Done`; `Done` needs at least two vertices.
+
+Click-per-point lines show measurement labels: per-segment distance, total
+distance, compass bearing, interior angles and terrain-height labels with height
+differences. The measurements are preview data and stay out of the marker text
+except for an internal tag used to rebuild them on other clients.
+
+## Options
+
+Open the host **Options** panel (app chooser → Options → Map). Presets are
+**Weak phone**, **Balanced** and **Desktop**.
+
+| Option | Default | Effect |
+| --- | --- | --- |
+| Terrain detail | Balanced | Zoom depth/finest resolution: Low 4/0.5, Balanced 5/0.2, High 6/0.1 |
+| Tile cache | 48 tiles | Tiles kept per SVG layer; the main memory knob |
+| Pixel ratio | Device | Caps the render pixel ratio; 1x is fastest |
+| Tile preload | 0 | How many extra tile levels to preload |
+| Smooth scaling | on | Canvas smoothing and tile interpolation |
+
+Terrain tiles are fixed at 128 px. Changing a tiling option rebuilds the tile
+sources from the already-decoded terrain, without asking the game again.
 
 ## Development
 
-The app is loaded by the host dev server, not by its own `index.html`:
+The app runs inside the host dev server, not its own `index.html`:
 
-1. Keep this folder next to `ACE_TacPhone_Main`. The host discovers it as a
-   development app because `package.json` declares:
-   ```json
-   "tacphone": { "app": "ACE_TacPhone_Map" }
-   ```
-2. Install dependencies once at the workspace root (`websource/`):
-   ```powershell
-   npm install
-   ```
-3. Start the host dev server from the workspace root or from either app folder:
-   ```powershell
-   npm run dev
-   ```
-   In this folder, `npm run dev` forwards to `../ACE_TacPhone_Main`, so the app
-   still gets `window.TacPhone`, the host import map, and the WebSocket
-   connection.
-4. Open the URL Vite prints (normally `http://localhost:5173`). Keep TacPhone
-   open in Arma so the page can connect to `wss://localhost:8001/ws`.
-5. Select the Map panel in the TacPhone app chooser.
+```powershell
+npm install
+npm run dev
+```
 
-The host exposes the whole folder as
-`/devapps/ACE_TacPhone_Map/` and imports the entry named by
-`ace_tacphone_devFile` in
-[`ace_tacphone_apps.hpp`](../../apps/map/ace_tacphone_apps.hpp), which is
-`src/main.tsx`. Changes hot-reload through the host server.
-
-The `"tacphone.app"` value must match the `ace_tacphone_apps` config class. It is
-the routing key used by the game and the host. The folder itself can have any
-name; if this folder is not next to `ACE_TacPhone_Main`, list it in the host's
-`dev-apps.local.json` or `TACPHONE_DEV_APPS` environment variable.
+Open the printed URL (normally `http://localhost:5173`) and pick **Map** in the
+app chooser. Keep Arma running with TacPhone open so the page connects to the
+game. The host discovers this folder as `ACE_TacPhone_Map` through `package.json`;
+see [`AGENTS/dev.md`](../AGENTS/dev.md) for other discovery options.
 
 ## Build
-
-Build the app from this folder (or at the workspace root):
 
 ```powershell
 npm run build:debug    # default for development
 npm run build          # release, only when explicitly requested
 ```
 
-The root `npm run build:debug` / `build:apps` scripts build every app and then
-run `scripts/copy-data.mjs`, which copies the outputs into the game `data\`
-folders. Building this package directly does not copy; use `npm run copy:data`
-from the workspace root if needed.
+The build emits `dist/ace_tacphone_map.js`, `dist/ace_tacphone_ol.js` and the
+generated `dist/ace_tacphone_map.d.ts` service types. The root build scripts copy
+the bundles into `addons/tacphone/apps/map/data/`. Packaging rules are in
+[`AGENTS/apps.md`](../AGENTS/apps.md).
 
-Both modes run `tsc -b`, Vite, `tacphone-build check-shared-imports` and
-`tacphone-build bundle-api-types`, which emit:
+## Inter-app service
 
-```text
-dist/ace_tacphone_map.js
-dist/ace_tacphone_map.d.ts
-dist/ace_tacphone_ol.js
+Each mounted Map panel provides the `map` service (version `1`):
+
+| Method | Meaning |
+| --- | --- |
+| `flyTo({ x, y, bbox?, resolution?, animate?, highlight? })` | Move the view. `bbox` is `[minX, minY, maxX, maxY]` and fits the box; `highlight` adds the temporary glow. Omitting `resolution` keeps/fits the zoom; `animate: false` jumps. |
+| `getView()` | `{ x, y, resolution }`, or `undefined` while the view is not ready. |
+| `isReady()` | True when the map and terrain view exist. |
+| `hasMarker(name)` | True while a marker with that internal name is loaded. |
+| `focusMarker(name, options?)` | Flies to a marker and fits a box (default 800 m); `highlight` shows the glow. A missing marker opens `options.fallbackPosition` when provided. Resolves `false` when neither exists. |
+
+Use `window.TacPhone.interApp.resolveAsync({ service: 'map', ... })` to route to a
+mounted Map, including one that is not currently selected. Types are exported by
+the generated `dist/ace_tacphone_map.d.ts`.
+
+## Tests
+
+```powershell
+npm run test:map                       # protocol + browser scenarios
+npm run test:map -- --scenario marker-channels
+npm run test:map -- --slow             # show the browser, slow every action
+npm run test:all                       # host, Messenger and Map suites
 ```
 
-`ace_tacphone_map.d.ts` is the public type surface for other apps (see
-[Map service](#map-service-other-tacphone-apps)); it is bundled from
-`src/api.ts` by `tacphone-build bundle-api-types` and is self-contained (no
-imports). `package.json` points `types` at it.
-
-`npm run build:debug` is unminified with an inline source map. `npm run build` is
-a release build: minified, no source map, and `console.log` / `console.debug` /
-`console.info` calls are removed. Use release only for an explicit release
-request; `console.warn` and `console.error` stay in both builds.
-
-`ace_tacphone_map.js` and `ace_tacphone_ol.js` are git-ignored in the game add-on;
-the copy script skips a destination whose target folder does not exist.
-
-## App contract
-
-`src/main.tsx` exports:
-
-```ts
-import type {
-    AppPanelInfo,
-    AppProps,
-} from '@ace-tacphone/api';
-
-export const apiVersion: number; // TACPHONE_API_VERSION
-export function init(): void;    // registers the Map option schema
-export function GetTacPhoneApps(): AppPanelInfo[]
-export function OnMessageFromGame(message: object): void | Promise<void>
-```
-
-The current panels are:
-
-- `ACE_TacPhone_Map` — the OpenLayers map (`src/Map.tsx`).
-- `ACE_TacPhone_Map_Placeholder` — a small placeholder panel.
-- Marker layers, polyline drawing and map pointer/keyboard interactions live in
-  `src/MapMarkers/MarkerModule.ts`; the marker dialog, context menu, polyline
-  controls, channel store and layer-switcher section live in
-  `src/MapMarkers/MarkerOverlay.tsx`, `MarkerChannelStore.ts` and
-  `MarkerLayerSwitcherSection.tsx`. A map can be created without markers by not
-  mounting the overlay; the layer switcher then has no channel UI.
-
-A panel has a globally unique `id`, an `appComponent` typed as
-`React.ComponentType<AppProps>`, `GetDefaultTitle()`, and `GetTacPhoneIcon()`.
-Panels receive `AppProps` (the live `PanelInstance` and the app/panel ids), so
-the Map reads its panel from `this.props.panel` and the host from the global
-`window.TacPhone`. See the [host app contract](../ACE_TacPhone_Main/README.md#app-contract)
-and [`@ace-tacphone/api`](../packages/tacphone-api/src/index.ts) for the full
-definitions.
-
-Game requests use:
-
-```ts
-await window.TacPhone.networking.Request({
-    a: 'ACE_TacPhone_Map',
-    c: 'GetAllMarkers',
-});
-```
-
-The map's SQF processor handles `GetAllMarkers`, `CreateMarker` (creates a new
-marker, or updates an existing one when `marker.name` is supplied),
-`DeleteMarker`, `GetMarkerTypes`, `GetMarkerChannels`, and `getTerrainHeight`.
-The local player id and multiplayer flag come from the host's one-time
-`window.TacPhone.gameInfo` snapshot, not from a Map request. Messages from the
-game are routed through `mapCommandRegistry` (`src/CommandRegistry.ts`), which is
-an instance of the host's `window.TacPhone.utils.CommandRegistry`.
-
-`getTerrainHeight` takes a list of 2D world/map positions and returns one height
-above sea level in meters per position, in the same order:
-
-```ts
-await window.TacPhone.networking.Request({
-    a: 'ACE_TacPhone_Map',
-    c: 'getTerrainHeight',
-    positions: [[x, y], ...],
-});
-```
-
-The SQF side calls the engine's `getTerrainHeight` command per position, so a
-whole list travels in one request and callers batch instead of issuing a round
-trip per point. The web helper is `getTerrainHeights(positions)` in
-`src/MapMarkers/TerrainHeightApi.ts`, which validates both the input and the
-reply and rejects on invalid data.
-
-### Map view
-
-The map is always north-up. The view is created with `enableRotation: false`
-(so the rotation constraint clamps to 0), and the `DragRotate` and `PinchRotate`
-interactions are removed when the map is created. Two-finger touch gestures
-therefore only pan and zoom; `Shift`+`Alt`+drag does not rotate either. Terrain is
-requested through `window.TacPhone.networking.LoadGameTerrain(...)`, which now
-resolves to a `TerrainData` (`{ width, height, layers: [{ name, svg }] }`) instead
-of one raw SVG string: the host splits and compresses the layers, and the Map only
-turns each `layer.svg` into a Blob URL and an OpenLayers tile source. The
-terrain view is rebuilt when the terrain layers arrive, and `createTerrainView()`
-reapplies the same option, so a reload cannot reintroduce rotation.
-When replacing terrain layers, the old layers are detached, their renderer and
-source are disposed, and the layer object itself is not disposed: OpenLayers
-nulls the layer in its cached layer state, which the map's last frame state still
-references until the next render, so `forEachFeatureAtPixel()` would throw on a
-pointer event in between.
-
-### Marker creation dialog
-
-The create dialog is a small, semi-transparent side panel rather than a centered
-modal. It is placed beside the marker (left/right, with an above/below fallback)
-so the full icon and label stay visible. A live preview on its own layer follows
-label, type, color, direction and scale changes; direction uses a `-180..180`
-slider (default `0`) and scale uses `0.5..2` (default `1`). In multiplayer the
-channel dropdown defaults to the active channel and changing it makes that
-channel active. It is available in both create and edit mode; singleplayer has
-no channel control. Create mode remembers the last selected type/color for the
-page session; edit mode prefills the marker's values and applies the sliders on
-Save.
-
-### Marker interaction
-
-Only markers whose name starts with `_USER_DEFINED` (player-created markers) can
-be moved or deleted; all other markers are read-only.
-
-- **Desktop**: hover a marker and press `Delete` to delete it. Double-click a
-  marker to edit its label, type, color, channel, direction and scale. Press and
-  hold the left mouse button on a marker (100 ms without moving), then drag to
-  move it.
-- **Touch/pen**: press and hold a marker for 100 ms to lift it (drop-shadow
-  highlight), then drag to move it; releasing drops it at the pointer. Holding
-  still until the 600 ms long-press timeout, or releasing without dragging,
-  opens a context menu with edit, delete, and (for icon markers, when Messenger
-  is installed) “Share to Messenger” actions.
-- A long-press or double-click on top of an existing marker never opens the
-  marker creation dialog, so markers cannot be stacked on the same spot.
-- While a marker is being dragged, the local pointer position wins: incoming
-  `Marker.Upsert` messages cannot move it, but other property changes (type,
-  color, label, ...) still apply. Movement is sent to the game as a position-only
-  `CreateMarker` request (`{ name, position }`), throttled to one request per
-  100 ms plus a final update on release. Editing sends only the changed
-  `label`/`type`/`color`/`dir`/`size` fields through the same `CreateMarker`
-  update path. Deleting sends `DeleteMarker` with the marker name.
-
-### Marker channels
-
-In multiplayer the marker layer is split into one OpenLayers layer per channel:
-
-- Global, Side, Group and Direct (0, 1, 3, 5) always have a layer.
-- Command, Vehicle and custom channels get a layer only while they contain
-  markers. Custom channels come from `GetMarkerChannels` (`6..15`, `26..65`,
-  only when `radioChannelInfo` reports them in use) and use their real labels.
-- The layer switcher is generic. Map add-ons inject sections through
-  `LayerSwitcherRegistry`; the marker overlay registers the channel section,
-  which owns the channel rows, active radio and active label. With no marker
-  module attached, no marker section exists.
-- Markers on non-active channels use the inactive-channel alpha (0.45), as do
-  their measurement labels.
-- New markers, the create-dialog default and polyline drawing use the active
-  channel. Changing the channel in the create dialog makes it active. The edit
-  dialog can move a marker to another channel: the Web UI creates a new marker
-  on the target channel and deletes the old one. The new marker gets a fresh
-  local-player `_USER_DEFINED` name.
-- In singleplayer only channel 3 (Group) exists; all markers are shown there and
-  there is no channel selector or radio.
-
-### Polyline drawing
-
-A second floating button with a pencil icon sits directly below the layers
-button. Pressing it enables polyline drawing mode. The mode behaves the same for
-mouse, touch, and pen, and the default input mode is freehand:
-
-- Press and drag to draw. The left button draws while the mode is active, and
-  the default `DragPan` is disabled so the gesture draws a line instead of
-  moving the map. Holding the right mouse button and dragging still pans the
-  map: the Map app adds a second, right-button-only `DragPan` for drawing mode.
-- Vertices are sampled during the drag, but only once the pointer has moved at
-  least 5 m (map units) from the previous sample.
-- On touch/pen, freehand mode sets `touch-action: none` on the OpenLayers
-  viewport for as long as it is active. Without it the browser claims the drag
-  for native panning, sends `pointercancel` after a few pixels, and the stroke
-  ends after a handful of samples. Click-per-point keeps the native gestures
-  (`touch-action: pan-x pan-y` from `ol.css`) so drag-to-pan still works. While
-  freehand is armed a non-passive `touchmove` listener on the viewport also calls
-  `preventDefault()`, so an ancestor that re-enables panning cannot take the
-  gesture back. The app root clips with `overflow: hidden` so canvas rounding
-  cannot make the flexlayout tab scrollable.
-- Releasing ends the stroke. Starting another drag appends to the same line, and
-  a quick tap still places a single vertex.
-- The drawn points are simplified with Ramer–Douglas–Peucker (2 m tolerance)
-  before the polyline is sent to the game. The preview keeps showing the raw
-  drawn points until `Done` is pressed.
-- Marker long-press, double-click, and drag gestures are suppressed while the
-  mode is active, so a marker never captures a vertex tap.
-
-While the mode is active a small persistent panel below the button shows the
-`CfgMarkerColors` swatches (the line color), the current point count, a
-`Click per point` checkbox, a `Right-drag to pan` hint, and the `Undo` /
-`Cancel` / `Done` actions. The checkbox switches to click-per-point input: a
-click/tap places a single vertex and dragging pans the map. Its state is kept in
-a module-scope variable in the Map app, so it survives closing and reopening the
-Map panel but is forgotten when the page reloads. In freehand mode the line
-follows the pointer while dragging; in click-per-point mode there is no rubber
-band and dragging still pans. `Undo` removes the last vertex, `Cancel` (or
-`Escape`) clears the preview and leaves the mode, and `Done` requires at least
-two vertices.
-
-Click-per-point input also draws a measurement overlay on the preview; freehand
-strokes show no labels. Every segment between consecutive vertices gets a
-distance label at its midpoint, offset just above the line (meters, switching to
-`km` with two decimals from 1000 m), and a `Total <distance>` label sits below
-the last vertex, leaving room for that vertex's height label above it. Every
-interior vertex (not the first or last) gets two integer-degree labels on
-opposite sides, showing the angles the incoming and outgoing segments form; each
-of the two angles is also outlined by its own thin semicircular arc around the
-vertex, drawn on that angle's side with a fixed 24 px radius and a small gap
-where the two semicircles meet, and its degree text sits at the middle of its
-arc, just outside it along the angle bisector. The pair always sums to 360°, so
-a straight line reads 180° on both sides. As soon as the second vertex exists, a
-bearing label is drawn behind the first vertex, offset away from the line,
-showing the compass direction to the second vertex as e.g. `042° / 0747 mil`
-(degrees zero-padded and normalized to 0-359 clockwise from map north, mils
-zero-padded on the 6400 mil circle); it follows the first segment as more
-vertices are added, and moves further up when it would land on that vertex's
-height label (first segment pointing down the screen).
-
-Each vertex also gets a height-above-sea-level label just above the point: a
-small two-peaks mountain symbol (drawn as pixel-sized geometry, like the angle
-arcs) followed by the height in whole meters, e.g. `123 m`. The symbol marks a
-terrain height and is never used for the height differences. Where both
-endpoints of a segment have a height, the segment's distance label gains the
-height difference, e.g. `342 m (Δh +12 m)`: the sign is always explicit and a
-value rounded to zero reads `±0 m`. Heights come from the game's
-`getTerrainHeight` through `src/MapMarkers/TerrainHeightApi.ts`, requested in
-click-per-point mode only, so freehand strokes are not annotated and request no
-heights. Switching to click-per-point backfills the heights of vertices that
-already exist, and a coordinate cache avoids repeat requests for the same point.
-
-The labels and arcs are preview-only, drawn in the preview layer: they are never
-part of the marker and never sent to the game, which still receives only the
-geometry and color.
-
-`Done` creates a `_USER_DEFINED` `POLYLINE` marker through the existing
-`CreateMarker` request:
-
-```ts
-{
-    shape: 'POLYLINE',
-    position: [x1, y1],
-    polyline: [x1, y1, x2, y2, ...], // flat array
-    color: '<CfgMarkerColors class>',
-    channel: 3, // active channel
-    text: 'ace_tacphone:polyline-measurements:1', // only in click-per-point mode
-}
-```
-
-The game generates the `_USER_DEFINED` marker name, as for icon markers.
-
-The mode then stays active with an empty canvas, so several lines can be drawn in
-a row. The preview is drawn in its own OpenLayers layer above the marker layer and
-is not listed in the layer switcher.
-
-Click-per-point polylines store `POLYLINE_MEASUREMENTS_TAG`
-(`ace_tacphone:polyline-measurements:1`) in the marker text. Polyline text is
-data-only: Arma does not display it and the Map must not use it as a label or
-notification title. Every client rebuilds the measurement overlay from the
-polyline geometry and terrain heights:
-
-- distances, angles, bearing, total, height labels and `Δh` match the drawing
-  preview;
-- heights are requested lazily, once a polyline is visible;
-- the overlay only draws when the polyline's screen-space bounding box is large
-  enough (`60_000 px²` area or a `320 px` span fallback), so zoomed-out views
-  allocate no label styles;
-- measurements respect the owning channel's visibility and active-channel dim.
-
-Polyline markers remain display-only in the Web UI: unlike point markers they
-cannot yet be edited or deleted from the map. No SQF change is needed for the
-tag: `fnc_createMarker.sqf` already stores `text` and
-`fnc_assembleMarkerInfo.sqf` reports it back through `Marker.Upsert`.
-
-### Map service (other TacPhone apps)
-
-Each mounted Map panel exposes the inter-app service `map` (version `1`). It is
-built in `src/Map.tsx` after the OpenLayers map exists and registered with
-`window.TacPhone.interApp.register(this.props.panel, { service: 'map', version: 1,
-api })`; the registration is removed before the map is torn down. The API is
-`flyTo({ x, y, resolution?, animate? })`, `getView()` (returns
-`{ x, y, resolution }` or `undefined`), `isReady()`, `hasMarker(name)`, and
-`focusMarker(name)`. Coordinates are map/world units, not latitude/longitude.
-`resolution` keeps the current zoom when omitted and `animate: false` jumps
-instead of animating. A `flyTo()` that arrives before the terrain layers have loaded
-is queued and applied after the initial fit, so routing into a freshly opened Map
-popup still lands on the requested position.
-
-`hasMarker(name)` is a synchronous check of the marker layer.
-`focusMarker(name)` is forwarded to the marker module, which resolves `false`
-when the marker is gone or the layer is not ready; it waits for the initial
-marker snapshot before deciding and flies to the marker at the current
-resolution (a polyline focuses its first vertex). Both are used by the Messenger
-marker cards described below.
-
-Other apps resolve it through
-`window.TacPhone.interApp.resolveAsync({ service: 'map', ... })` (see the host's
-[Inter-app API](../ACE_TacPhone_Main/README.md#inter-app-api)).
-The build also emits `dist/ace_tacphone_map.d.ts`, a self-contained declaration
-file bundled from `src/api.ts` that exports `MapApi`, `MapViewState`,
-`MapFlyToOptions`, `MAP_SERVICE`, and `MAP_SERVICE_VERSION`, so consumers can
-type the resolved API without depending on OpenLayers. It is generated by
-`tacphone-build bundle-api-types` during every build; `tacphone-build
-sync-api-types` only copies an already-generated declaration to consumers. The
-app does not keep its own copy of the declarations.
-This is browser-side only; the game talks to the Map through the request
-processor and command registry described above, never through this API.
-
-## Sharing markers with Messenger
-
-The optional Messenger app (`MessagingApp`, service `messenger`, app/panel id
-`Messaging`) can carry a marker as a chat object. All of it lives in
-`src/MessagingBridge.ts`, which keeps the Messenger contract as local structural
-types and never imports the Messenger source.
-
-A `map.marker` object looks like this:
-
-```ts
-{
-    kind: 'map.marker',
-    version: 1,
-    data: { name, type, color, text, label, position: [x, y] },
-    preview: { title, subtitle: 'Map marker', icon, color },
-    action: { service: 'map', panelId: 'ACE_TacPhone_Map', method: 'focusMarker', args: [name] },
-}
-```
-
-`position` is data only; the preview never shows coordinates. `icon` is the game
-texture path of the marker type and `color` the resolved marker color.
-
-- **Share**: the context menu shows “Share to Messenger” for icon markers only
-  (polylines are display-only) and only while `window.TacPhone.apps.knownApps`
-  contains `Messaging`. Sharing routes to the Messenger panel with
-  `openIfMissing: true` and calls `shareObject()`; Messenger opens its own target
-  selector. The Map shows a notification only when sharing fails, never when the
-  user cancels, and closing Messenger dialogs is the Messenger's job.
-- **Renderer**: while a Map panel is mounted, a `map.marker` renderer is
-  registered with a mounted Messenger panel. `describe()` keeps the stored
-  preview's icon/color (they are not part of `data`) and takes the title from the
-  marker text. The registration follows `interApp.onDidChange`, so a Messenger
-  panel that mounts later is picked up, and it is released on unmount.
-- **Click**: the serialized `action` routes to the Map service with
-  `policy: 'ask'` (so the host can ask which Map instance to use) and calls
-  `focusMarker(name)`. When that returns false, Messenger keeps the card,
-  reports "This marker was deleted", and offers a button that flies to
-  `data.position`, the last known position stored in the chat object.
-
-## Marker notifications
-
-The Map app generates toast-style `window.TacPhone.notifications` for marker updates:
-
-- **New markers**: The game sends `{ a: "ACE_TacPhone_Map", c: "Marker.Upsert",
-  marker: [...] }`. An open Map's `MarkerLayerManager` handles it through the
-  `Marker.Upsert` command and raises a "New map marker" notification. A closed Map
-  (no mounted instance) falls back to a module-scope handler that only raises the
-  notification.
-- **Duplicate names ignored**: The first `Marker.Upsert` for a marker name raises
-  the notification and records the name. Subsequent position updates for that name
-  do not notify again.
-- **Tap behavior**: Tapping a marker notification uses
-  `window.TacPhone.interApp.resolveAsync()`
-  with `policy: "ask"` to select between multiple Map panels that provide the `map`
-  service, then calls `MapApi.flyTo({ x, y })` on the chosen panel. The target chooser
-  presents all candidates (floating popups and docked tabs). Default host lifetime is
-  15 seconds; use `duration: 0` in your code for permanent notifications until dismissed.
-
-No notification-specific SQF code is needed; the game-side markers are handled by
-the request processor and command registry, while the host UI generates banners.
-
-## Options
-
-The Map registers its render options from `init()` through
-`src/MapOptions.ts`; they appear in the host **Options** panel under `Map`.
-Defaults match the previous hard-coded values.
-
-| Option | Default | Effect |
-| --- | --- | --- |
-| Terrain detail | Balanced | Zoom depth/finest resolution: Low 4/0.5, Balanced 5/0.2, High 6/0.1 |
-| Tile cache | 48 tiles | Tiles kept per SVG layer; the main memory knob |
-| Pixel ratio | Device | Caps `Map.setPixelRatio()` (1x is the fastest) |
-| Tile preload | 0 | `TileLayer.preload` levels |
-| Smooth scaling | on | Canvas smoothing and `ImageTileSource.interpolate` |
-
-The presets **Weak phone**, **Balanced** and **Desktop** are shortcuts: they call
-`window.TacPhone.options.apply()` with a set of individual values, so the option
-list remains the single source of truth.
-
-Changing a tiling option rebuilds only the OpenLayers tile sources from the
-already-decoded terrain layers; the terrain is not requested from the game
-again. Terrain tiles are fixed at **128 px**: smaller tiles show the first
-terrain much sooner, and the old 256/512 px choices delayed the first paint
-without a useful memory trade. `pixelRatio` changes apply live. The view's
-zoom-out limit uses a fixed 256 px reference, independent of the tile size.
-
-## Data interest
-
-The Map app tells the game when it needs marker data. The interest name is
-`ACE_TacPhone_Map.markers` (constant `MAP_MARKERS_INTEREST` in `src/Map.tsx`,
-matching `INTEREST_MARKERS` in `addons/tacphone/apps/map/script_component.hpp`).
-
-- A mounted Map panel acquires the interest in `componentDidMount`, before the
-  marker manager requests its `GetAllMarkers` snapshot. Request order is
-  preserved, so the game is already filtering and sending marker updates when the
-  snapshot arrives.
-- Unmounting the panel releases it. The release runs before the rest of the
-  teardown, so it also happens when map creation failed part-way.
-- While no client holds the interest, the game installs no marker event handlers
-  and does no marker work; the Map panel still shows the snapshot it loaded.
-- The interest is reference-counted by the host (`window.TacPhone.interests`):
-  several Map panels in one page share one game interest, closing one panel keeps
-  it active, and closing the last one withdraws it. After a websocket reconnect
-  the registry re-announces the active interests automatically.
-
-## Packaging constraints
-
-The production loader reads the entry file from the game filesystem and imports
-it from a blob URL. The Map build therefore stays a single ESM entry file:
-
-- Format is `es`.
-- React is external and resolves through the host import map.
-- No bundle-relative dynamic imports, `React.lazy` imports, or relative imports.
-- CSS is inlined by `@ace-tacphone/build/singlefile` (the shared plugin used by
-  every app); no sidecar CSS file is emitted.
-- Only `react`, `react-dom`, `react-dom/client`, `react/jsx-runtime`, and
-  `react/compiler-runtime` may remain bare external imports. The host import map
-  provides all five.
-
-`vite.config.ts` takes the external list from the shared
-[`shared-modules.js`](../packages/tacphone-build/shared-modules.js), which also
-generates the host import map:
-
-```ts
-import { SHARED_MODULE_SPECIFIERS } from '@ace-tacphone/build/shared-modules';
-
-external: [...SHARED_MODULE_SPECIFIERS],
-output: {
-    codeSplitting: false,
-}
-```
-
-The build runs `tacphone-build check-shared-imports` afterwards and fails if the
-bundle contains a bare import that the host does not provide.
-
-This is a packaging choice for the Map app, not a hard limitation of the host.
-Extra JavaScript or CSS files can be shipped separately and loaded on demand
-with `window.TacPhone.networking.LoadGameFileText`; see
-[Loading additional files manually](../ACE_TacPhone_Main/README.md#loading-additional-files-manually).
-The trade-off is an extra game-filesystem read before the module or stylesheet
-can be used, so cache the loaded file. A relative `.js` import from the entry
-bundle still cannot resolve next to the blob URL.
+The suite needs Arma, the TacPhone web host and Playwright with an installed
+Chrome channel. `marker-channels` runs its layer/visibility and custom-color
+checks in any session and logs that the multiplayer-only checks (second channel,
+active-channel radio, inactive dimming) were skipped when Arma reports
+singleplayer. See [`test/README.md`](test/README.md) for prerequisites and
+scenarios.
+
+## Limitations
+
+- Polyline markers are display-only for editing in the web UI; they can be
+  created, measured and shared, but not edited or deleted from the phone. The
+  mission can still edit or delete them.
+- Markers created by the mission or other apps are read-only; only player-created
+  `_USER_DEFINED` markers can be moved or deleted.
+- Terrain detail is limited by the data the game can generate and send; very
+  large maps benefit from the lower detail presets.
+
+## Related documentation
+
+- [`AGENTS/map.md`](../AGENTS/map.md) — internals, rendering, channels, tests.
+- [`AGENTS/apps.md`](../AGENTS/apps.md) — app contract and packaging.
+- [`test/README.md`](test/README.md) — runtime test details.
+- [`packages/tacphone-api/README.md`](../packages/tacphone-api/README.md) — shared API types.

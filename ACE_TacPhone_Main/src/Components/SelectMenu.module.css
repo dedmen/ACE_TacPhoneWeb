@@ -1,0 +1,230 @@
+/* Reusable select. The menu is portaled to <body>, so every rule here has to
+   work outside the panel/dialog that owns the trigger: no inherited colours,
+   no layout coupling, and a fixed position from the component.
+
+   Apps can override the look through the class-name props (buttonClassName,
+   menuClassName, optionClassName) or the CSS variables below. */
+
+.wrapper {
+    display: block;
+    width: 100%;
+}
+
+.trigger {
+    --select-background: #232737;
+    --select-border: rgba(255, 255, 255, 0.16);
+    --select-text: #f2f2f5;
+    --select-muted: #9aa0b2;
+
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 30px;
+    padding: 0 8px;
+
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+
+    font: inherit;
+    font-size: 12px;
+    color: var(--select-text);
+    text-align: left;
+    background-color: var(--select-background);
+    border: 1px solid var(--select-border);
+    border-radius: 7px;
+    cursor: pointer;
+}
+
+.trigger:disabled {
+    color: var(--select-muted);
+    cursor: default;
+    opacity: 0.7;
+}
+
+.trigger:focus-visible {
+    outline: 2px solid #7aa7ff;
+    outline-offset: 1px;
+}
+
+.triggerCompact {
+    min-height: 24px;
+    padding: 0 6px;
+    font-size: 11px;
+    border-radius: 5px;
+    gap: 5px;
+}
+
+.value {
+    flex: 1 1 auto;
+    min-width: 0;
+
+    display: flex;
+    align-items: center;
+    gap: 6px;
+
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.chevron {
+    flex: 0 0 auto;
+    width: 0;
+    height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid currentColor;
+    opacity: 0.75;
+}
+
+.menu {
+    --select-menu-background: #232737;
+    --select-menu-border: rgba(255, 255, 255, 0.2);
+    --select-menu-text: #f2f2f5;
+
+    position: fixed;
+    z-index: 4000;
+    box-sizing: border-box;
+    padding: 3px;
+
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+
+    font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
+    font-size: 12px;
+    color: var(--select-menu-text);
+
+    background-color: var(--select-menu-background);
+    border: 1px solid var(--select-menu-border);
+    border-radius: 7px;
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.4);
+
+    overflow: hidden;
+}
+
+.menuCompact {
+    padding: 2px;
+    border-radius: 5px;
+    font-size: 11px;
+}
+
+.search {
+    flex: 0 0 auto;
+    box-sizing: border-box;
+    width: 100%;
+    margin-bottom: 2px;
+    padding: 4px 6px;
+
+    font: inherit;
+    font-size: inherit;
+    color: inherit;
+    background-color: rgba(127, 127, 127, 0.12);
+    border: 1px solid var(--select-menu-border);
+    border-radius: 5px;
+    outline: none;
+}
+
+.search:focus {
+    border-color: #7aa7ff;
+}
+
+.options {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+
+    scrollbar-width: thin;
+    scrollbar-color: rgba(127, 127, 127, 0.6) transparent;
+}
+
+.options::-webkit-scrollbar {
+    width: 9px;
+}
+
+.options::-webkit-scrollbar-thumb {
+    background: rgba(127, 127, 127, 0.6);
+    border-radius: 5px;
+}
+
+.options::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.option {
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 22px;
+    padding: 2px 5px;
+
+    display: flex;
+    align-items: center;
+    gap: 5px;
+
+    font: inherit;
+    font-size: inherit;
+    color: inherit;
+    text-align: left;
+    background: none;
+    border: 0;
+    border-radius: 5px;
+    cursor: pointer;
+}
+
+.option:hover,
+.optionActive {
+    background-color: rgba(255, 255, 255, 0.12);
+}
+
+.option[aria-selected='true'] {
+    background-color: rgba(122, 167, 255, 0.3);
+    color: #fff;
+}
+
+.optionDisabled,
+.optionDisabled:hover {
+    color: #7d8496;
+    background: none;
+    cursor: default;
+}
+
+.label {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.icon {
+    flex: 0 0 auto;
+    width: 24px;
+    height: 24px;
+
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+    -webkit-mask-position: center;
+    mask-position: center;
+    -webkit-mask-size: contain;
+    mask-size: contain;
+}
+
+.swatch {
+    flex: 0 0 auto;
+    width: 14px;
+    height: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    border-radius: 3px;
+}
+
+.empty {
+    padding: 6px;
+    font-size: 11px;
+    opacity: 0.75;
+}

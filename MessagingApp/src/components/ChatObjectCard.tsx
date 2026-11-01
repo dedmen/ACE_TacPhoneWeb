@@ -5,11 +5,11 @@ import type { ChatObject, ChatObjectPreview } from '../api';
 import { CHAT_OBJECT_KIND_ROOM_INVITE } from '../protocol';
 import type { RoomInviteObjectData } from '../protocol';
 import { notify } from '../objectActions';
-import { activateChatObject, isObjectInteractive, showLastKnownPosition } from '../objectActions';
+import { activateChatObject, isObjectInteractive } from '../objectActions';
 import { safeColor } from '../format';
 import { chatStore } from '../state/ChatStore';
 import { useMessengerUi } from '../ui';
-import { ChatIcon, ForwardIcon, PinIcon } from './icons';
+import { ChatIcon, ForwardIcon } from './icons';
 import { useObjectIcon } from './useObjectIcon';
 import styles from './ChatObjectCard.module.css';
 
@@ -94,16 +94,15 @@ function RoomInviteCard({ invite, joined }: { invite: RoomInviteObjectData; join
 /**
  * One generic chat object.
  *
- * The stored preview renders the card immediately; a registered renderer (for
- * example the Map's `map.marker` one) may refine it asynchronously. Clicking
- * prefers the renderer's `activate()`, then the serialized action routed through
- * the host. A deleted marker keeps the card and offers its stored position.
+ * The stored preview renders the card immediately; the renderer registered by
+ * the app that owns the object kind may refine it asynchronously. Clicking
+ * prefers that renderer's `activate()`, then the serialized action routed through
+ * the host. Messenger contains no object-kind-specific routing.
  */
 export function ChatObjectCard({ object, joinedRoomIds }: ChatObjectCardProps): JSX.Element {
     const ui = useMessengerUi();
     const [asyncPreview, setAsyncPreview] = useState<{ data: unknown; tick: number; value: ChatObjectPreview | undefined } | undefined>(undefined);
     const [busy, setBusy] = useState(false);
-    const [deleted, setDeleted] = useState(false);
     const [error, setError] = useState<string | undefined>(undefined);
 
     // Renderers that answer synchronously are applied during render; the stored
@@ -153,8 +152,7 @@ export function ChatObjectCard({ object, joinedRoomIds }: ChatObjectCardProps): 
 
         try {
             const result = await activateChatObject(object);
-            if (result.status === 'deleted-marker') setDeleted(true);
-            else if (result.status === 'error') setError(result.error);
+            if (result.status === 'error') setError(result.error);
         } finally {
             setBusy(false);
         }
@@ -194,23 +192,6 @@ export function ChatObjectCard({ object, joinedRoomIds }: ChatObjectCardProps): 
                 </span>
                 {interactive && <ForwardIcon className={styles.openIcon} />}
             </button>
-
-            {deleted && (
-                <div className={styles.deleted}>
-                    <span>This marker was deleted.</span>
-                    <button
-                        type="button"
-                        className={styles.linkButton}
-                        onClick={() => {
-                            ui.closeDialogs();
-                            void showLastKnownPosition(object);
-                        }}
-                    >
-                        <PinIcon className={styles.linkIcon} />
-                        Show last known position
-                    </button>
-                </div>
-            )}
 
             {error && <div className={styles.error}>{error}</div>}
         </div>

@@ -7,9 +7,16 @@ import Map from "ol/Map";
 import { View } from 'ol';
 import type { ViewOptions } from 'ol/View.js';
 import TileLayer from 'ol/layer/Tile';
+import VectorLayer from 'ol/layer/Vector';
+import VectorSource from 'ol/source/Vector';
+import Feature from 'ol/Feature';
+import Polygon from 'ol/geom/Polygon';
+import Circle from 'ol/geom/Circle';
+import { Style, Stroke, Fill } from 'ol/style';
 import DoubleClickZoom from 'ol/interaction/DoubleClickZoom';
 import DragRotate from 'ol/interaction/DragRotate';
 import PinchRotate from 'ol/interaction/PinchRotate';
+import Zoom from 'ol/control/Zoom';
 
 
 import Projection from 'ol/proj/Projection';
@@ -29,14 +36,37 @@ import {
     MAP_SERVICE,
     MAP_SERVICE_VERSION,
     type MapApi,
+    type MapBoundingBox,
     type MapFlyToOptions,
+    type MapFocusMarkerOptions,
 } from './api';
+import {
+    registerMapViewTestProbe,
+    unregisterMapViewTestProbe,
+    type MapHighlightState,
+    type MapViewDebugState,
+    type MapViewTileStats,
+} from './MapMarkers/MapTestHooks';
 
 // The view's zoom-out limit must not depend on the user's tile size: a 512 px
 // tile would otherwise fit only half of the terrain into the viewport.
 const VIEW_REFERENCE_TILE_SIZE = 256;
 // Placeholder size until the terrain layers report the real one.
 const INITIAL_TERRAIN_EXTENT: [number, number, number, number] = [0, 0, 30720, 30720];
+
+/** Temporary glowing outline used by `flyTo({ highlight: true })`. */
+const FLY_TO_HIGHLIGHT_STYLE = [
+    new Style({
+        stroke: new Stroke({ color: 'rgba(34, 211, 238, 0.30)', width: 16 }),
+        fill: new Fill({ color: 'rgba(34, 211, 238, 0.10)' }),
+    }),
+    new Style({
+        stroke: new Stroke({ color: 'rgba(34, 211, 238, 0.95)', width: 3 }),
+        fill: new Fill({ color: 'rgba(34, 211, 238, 0.06)' }),
+    }),
+];
+const FLY_TO_HIGHLIGHT_MS = 2600;
+const FLY_TO_FIT_MARGIN_PX = 48;
 
 interface MapState {
   layerSwitcherIsOpen: boolean;
@@ -51,6 +81,14 @@ class App extends React.Component<AppProps,MapState> {
     private terrainLayers: TileLayer<ImageTileSource>[] = [];
     private terrainLoadToken = 0;
     private terrainViewReady = false;
+    /** Per-layer tile load counters for the debug test hook. */
+    private terrainTileStats: MapViewTileStats[] = [];
+    private lastTerrainTileEventAt = 0;
+
+    private highlightSource: VectorSource | null = null;
+    private highlightLayer: VectorLayer<VectorSource> | null = null;
+    private highlightTimer: number | null = null;
+    private highlightState: MapHighlightState | null = null;
     /** Decoded terrain layers, kept so option changes can rebuild tiles without a game request. */
     private terrainSource: {
         extent: [number, number, number, number];
@@ -157,6 +195,8 @@ class App extends React.Component<AppProps,MapState> {
 
         if (!this.mapRef.current) return;
 
+        registerMapViewTestProbe(this);
+
         this.renderSettings = readMapRenderSettings();
 
         var projection = new Projection({
@@ -172,6 +212,22 @@ class App extends React.Component<AppProps,MapState> {
             view: this.createTerrainView(projection, INITIAL_TERRAIN_EXTENT, null).view,
         });
         this.map = map;
+
+        // The phone UI has no room for OL's +/- zoom buttons; wheel and pinch
+        // zoom stay available.
+        map.getControls().forEach((control) => {
+            if (control instanceof Zoom) {
+                map.removeControl(control);
+            }
+        });
+
+        this.highlightSource = new VectorSource();
+        this.highlightLayer = new VectorLayer({
+            source: this.highlightSource,
+            style: FLY_TO_HIGHLIGHT_STYLE,
+            zIndex: 100,
+        });
+        map.addLayer(this.highlightLayer);
 
         // Options changed from the host Options panel apply to the live map.
         this.unsubscribeOptions = onMapRenderSettingsChanged(this.applyRenderSettings);
@@ -211,13 +267,17 @@ class App extends React.Component<AppProps,MapState> {
      * the implementation of `MapApi.flyTo()` and of marker focusing.
      */
     private flyToCoordinate(options: MapFlyToOptions): void {
-        // Validate before doing anything, including storing a pending target.
-        if (
-            typeof options.x !== 'number' ||
-            typeof options.y !== 'number' ||
-            !Number.isFinite(options.x) ||
-            !Number.isFinite(options.y)
-        ) {
+        const bbox = this.readBoundingBox(options.bbox);
+        if (options.bbox !== undefined && bbox === null) {
+            console.warn('MapApi.flyTo: invalid bounding box, expected [minX, minY, maxX, maxY]');
+        }
+
+        const hasCenter = typeof options.x === 'number'
+            && typeof options.y === 'number'
+            && Number.isFinite(options.x)
+            && Number.isFinite(options.y);
+
+        if (!bbox && !hasCenter) {
             console.warn('MapApi.flyTo: invalid x/y coordinates');
             return;
         }
@@ -232,20 +292,41 @@ class App extends React.Component<AppProps,MapState> {
         const view = this.map.getView();
         const projection = view.getProjection();
 
-        const center = [options.x, options.y];
+        const center: [number, number] = bbox
+            ? [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2]
+            : [options.x as number, options.y as number];
 
         // Clamp the center to the current view projection extent when one exists
         const extent = projection.getExtent();
         if (extent) {
-            center[0] = Math.max(extent[0], Math.min(options.x, extent[2]));
-            center[1] = Math.max(extent[1], Math.min(options.y, extent[3]));
+            center[0] = Math.max(extent[0], Math.min(center[0], extent[2]));
+            center[1] = Math.max(extent[1], Math.min(center[1], extent[3]));
         }
 
-        // Only apply resolution when it is a finite positive number
-        const resolution = options.resolution !== undefined && Number.isFinite(options.resolution) && options.resolution > 0 ? options.resolution : undefined;
+        // Only apply resolution when it is a finite positive number. A bounding
+        // box without an explicit resolution is fitted to the viewport.
+        let resolution = options.resolution !== undefined
+            && Number.isFinite(options.resolution)
+            && options.resolution > 0
+            ? options.resolution
+            : undefined;
+
+        if (resolution === undefined && bbox) {
+            const size = this.map.getSize();
+            const width = Math.max(1, (size?.[0] ?? 512) - FLY_TO_FIT_MARGIN_PX * 2);
+            const height = Math.max(1, (size?.[1] ?? 512) - FLY_TO_FIT_MARGIN_PX * 2);
+            const fitted = Math.max((bbox[2] - bbox[0]) / width, (bbox[3] - bbox[1]) / height);
+
+            if (Number.isFinite(fitted) && fitted > 0) {
+                resolution = Math.min(
+                    view.getMaxResolution(),
+                    Math.max(view.getMinResolution(), fitted),
+                );
+            }
+        }
 
         if (options.animate !== false) {
-            const animation: { center: number[]; resolution?: number; duration: number } = { center, duration: 300 };
+            const animation: { center: number[]; resolution?: number; duration: number } = { center, duration: 450 };
             if (resolution !== undefined)
                 animation.resolution = resolution;
             view.animate(animation);
@@ -255,6 +336,82 @@ class App extends React.Component<AppProps,MapState> {
                 view.setResolution(resolution);
             }
         }
+
+        if (options.highlight) {
+            let highlightBbox = bbox;
+
+            if (
+                bbox
+                && resolution !== undefined
+                && options.highlightSizePx !== undefined
+                && Number.isFinite(options.highlightSizePx)
+                && options.highlightSizePx > 0
+            ) {
+                const half = (options.highlightSizePx * resolution) / 2;
+                highlightBbox = [center[0] - half, center[1] - half, center[0] + half, center[1] + half];
+            }
+
+            this.showFlyToHighlight(highlightBbox, center, resolution ?? view.getResolution() ?? undefined);
+        } else {
+            this.clearFlyToHighlight();
+        }
+    }
+
+    /** Validates and copies a world-space bounding box. */
+    private readBoundingBox(value: MapBoundingBox | undefined): MapBoundingBox | null {
+        if (
+            !Array.isArray(value)
+            || value.length !== 4
+            || !value.every((coordinate) => typeof coordinate === 'number' && Number.isFinite(coordinate))
+        ) {
+            return null;
+        }
+
+        const [minX, minY, maxX, maxY] = value;
+        return minX < maxX && minY < maxY ? [minX, minY, maxX, maxY] : null;
+    }
+
+    /** Shows the temporary glowing box/circle used by `flyTo({ highlight: true })`. */
+    private showFlyToHighlight(
+        bbox: MapBoundingBox | null,
+        center: [number, number],
+        resolution: number | undefined,
+    ): void {
+        const source = this.highlightSource;
+        if (!source) {
+            return;
+        }
+
+        this.clearFlyToHighlight();
+
+        const geometry = bbox
+            ? new Polygon([[
+                [bbox[0], bbox[1]],
+                [bbox[2], bbox[1]],
+                [bbox[2], bbox[3]],
+                [bbox[0], bbox[3]],
+                [bbox[0], bbox[1]],
+            ]])
+            : new Circle(center, Math.max((resolution ?? 1) * 80, 1));
+
+        source.addFeature(new Feature({ geometry }));
+        this.highlightState = {
+            active: true,
+            kind: bbox ? 'box' : 'circle',
+            bbox: bbox ? [...bbox] : null,
+        };
+        this.highlightTimer = window.setTimeout(() => this.clearFlyToHighlight(), FLY_TO_HIGHLIGHT_MS);
+    }
+
+    /** Removes the temporary glow and cancels its timeout. */
+    private clearFlyToHighlight(): void {
+        if (this.highlightTimer !== null) {
+            window.clearTimeout(this.highlightTimer);
+            this.highlightTimer = null;
+        }
+
+        this.highlightSource?.clear();
+        this.highlightState = null;
     }
 
     private buildAndRegisterMapApi(): void {
@@ -301,8 +458,8 @@ class App extends React.Component<AppProps,MapState> {
             hasMarker: (name: string) => {
                 return typeof name === 'string' && name !== '' && this.markerUiRef.current?.hasMarker(name) === true;
             },
-            focusMarker: (name: string) => {
-                return this.markerUiRef.current?.focusMarker(name) ?? Promise.resolve(false);
+            focusMarker: (name: string, options?: MapFocusMarkerOptions) => {
+                return this.markerUiRef.current?.focusMarker(name, options) ?? Promise.resolve(false);
             },
         };
 
@@ -315,7 +472,49 @@ class App extends React.Component<AppProps,MapState> {
         this.unregisterMapApi = registration;
     }
 
+    /**
+     * Debug-only terrain state for the browser tests: whether the view is ready
+     * and how many tiles each terrain layer has started/finished loading.
+     */
+    public getMapViewDebugState(): MapViewDebugState {
+        const tiles = this.terrainTileStats.map((stats) => ({ ...stats }));
+        const started = tiles.reduce((total, stats) => total + stats.started, 0);
+        const finished = tiles.reduce((total, stats) => total + stats.finished, 0);
+        const errored = tiles.reduce((total, stats) => total + stats.errored, 0);
+        const loading = tiles.reduce((total, stats) => total + stats.loading, 0);
+
+        return {
+            ready: this.terrainViewReady && this.map !== null,
+            tiles,
+            started,
+            finished,
+            errored,
+            loading,
+            quietForMs: this.lastTerrainTileEventAt === 0
+                ? 0
+                : Math.max(0, Date.now() - this.lastTerrainTileEventAt),
+            settled: started > 0 && loading === 0,
+            highlight: this.highlightState
+                ? {
+                    ...this.highlightState,
+                    bbox: this.highlightState.bbox ? [...this.highlightState.bbox] : null,
+                }
+                : null,
+        };
+    }
+
     componentWillUnmount(): void {
+        unregisterMapViewTestProbe(this);
+        this.clearFlyToHighlight();
+
+        if (this.highlightLayer) {
+            this.map?.removeLayer(this.highlightLayer);
+            this.highlightLayer.setSource(null);
+            this.highlightLayer = null;
+        }
+        this.highlightSource?.dispose();
+        this.highlightSource = null;
+
         /**
          * Unregister the MapApi BEFORE map teardown, so that window.TacPhone.interApp.list()
          * and other lookups see the cleanup immediately. The pendingFlyTo is now
@@ -396,6 +595,9 @@ class App extends React.Component<AppProps,MapState> {
     }
 
     private disposeTerrainLayers(): void {
+        this.terrainTileStats = [];
+        this.lastTerrainTileEventAt = 0;
+
         const map = this.map;
         const layers = this.terrainLayers;
         this.terrainLayers = [];
@@ -553,8 +755,43 @@ class App extends React.Component<AppProps,MapState> {
         // Replace any previous terrain layers so repeated rebuilds cannot stack duplicates.
         this.disposeTerrainLayers();
 
+        this.terrainTileStats = [];
+        this.lastTerrainTileEventAt = Date.now();
+
         newLayers.forEach((layer) => {
             map.addLayer(layer);
+
+            const source = layer.getSource();
+            const layerName = layer.get('title');
+            if (!source) {
+                return;
+            }
+
+            const stats: MapViewTileStats = {
+                name: typeof layerName === 'string' ? layerName : 'Terrain',
+                started: 0,
+                finished: 0,
+                errored: 0,
+                loading: 0,
+            };
+
+            source.on('tileloadstart', () => {
+                stats.started += 1;
+                stats.loading += 1;
+                this.lastTerrainTileEventAt = Date.now();
+            });
+            source.on('tileloadend', () => {
+                stats.finished += 1;
+                stats.loading = Math.max(0, stats.loading - 1);
+                this.lastTerrainTileEventAt = Date.now();
+            });
+            source.on('tileloaderror', () => {
+                stats.errored += 1;
+                stats.loading = Math.max(0, stats.loading - 1);
+                this.lastTerrainTileEventAt = Date.now();
+            });
+
+            this.terrainTileStats.push(stats);
         });
         this.terrainLayers = newLayers;
 
@@ -680,7 +917,7 @@ class App extends React.Component<AppProps,MapState> {
                     map={this.map}
                     mapContainer={this.mapRef.current}
                     layerSwitcher={this.layerSwitcherSections}
-                    flyTo={(position) => this.flyToCoordinate({ x: position[0], y: position[1] })}
+                    flyTo={(options) => this.flyToCoordinate(options)}
                     onRequestCloseLayers={this.closeLayerSwitcherMenu}
                 />
 

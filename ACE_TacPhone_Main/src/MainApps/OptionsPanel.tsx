@@ -14,6 +14,7 @@ import type {
 
 import { appOptions } from "../Backend/AppOptions";
 import { appDirectory } from "../Backend/AppDirectory";
+import { SelectMenu } from "../Components/SelectMenu";
 import styles from "./OptionsPanel.module.css";
 
 interface OptionsPanelState {
@@ -91,21 +92,6 @@ interface OptionRowProps {
 
 function OptionControl({ app, definition, value }: OptionRowProps): React.ReactNode {
     const { key, type } = definition;
-    const [selectOpen, setSelectOpen] = React.useState(false);
-    const selectWrapRef = React.useRef<HTMLDivElement | null>(null);
-
-    React.useEffect(() => {
-        if (!selectOpen)
-            return;
-
-        const closeOutside = (event: PointerEvent): void => {
-            if (!selectWrapRef.current?.contains(event.target as Node))
-                setSelectOpen(false);
-        };
-
-        document.addEventListener("pointerdown", closeOutside);
-        return () => document.removeEventListener("pointerdown", closeOutside);
-    }, [selectOpen]);
 
     if (type === "boolean") {
         return (
@@ -121,60 +107,25 @@ function OptionControl({ app, definition, value }: OptionRowProps): React.ReactN
 
     if (type === "select") {
         const choices = definition.choices ?? [];
-        const selected = choices.findIndex(choice => choice.value === value);
-        const selectedChoice = selected >= 0 ? choices[selected] : undefined;
-        const buttonId = `option-${definition.key}`;
-        const menuId = `${buttonId}-menu`;
+        // The listbox works on its own index so any choice value type
+        // (string, number, boolean) round-trips unchanged.
+        const selected = choices.findIndex(choice => Object.is(choice.value, value));
 
         return (
-            <div
-                ref={selectWrapRef}
-                className={styles.SelectWrap}
-                onBlur={(event) => {
-                    // Close only when focus left the whole widget.
-                    if (!event.currentTarget.contains(event.relatedTarget as Node | null))
-                        setSelectOpen(false);
+            <SelectMenu
+                id={`option-${definition.key}`}
+                value={selected >= 0 ? selected : undefined}
+                options={choices.map((choice, index) => ({ value: index, label: choice.label }))}
+                onChange={(next) => {
+                    const choice = choices[Number(next)];
+                    if (choice)
+                        appOptions.set(app, key, choice.value);
                 }}
-                onKeyDown={(event) => {
-                    if (event.key === "Escape")
-                        setSelectOpen(false);
-                }}
-            >
-                <button
-                    id={buttonId}
-                    type="button"
-                    className={styles.Select}
-                    aria-haspopup="listbox"
-                    aria-expanded={selectOpen}
-                    aria-controls={selectOpen ? menuId : undefined}
-                    onClick={() => setSelectOpen(open => !open)}
-                >
-                    <span className={styles.SelectValue}>
-                        {selectedChoice?.label ?? "Choose…"}
-                    </span>
-                </button>
-
-                {selectOpen && (
-                    <div id={menuId} className={styles.SelectMenu} role="listbox" aria-labelledby={buttonId}>
-                        {choices.map((choice, index) => (
-                            <button
-                                key={`${choice.label}:${index}`}
-                                type="button"
-                                role="option"
-                                aria-selected={index === selected}
-                                className={`${styles.SelectOption} ${index === selected ? styles.SelectOptionSelected : ""}`}
-                                onClick={() => {
-                                    appOptions.set(app, key, choice.value);
-                                    setSelectOpen(false);
-                                    selectWrapRef.current?.querySelector<HTMLButtonElement>('button')?.focus();
-                                }}
-                            >
-                                {choice.label}
-                            </button>
-                        ))}
-                    </div>
-                )}
-            </div>
+                size="normal"
+                searchable={false}
+                ariaLabel={definition.label}
+                className={styles.SelectControl}
+            />
         );
     }
 

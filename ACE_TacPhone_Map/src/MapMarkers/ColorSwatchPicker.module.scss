@@ -1,0 +1,112 @@
+/* Shared color swatch grid, used by the polyline controls and the marker
+   create dialog. Light styling: both hosts are white panels. */
+
+.grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.compact {
+  gap: 4px;
+}
+
+.swatch {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  box-sizing: border-box;
+  border: 1px solid #94a3b8;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: box-shadow 0.15s;
+}
+
+.compact .swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+}
+
+.swatch:hover {
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.25);
+}
+
+.selected {
+  outline: 2px solid #2563eb;
+  outline-offset: 1px;
+}
+
+/* The virtual "type default" swatch needs a visible marker: a type color can
+   be identical to a real CfgMarkerColors entry. */
+.swatch[data-color-default='true'] {
+  border-color: #2563eb;
+  border-style: dashed;
+}
+
+/* Custom RGBA color: rainbow swatch; it opens a color + alpha popover. */
+.custom {
+  background: conic-gradient(#ff0000, #ffff00, #00ff00, #00ffff, #0000ff, #ff00ff, #ff0000);
+}
+
+/* Portaled so the marker dialog's scroll container cannot clip it. */
+.custom_popover {
+  z-index: 4000;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  box-sizing: border-box;
+  padding: 7px 8px;
+  background: rgba(255, 255, 255, 0.98);
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
+
+  font-size: 10px;
+  color: #475569;
+}
+
+.custom_color_row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.custom_color_input {
+  flex: 1 1 auto;
+  min-width: 60px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid #94a3b8;
+  border-radius: 4px;
+  background: #ffffff;
+  cursor: pointer;
+}
+
+.custom_color_input::-webkit-color-swatch-wrapper {
+  padding: 2px;
+}
+
+.custom_color_input::-webkit-color-swatch {
+  border: none;
+  border-radius: 2px;
+}
+
+.alpha {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.alpha input {
+  flex: 1 1 auto;
+  min-width: 60px;
+  accent-color: #2563eb;
+}
+
+.alpha_value {
+  min-width: 28px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: #1d4ed8;
+}

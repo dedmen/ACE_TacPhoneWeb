@@ -3,7 +3,6 @@ import { TACPHONE_API_VERSION } from "@ace-tacphone/api";
 import type { AppPanelInfo, AppProps, PanelInfo, TacPhoneHost } from "@ace-tacphone/api";
 import { RemoteAccessPanel } from "./RemoteAccessPanel";
 import { OptionsPanel } from "./OptionsPanel";
-import { compressAndToBase64 } from "../Backend/Compression";
 
 // These are apps included in TacPhone, even if no other apps are loaded. Core functionality like Notifications and Settings
 
@@ -144,11 +143,9 @@ type HostLogEntry = {
 };
 
 /**
- * The extension has no console in the Arma process; its diagnostics arrive as
- * `Host.Log` messages. They always go to the page's dev console, and warnings
- * and errors become notification banners.
+ * Emits one host-log entry to the page console and notifications.
  */
-function showHostLog(entry: HostLogEntry): void {
+function emitHostLog(entry: HostLogEntry): void {
   const level = entry.level ?? "info";
   const body = entry.message ?? "";
   const prefix = entry.time ? `[${entry.time}] ` : "";
@@ -172,6 +169,30 @@ function showHostLog(entry: HostLogEntry): void {
       console.error("Could not show the TacPhone host log notification:", error);
     }
   }
+}
+
+/**
+ * Host diagnostics arrive as `Host.Log` messages. Warnings (for example a
+ * send to a browser connection that just closed) are only noisy in normal
+ * play, so they are shown only while `GameInfo.debug` is true. This check is
+ * in the web UI, so it also applies to a release web bundle running against a
+ * debug game. Errors stay visible.
+ */
+function showHostLog(entry: HostLogEntry): void {
+  if ((entry.level ?? "info") === "warning") {
+    void window.TacPhone.gameInfo.whenReady()
+      .then(info => {
+        if (info.debug)
+          emitHostLog(entry);
+      })
+      .catch(() => {
+        // No game info means no debug flag; keep normal play quiet.
+      });
+
+    return;
+  }
+
+  emitHostLog(entry);
 }
 
 export async function init(): Promise<void> {
@@ -215,13 +236,7 @@ export async function OnMessageFromGame(message: object): Promise<void> {
         const { path, maxSize, uid } = message as { path: string, maxSize: number, uid: string };
 
         var textureData = await window.TacPhone.networking.LoadGameFileTexture(path, maxSize);
-        // textureData can be large
-        // We need to reduce the size to transfer it
-
-        console.log("Texture data pre compress", textureData.length);
-        textureData = await compressAndToBase64(textureData);
-        console.log("Texture data compressed", textureData.length);
-
+        // WebP is already compressed; send the data URL through unchanged.
         // Now we can send it back, we do that by sending a request to the game
 
         await window.TacPhone.networking.Request({ a: "main", c: "ReplyRequestTexture", uid: uid, data: textureData });

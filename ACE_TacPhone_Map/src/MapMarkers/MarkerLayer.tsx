@@ -26,6 +26,15 @@ import {
 } from './Channels';
 import { PolylineMeasurementLayer } from './PolylineMeasurementLayer';
 import { isPolylineMeasurementsText } from './PolylineMeasurements';
+import { markerColorToOpaqueCss, markerLabelColor, resolveMarkerColor } from './MarkerColorUtils';
+import type { MapDebugChannel, MapDebugMarker, MapDebugState } from './MapTestHooks';
+import ImageState from 'ol/ImageState';
+import { shared as iconImageCache } from 'ol/style/IconImageCache';
+
+// Custom RGBA drags create a tinted icon per color, and OpenLayers caches each
+// by texture + color. Keep that cache bounded so a long drag cannot accumulate
+// thousands of tinted canvases; styles already in use keep their reference.
+iconImageCache.setSize(256);
 
 
 // name, type, color, dir, pos, text, shape, alpha, brush, size, channel, polyline
@@ -37,7 +46,6 @@ type PendingMarkerOperation =
 
 const MAX_PENDING_MARKER_OPERATIONS = 512;
 const MARKER_REQUEST_TIMEOUT_MS = 10_000;
-const DEFAULT_MARKER_COLOR = '#ffffff';
 const DEFAULT_MARKER_SIZE: [number, number] = [1, 1];
 // Minimum delay between two position updates sent to the game while a marker
 // is dragged. In-between positions are coalesced into one trailing update.
@@ -142,6 +150,21 @@ function colorToHex(rgba: [number, number, number, number]): string {
     return `#${toHex(r)}${toHex(g)}${toHex(b)}${toHex(a)}`;
 }
 
+/** Alpha component of a resolved CSS color, used for the debug opacity. */
+function colorAlpha(color: string): number {
+    if (/^#[0-9a-f]{8}$/i.test(color)) {
+        return parseInt(color.slice(7, 9), 16) / 255;
+    }
+
+    const rgba = /^rgba\([^,]+,[^,]+,[^,]+,([^)]+)\)$/.exec(color);
+    if (rgba) {
+        const value = Number(rgba[1]);
+        return Number.isFinite(value) ? value : 1;
+    }
+
+    return 1;
+}
+
 function applyAlphaToColor(color: string, alpha: number): string {
     const effectiveAlpha = Number.isFinite(alpha) ? alpha : 1;
     if (effectiveAlpha === 1) {
@@ -161,11 +184,17 @@ function applyAlphaToColor(color: string, alpha: number): string {
         const r = parseInt(color.slice(1, 3), 16);
         const g = parseInt(color.slice(3, 5), 16);
         const b = parseInt(color.slice(5, 7), 16);
-        return `rgba(${r}, ${g}, ${b}, ${effectiveAlpha})`;
+        // A hex color may already carry alpha (CfgMarkerColors is #rrggbbaa, and
+        // an 8-digit custom color keeps its own alpha); multiply, never replace.
+        const baseAlpha = parseInt(color.slice(7, 9), 16) / 255;
+        return `rgba(${r}, ${g}, ${b}, ${baseAlpha * effectiveAlpha})`;
     }
 
     if (color.startsWith('rgba')) {
-        return color.replace(/rgba\(([^,]+),([^,]+),([^,]+),([^)]+)\)/, `rgba($1,$2,$3,${effectiveAlpha})`);
+        return color.replace(
+            /rgba\(([^,]+),([^,]+),([^,]+),([^)]+)\)/,
+            (_match, r, g, b, alphaPart) => `rgba(${r},${g},${b},${Number(alphaPart) * effectiveAlpha})`,
+        );
     }
 
     if (color.startsWith('rgb(')) {
@@ -310,6 +339,8 @@ export class MarkerLayerManager {
     private previewLayer: VectorLayer<VectorSource>;
     private previewSource: VectorSource;
     private previewFeature: Feature<Point> | null = null;
+    /** Invalidates pending icon loads so only the newest preview style wins. */
+    private previewStyleRevision = 0;
 
     //#TODO store these globally, and only load them once, in case we have multiple maps
     // In general if we have multiple maps, there should probably just be one MarkerLayerManager
@@ -795,9 +826,9 @@ export class MarkerLayerManager {
     }
 
     /**
-     * Data of an icon marker for sharing with another app (Messenger), or null
-     * when the marker does not exist or is a polyline. Polyline markers are
-     * display-only and not shareable.
+     * Data of an icon or polyline marker for sharing with another app
+     * (Messenger), or null when the marker does not exist. Polyline text is
+     * data-only; the measurement tag is never exposed as a label.
      */
     public getMarkerChatData(name: string): MarkerChatData | null {
         if (this.destroyed || typeof name !== 'string' || name === '') {
@@ -807,44 +838,18 @@ export class MarkerLayerManager {
         const feature = this.getRegisteredFeature(name);
         const geometry = feature?.getGeometry();
 
-        // Only point/icon markers are shareable; a LineString is a polyline.
-        if (!feature || !(geometry instanceof Point)) {
-            return null;
-        }
-
-        const coordinates = geometry.getCoordinates();
-        if (!isFinitePosition(coordinates)) {
+        if (!feature || !(geometry instanceof Point || geometry instanceof LineString)) {
             return null;
         }
 
         const type = (feature.get('type') as string | undefined) ?? '';
         const color = (feature.get('color') as string | undefined) ?? '';
-        const text = (feature.get('label') as string | undefined) ?? '';
+        const rawText = (feature.get('label') as string | undefined) ?? '';
+        const isPolyline = geometry instanceof LineString;
+        // Measurement tags are internal; do not show them on a shared card.
+        const text = isPolyline && isPolylineMeasurementsText(rawText) ? '' : rawText;
+        const label = text || (isPolyline ? 'Polyline' : '');
         const typeResolved = this.markerTypes.get(type);
-
-        return {
-            name,
-            type,
-            color,
-            text,
-            label: text,
-            position: [coordinates[0], coordinates[1]],
-            typeIcon: typeResolved?.icon ?? '',
-            resolvedColor: this.resolveMarkerColor(color, typeResolved),
-        };
-    }
-
-    /**
-     * Flies to a marker through the supplied `flyTo` callback when it exists.
-     * Returns false for an unknown marker, so callers can report a deleted one.
-     * A polyline focuses its first vertex.
-     */
-    public focusMarker(name: string, flyTo: (position: [number, number]) => void): boolean {
-        if (this.destroyed || typeof name !== 'string' || name === '') {
-            return false;
-        }
-
-        const geometry = this.getRegisteredFeature(name)?.getGeometry();
         let position: [number, number] | null = null;
 
         if (geometry instanceof Point) {
@@ -852,10 +857,57 @@ export class MarkerLayerManager {
             if (isFinitePosition(coordinates)) {
                 position = [coordinates[0], coordinates[1]];
             }
+        } else {
+            const extent = geometry.getExtent();
+            if (extent.every((coordinate) => Number.isFinite(coordinate))) {
+                position = [(extent[0] + extent[2]) / 2, (extent[1] + extent[3]) / 2];
+            }
+        }
+
+        if (!position) {
+            return null;
+        }
+
+        return {
+            name,
+            type,
+            color,
+            text,
+            label,
+            position,
+            typeIcon: typeResolved?.icon ?? '',
+            resolvedColor: this.resolveColorFor(type, color),
+        };
+    }
+
+    /**
+     * Flies to a marker through the supplied `flyTo` callback when it exists.
+     * Returns false for an unknown marker, so callers can report a deleted one.
+     * A polyline calls back with its whole bounding box; a point calls back
+     * without a box (the caller chooses a focus area).
+     */
+    public focusMarker(
+        name: string,
+        flyTo: (position: [number, number], bbox?: [number, number, number, number]) => void,
+    ): boolean {
+        if (this.destroyed || typeof name !== 'string' || name === '') {
+            return false;
+        }
+
+        const geometry = this.getRegisteredFeature(name)?.getGeometry();
+        let position: [number, number] | null = null;
+        let bbox: [number, number, number, number] | undefined;
+
+        if (geometry instanceof Point) {
+            const coordinates = geometry.getCoordinates();
+            if (isFinitePosition(coordinates)) {
+                position = [coordinates[0], coordinates[1]];
+            }
         } else if (geometry instanceof LineString) {
-            const first = geometry.getCoordinates()[0];
-            if (isFinitePosition(first)) {
-                position = [first[0], first[1]];
+            const extent = geometry.getExtent();
+            if (extent.every((coordinate) => Number.isFinite(coordinate))) {
+                position = [(extent[0] + extent[2]) / 2, (extent[1] + extent[3]) / 2];
+                bbox = [extent[0], extent[1], extent[2], extent[3]];
             }
         }
 
@@ -863,14 +915,17 @@ export class MarkerLayerManager {
             return false;
         }
 
-        flyTo(position);
+        flyTo(position, bbox);
         return true;
     }
 
     /** Resolves a CfgMarkerColors class name, falling back to the type color. */
-    private resolveMarkerColor(colorClassName: string, typeResolved: MarkerType | undefined): string {
-        const colorResolved = colorClassName !== '' ? this.markerColors.get(colorClassName) : undefined;
-        return colorResolved?.color || typeResolved?.color || DEFAULT_MARKER_COLOR;
+    private resolveColorFor(type: string, colorClassName: string): string {
+        return resolveMarkerColor(
+            colorClassName,
+            this.markerColors.get(colorClassName)?.color,
+            this.markerTypes.get(type)?.color,
+        );
     }
 
     public getMarkerTypes(): MarkerType[] {
@@ -879,6 +934,103 @@ export class MarkerLayerManager {
 
     public getMarkerColors(): MarkerColor[] {
         return Array.from(this.markerColors.values());
+    }
+
+    /**
+     * Debug-only snapshot of the rendered channel layers and markers.
+     *
+     * Canvas styling cannot be asserted from the DOM, so the browser tests read
+     * the channel dimming and resolved colors from here instead of inspecting
+     * pixels. The values mirror what `dynamicIconStyleFunction` and
+     * `createFeatureStyle` apply.
+     */
+    public getDebugSnapshot(): Omit<MapDebugState, 'polyline'> {
+        const channels: MapDebugChannel[] = [];
+
+        for (const state of this.channelLayers.values()) {
+            channels.push({
+                id: state.channel.id,
+                label: state.channel.label,
+                available: state.channel.mapMarkersEnabled,
+                visible: state.layer.getVisible(),
+            });
+        }
+
+        channels.sort((left, right) => left.id - right.id);
+
+        const markers: MapDebugMarker[] = [];
+        const seen = new Set<Feature<Point | LineString>>();
+
+        for (const feature of this.markerRegistry.values()) {
+            if (seen.has(feature)) {
+                continue;
+            }
+            seen.add(feature);
+
+            const geometry = feature.getGeometry();
+            const channel = this.resolveChannel(feature.get('channel'));
+            const type = (feature.get('type') as string | undefined) ?? '';
+            const color = (feature.get('color') as string | undefined) ?? '';
+            const rawAlpha = feature.get('alpha');
+            const alpha = Number.isFinite(rawAlpha) ? Number(rawAlpha) : 1;
+            const dim = this.getChannelDim(channel);
+            const resolvedColor = this.resolveColorFor(type, color);
+            const baseStyle = feature.get('baseStyle') as Style | undefined;
+            const iconOpacity = baseStyle?.getImage()?.getOpacity() ?? 1;
+            let geometryKind: MapDebugMarker['geometry'] = 'Other';
+            let position: [number, number] | null = null;
+
+            if (geometry instanceof Point) {
+                geometryKind = 'Point';
+                const coordinates = geometry.getCoordinates();
+                if (isFinitePosition(coordinates)) {
+                    position = [coordinates[0], coordinates[1]];
+                }
+            } else if (geometry instanceof LineString) {
+                geometryKind = 'LineString';
+                const first = geometry.getCoordinates()[0];
+                if (isFinitePosition(first)) {
+                    position = [first[0], first[1]];
+                }
+            }
+
+            markers.push({
+                name: (feature.get('id') as string | undefined) ?? '',
+                channel,
+                type,
+                color,
+                shape: (feature.get('shape') as string | undefined) ?? '',
+                alpha,
+                layerVisible: this.channelLayers.get(channel)?.layer.getVisible() ?? false,
+                dim,
+                opacity: alpha * dim * colorAlpha(resolvedColor),
+                iconOpacity,
+                resolvedColor,
+                labelColor: markerLabelColor(resolvedColor),
+                strokeColor: geometryKind === 'LineString'
+                    ? applyAlphaToColor(resolvedColor, alpha * dim)
+                    : '',
+                geometry: geometryKind,
+                position,
+            });
+        }
+
+        const previewStyle = this.previewFeature?.get('baseStyle') as Style | undefined;
+        const previewState = previewStyle?.getImage()?.getImageState();
+
+        return {
+            multiplayer: this.isMultiplayerFlag,
+            activeChannel: this.activeChannelId,
+            channels,
+            markers,
+            preview: {
+                visible: this.previewFeature !== null,
+                color: (this.previewFeature?.get('color') as string | undefined) ?? '',
+                iconState: previewState ?? -1,
+                iconLoaded: previewState === ImageState.LOADED,
+                iconOpacity: previewStyle?.getImage()?.getOpacity() ?? 1,
+            },
+        };
     }
 
     /**
@@ -943,8 +1095,17 @@ export class MarkerLayerManager {
 
         const rotationInRadians = (feature.get('dir') || 0) * (Math.PI / 180); 
         const rawAlpha = feature.get('alpha') as number | undefined;
-        const alpha = (Number.isFinite(rawAlpha) ? rawAlpha as number : 1)
+        const markerAlpha = (Number.isFinite(rawAlpha) ? rawAlpha as number : 1)
             * this.getChannelDim(feature.get('channel'));
+        // A custom `#(r,g,b,a)` color keeps its alpha in the resolved CSS color.
+        // OpenLayers cannot express that through the icon tint (a translucent
+        // tint washes the icon toward white), so apply it as icon opacity. That
+        // also fades the cloned shadow style, which copies the opacity.
+        const rawColorAlpha = feature.get('colorAlpha') as number | undefined;
+        const colorAlphaValue = Number.isFinite(rawColorAlpha)
+            ? Math.max(0, Math.min(1, rawColorAlpha as number))
+            : 1;
+        const alpha = markerAlpha * colorAlphaValue;
         const size = feature.get('size') as [number, number];
         const shadow = feature.get('shadow') as boolean;
         const elevated = feature.get('elevated') === true;
@@ -963,12 +1124,14 @@ export class MarkerLayerManager {
 
         if (labelText != '')
         {
-            const rawLabelColor = (baseStyle.getImage() as Icon)?.getColor();
-            const labelColor = typeof rawLabelColor === 'string' ? rawLabelColor : '#ffffff';
+            // The resolved color is stored on the feature when its style is
+            // created; Icon.getColor() may return an OL Color object instead of
+            // a CSS string, which used to force every label to white.
+            const labelColor = markerLabelColor(feature.get('resolvedColor') as string | undefined);
             var text = new Text({
                 text: feature.get('label'), // Will be updated per feature
                 font: `normal bold condensed 24px "Roboto", sans-serif`,
-                fill: new Fill({ color: applyAlphaToColor(labelColor, alpha) }),
+                fill: new Fill({ color: applyAlphaToColor(labelColor, markerAlpha) }),
                 offsetX: size ? 32*size[1] : 32, //#TODO offset depends on icon size, text is right side of icon
                 scale: zoom,
                 declutterMode: "declutter",
@@ -1026,8 +1189,7 @@ export class MarkerLayerManager {
     ): Style {
 
         if (shape === 'POLYLINE' || shape === 'polyline') {
-            var colorResolved = this.markerColors.get(color);
-            var lineColor = colorResolved ? colorResolved.color : '#000000';
+            var lineColor = this.resolveColorFor(type, color);
             var strokeWidth = 2;
 
             // Styles are per-feature, so applying the alpha here cannot leak
@@ -1083,7 +1245,9 @@ export class MarkerLayerManager {
 
         // `color` is a CfgMarkerColors class name, or empty for the marker type's
         // own color. markerColors is keyed by class name, not by a hex value.
-        markerIcon.setColor(this.resolveMarkerColor(color, typeResolved));
+        // The custom color's alpha is applied as icon opacity (see
+        // dynamicIconStyleFunction); the tint itself stays opaque.
+        markerIcon.setColor(markerColorToOpaqueCss(this.resolveColorFor(type, color)));
         return resStyle;
     }
 
@@ -1377,7 +1541,7 @@ export class MarkerLayerManager {
                 })
                 .catch((error: unknown) => {
                     if (!this.destroyed) {
-                        console.error('Failed to move marker to another channel', error);
+                        console.error('Failed to replace marker after an edit', error);
                     }
                 });
             return;
@@ -1392,6 +1556,9 @@ export class MarkerLayerManager {
         feature.set('size', size);
         feature.set('shadow', this.getMarkerShadow(type));
         feature.set('baseStyle', this.createFeatureStyle(type, 'ICON', color, '', '', alpha, channel));
+        const resolvedColor = this.resolveColorFor(type, color);
+        feature.set('resolvedColor', resolvedColor);
+        feature.set('colorAlpha', colorAlpha(resolvedColor));
         this.channelLayers.get(channel)?.source.changed();
 
         const { channel: _ignoredChannel, ...updateChanges } = changes;
@@ -1416,6 +1583,7 @@ export class MarkerLayerManager {
 
         const channel = this.resolveChannel(draft.channel);
         const size = parseMarkerSize(draft.size);
+        const revision = ++this.previewStyleRevision;
 
         let feature = this.previewFeature;
         if (!feature) {
@@ -1440,7 +1608,50 @@ export class MarkerLayerManager {
         feature.set('type', draft.type);
         feature.set('color', draft.color);
         feature.set('channel', channel);
-        feature.set('baseStyle', this.createFeatureStyle(draft.type, 'ICON', draft.color, '', '', 1, channel));
+        const resolvedColor = this.resolveColorFor(draft.type, draft.color);
+        feature.set('resolvedColor', resolvedColor);
+        feature.set('colorAlpha', colorAlpha(resolvedColor));
+
+        // Dragging the custom color picker creates a new tinted icon for every
+        // step, and OpenLayers only draws an icon once its image finished
+        // decoding. Swapping the style right away would blank the preview on
+        // every step (the "blinking" marker). Keep the previous, already decoded
+        // style visible and swap to the new one when its icon is ready.
+        const nextStyle = this.createFeatureStyle(draft.type, 'ICON', draft.color, '', '', 1, channel);
+        const applyStyle = (): void => {
+            if (this.destroyed || revision !== this.previewStyleRevision || this.previewFeature !== feature) {
+                return;
+            }
+
+            feature.set('baseStyle', nextStyle);
+            this.previewSource.changed();
+        };
+
+        const styleImage = nextStyle.getImage();
+        const imageState = styleImage?.getImageState();
+
+        if (!feature.get('baseStyle')
+            || imageState === undefined
+            || imageState === ImageState.LOADED
+            || imageState === ImageState.ERROR) {
+            applyStyle();
+        } else if (styleImage instanceof Icon) {
+            const onImageChange = (): void => {
+                const state = styleImage.getImageState();
+                if (state === ImageState.IDLE || state === ImageState.LOADING) {
+                    return;
+                }
+
+                styleImage.unlistenImageChange(onImageChange);
+                applyStyle();
+            };
+
+            styleImage.listenImageChange(onImageChange);
+            // The style is not attached to the feature yet, so the renderer will
+            // not call load() for it. Start the decode explicitly.
+            styleImage.load();
+        }
+
         this.previewSource.changed();
     }
 
@@ -1449,6 +1660,8 @@ export class MarkerLayerManager {
     }
 
     public hideMarkerPreview(): void {
+        this.previewStyleRevision++;
+
         if (!this.previewFeature) {
             return;
         }
@@ -1578,6 +1791,11 @@ export class MarkerLayerManager {
         feature.set('shadow', props.shadow);
         feature.set('channel', props.channel);
         feature.set('baseStyle', props.baseStyle);
+        // The resolved CSS color drives the label text color; storing it here
+        // keeps the style function independent of the OpenLayers Icon color type.
+        const resolvedColor = this.resolveColorFor(props.type, props.color);
+        feature.set('resolvedColor', resolvedColor);
+        feature.set('colorAlpha', colorAlpha(resolvedColor));
     }
 
     private applyUpsert(data: MarkerUpdate): void {

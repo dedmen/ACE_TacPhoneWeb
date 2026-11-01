@@ -12,6 +12,7 @@ import type OlMap from 'ol/Map';
 
 import { MarkerModule, type PolylineUiState } from './MarkerModule';
 import type { MarkerPreviewDraft } from './MarkerLayer';
+import type { MapFlyToOptions, MapFocusMarkerOptions } from '../api';
 import { MarkerCreateDialog } from './MarkerCreateDialog';
 import { MarkerContextMenu } from './MarkerContextMenu';
 import { PolylineDrawControls } from './PolylineDrawControls';
@@ -65,7 +66,7 @@ interface MarkerMenuState {
 
 export interface MarkerOverlayHandle {
     hasMarker(name: string): boolean;
-    focusMarker(name: string): Promise<boolean>;
+    focusMarker(name: string, options?: MapFocusMarkerOptions): Promise<boolean>;
     stopPolyline(): void;
 }
 
@@ -76,7 +77,7 @@ interface MarkerOverlayProps {
     /** Registry the marker channel section is injected into. */
     layerSwitcher: LayerSwitcherRegistry;
     /** Normal Map flyTo, used by focusMarker(). */
-    flyTo(position: [number, number]): void;
+    flyTo(options: MapFlyToOptions): void;
     /** Close the map layer switcher when a marker panel opens. */
     onRequestCloseLayers(): void;
 }
@@ -370,7 +371,7 @@ export const MarkerOverlay = forwardRef<MarkerOverlayHandle, MarkerOverlayProps>
             onOpenMarkerMenu: (name, clientX, clientY) => callbacksRef.current.openMenu(name, clientX, clientY),
             onCloseMarkerMenu: () => callbacksRef.current.closeMenu(),
             onPolylineStateChange: (state) => setPolylineDraw(state),
-            flyTo: (position) => flyToRef.current(position),
+            flyTo: (options) => flyToRef.current(options),
         });
 
         moduleRef.current = module;
@@ -402,8 +403,8 @@ export const MarkerOverlay = forwardRef<MarkerOverlayHandle, MarkerOverlayProps>
         hasMarker(name: string): boolean {
             return moduleRef.current?.hasMarker(name) ?? false;
         },
-        focusMarker(name: string): Promise<boolean> {
-            return moduleRef.current?.focusMarker(name) ?? Promise.resolve(false);
+        focusMarker(name: string, options?: MapFocusMarkerOptions): Promise<boolean> {
+            return moduleRef.current?.focusMarker(name, options) ?? Promise.resolve(false);
         },
         stopPolyline(): void {
             moduleRef.current?.stopPolyline();
@@ -419,7 +420,7 @@ export const MarkerOverlay = forwardRef<MarkerOverlayHandle, MarkerOverlayProps>
             <PolylineDrawControls
                 isActive={polylineDraw.isActive}
                 vertexCount={polylineDraw.vertexCount}
-                colors={moduleRef.current?.getMarkerColors() ?? []}
+                colors={moduleRef.current?.getPolylineColors() ?? []}
                 selectedColor={polylineDraw.color}
                 clickPerPoint={polylineDraw.clickPerPoint}
                 channelLabel={channelSnapshot.activeChannelLabel}
@@ -475,6 +476,8 @@ export const MarkerOverlay = forwardRef<MarkerOverlayHandle, MarkerOverlayProps>
                     }}
                     onShare={() => handleShareMarkerFromMenu(menu.name)}
                     canShare={canShareMarker(menu.name)}
+                    canEdit={moduleRef.current?.getMarkerData(menu.name) != null}
+                    canDelete={moduleRef.current?.getMarkerData(menu.name) != null}
                     onClose={closeMarkerMenu}
                 />
             )}

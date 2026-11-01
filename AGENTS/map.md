@@ -20,6 +20,8 @@ The full reference is [`ACE_TacPhone_Map/README.md`](../ACE_TacPhone_Map/README.
 | Marker rendering, state, queue, icons, channel layers | `src/MapMarkers/MarkerLayer.tsx` |
 | Marker channels and direction helpers | `src/MapMarkers/Channels.ts` |
 | Create/edit dialog and context menu | `src/MapMarkers/MarkerCreateDialog.tsx`, `src/MapMarkers/MarkerContextMenu.tsx` |
+| Shared color swatch picker | `src/MapMarkers/ColorSwatchPicker.tsx` |
+| Pure marker color/text helpers (also the debug test hook) | `src/MapMarkers/MarkerColorUtils.ts`, `src/MapMarkers/MapTestHooks.ts` |
 | Polyline drawing and measurement styles | `src/MapMarkers/PolylineDrawing.ts`, `src/MapMarkers/PolylineMeasurements.ts`, `src/MapMarkers/PolylineDrawControls.tsx` |
 | Persisted polyline measurement overlay | `src/MapMarkers/PolylineMeasurementLayer.ts` |
 | Terrain heights | `src/MapMarkers/TerrainHeightApi.ts` |
@@ -108,10 +110,46 @@ two-finger touch cannot rotate it.
 
 ## Marker creation dialog
 
-- A small semi-transparent panel is positioned beside the marker (left/right,
-  with an above/below fallback) so the icon and its label stay visible.
+- A small, **headerless** semi-transparent panel (`rgba(255,255,255,0.72)` with
+  `backdrop-filter`) placed **bottom-right** of the marker, with a fallback order
+  of bottom-left → top-right → top-left → clamped centre. The gap clears the
+  icon at its current scale; placement depends on the anchor, the container, the
+  scale and layout-affecting field counts, never on the label text, so typing
+  does not move it and the label stays visible above the dialog.
 - It shows a live preview on its own layer at the target position; label, type,
   color, direction and scale update it immediately. Preview is create-only.
+- Marker type (searchable) and channel use the host `SelectMenu`
+  (`window.TacPhone.components.SelectMenu`); its menu is portaled to
+  `document.body` with `position: fixed`, so opening it does not resize the
+  dialog or add a scrollbar. Type rows keep the lazy marker-icon preview.
+- Color is a compact `ColorSwatchPicker` (shared with the polyline controls). The
+  first swatch is the virtual `Default` = the selected marker type's own
+  `color[]` (white for `flag_NATO`); the real `CfgMarkerColors.Default` class is
+  black and is hidden. When the selected type's own color is black, the virtual
+  default is hidden too, so it cannot duplicate the real black swatch.
+  Submitting sends `color: "Default"`. `fnc_createMarker.sqf` always applies the
+  supplied color with `setMarkerColorLocal`; the Web UI resolves `Default` to the
+  selected type's color for the swatch, type previews and label text.
+- The color picker also has a **Custom** swatch. It opens a portaled popover
+  containing the native color input and the alpha slider, and stores the Arma
+  2.20+ RGBA format `#(r,g,b)` / `#(r,g,b,a)`. Alpha is clamped to at least
+  `MIN_MARKER_COLOR_ALPHA` (20%) by `rgbToMarkerColor`, so the UI can never create
+  an invisible marker. Custom colors received from `markerColor` are parsed by
+  `MarkerColorUtils` for rendering.
+- The live preview defers a new marker style until its tinted icon finished
+  decoding, so dragging the custom color picker keeps the previous icon visible
+  instead of blinking. The shared OpenLayers icon cache is capped at 256 entries
+  in `MarkerLayer.tsx`.
+- Marker text is optional. It is capped at 256 characters in the input
+  (`maxLength`), in `MarkerApi.createMarker`/`updateMarker` and again in
+  `fnc_createMarker.sqf` (`_text select [0, 256]`); an empty name stores an
+  icon-only marker.
+- The label text color comes from the resolved marker color stored on the
+  feature (`resolvedColor`), not from `Icon.getColor()` (which may return an OL
+  `Color` object and used to force white). A custom color's alpha is stored as
+  `colorAlpha` and applied through `Icon.setOpacity` (`alpha * colorAlpha * dim`);
+  the icon tint itself is opaque, so lowering alpha makes the icon and its
+  cloned shadow transparent instead of washing them out toward white.
 - In multiplayer the channel dropdown defaults to the active channel and changing
   it makes that channel active. It is available in both create and edit mode;
   singleplayer has no channel control.
@@ -119,6 +157,32 @@ two-finger touch cannot rotate it.
   are sent as `dir` and `size: [scale, scale]`.
 - Create mode remembers the last selected type/color in module scope (per page
   session). Edit mode uses the marker's values and does not overwrite them.
+- Test hooks: `data-testid="marker-create-dialog"`, `marker-type-select`,
+  `marker-channel-select`, `marker-color-picker`, `marker-color-swatch`,
+  `marker-color-custom`, `marker-color-custom-popover`,
+  `marker-color-custom-input`, `marker-color-custom-alpha`, `marker-submit`,
+  `marker-cancel`. The pure color/text helpers and the live
+  marker/channel/polyline/preview state (`getMapState()`) are exposed as
+  `window.__TACPHONE_MAP_TEST__` in dev/debug builds only.
+
+## Map tests
+
+`test/` has a Node marker-protocol scenario (game WebSocket) and Playwright
+`marker-channels`, `marker-ui` and `polyline-draw` scenarios. Browser scenarios
+create a new flexlayout tab, open the Map through the app chooser and wait for a
+quiet terrain-tile period before asserting. `marker-channels`
+checks the singleplayer Group layer and custom colors in any session, and logs
+that the multiplayer-only checks (second channel, active-channel radio and
+inactive-channel dimming) were skipped when Arma reports singleplayer. In
+multiplayer it also covers layer visibility, active-channel dimming and custom
+RGBA colors. `polyline-draw` covers mouse clicks, touch taps and freehand
+strokes. All are deterministic and headless-capable and use DOM, attribute,
+geometry and `getComputedStyle()` assertions; canvas state is checked through
+`window.__TACPHONE_MAP_TEST__` (`getMapState()` plus the pure color helpers),
+not pixels. Local OCR/image analysis is allowed on the machine without a cloud
+service; AI image analysis only through `@LocalAgentHigh` on the maintainer's
+machine after asking the user.
+See [`../ACE_TacPhone_Map/test/README.md`](../ACE_TacPhone_Map/test/README.md).
 
 ## Marker channels
 
@@ -151,6 +215,13 @@ for mouse, touch, and pen.
 
 - Freehand samples only after 5 m of movement, previews raw points, and
   simplifies with Ramer–Douglas–Peucker (2 m) before sending.
+- The color grid is the shared `ColorSwatchPicker`. It hides the real
+  `CfgMarkerColors.Default` class (identical to `Black`) and falls back to the
+  first real color (Black) when the remembered color is `Default`/empty. The
+  marker dialog uses the same picker with a virtual `Default` first instead
+  (hidden when the type color is black). The Custom popover owns both the color
+  input and the alpha slider; the drawn preview halo is white at the line's
+  alpha, so lowering alpha fades the whole line instead of leaving a white line.
 - Right-drag pans while drawing; a second right-button-only `DragPan` is added
   for the mode. Marker long-press/double-click/drag gestures are suppressed.
 - Freehand sets `touch-action: none` on the OL viewport (`setFreehandTouchCapture`)
@@ -179,8 +250,10 @@ for mouse, touch, and pen.
   Height requests are skipped while zoomed out.
 - The preview layer sits above markers and is not in the layer switcher; the
   persisted measurement overlay is also untitled and excluded from hit-testing.
-- Polyline markers are display-only in the web UI: the context menu, `Delete`,
-  and drag/edit paths handle point markers only.
+- Polyline markers are display-only in the web UI for editing: the drag/edit
+  paths handle point markers only. They can be **shared**; the context menu for a
+  polyline only offers Share to Messenger and `focusMarker` fits its whole
+  geometry bounding box.
 
 ## Notifications
 
@@ -198,16 +271,17 @@ Each mounted Map panel registers service `map`, version `1`, from `src/Map.tsx`:
 
 | Method | Meaning |
 | --- | --- |
-| `flyTo({ x, y, resolution?, animate? })` | Move the view; omit `resolution` to keep zoom, `animate: false` jumps. Calls before the terrain layers are ready are queued. |
+| `flyTo({ x, y, bbox?, resolution?, animate?, highlight? })` | Move the view. `bbox` is `[minX, minY, maxX, maxY]`; it overrides the center and fits the box to the viewport. Omit `resolution` to keep/fit the zoom; `animate: false` jumps. `highlight: true` draws the temporary glowing box/circle. Calls before the terrain layers are ready are queued. |
 | `getView()` | `{ x, y, resolution }` or `undefined` while the view is not ready. |
 | `isReady()` | True when the map and terrain view exist. |
 | `hasMarker(name)` | True while a marker with that internal name is on the marker layer. |
-| `focusMarker(name)` | Flies to the marker at the current resolution. Resolves `false` when the marker does not exist or the layer is not ready; it waits for the initial marker snapshot before deciding. |
+| `focusMarker(name, options?)` | Flies to the marker and fits a default 800 m box for icon markers (or `options.bbox`); `options.highlight` shows a 48 px glow around an icon, or the geometry box for a polyline. If the marker is gone and `options.fallbackPosition` is set, it opens that position, shows the same highlight and a "Marker no longer exists" notification. Resolves `false` when there is neither a marker nor a fallback; it waits for the initial marker snapshot before deciding. |
 
 Coordinates are world/map units, not latitude/longitude. Consumers should
 `resolveAsync({ service: 'map', ... })` because a background Map has no live
 registration. The generated `dist/ace_tacphone_map.d.ts` exports `MapApi`,
-`MapViewState`, `MapFlyToOptions`, `MAP_SERVICE`, and `MAP_SERVICE_VERSION`.
+`MapViewState`, `MapFlyToOptions`, `MapBoundingBox`, `MapFocusMarkerOptions`,
+`MAP_SERVICE`, and `MAP_SERVICE_VERSION`.
 
 `MarkerLayerManager` backs those methods: `hasMarker()`, `whenMarkersLoaded()`
 (resolves after the initial snapshot, also on failure or destroy),
@@ -227,20 +301,23 @@ types (`MessengerApi`, `ChatObject`, `MessengerObjectRenderer`); it never import
   `{ kind: 'map.marker', version: 1, data: { name, type, color, text, label,
   position }, preview: { title, subtitle: 'Map marker', icon, color },
   action: { service: 'map', panelId: 'ACE_TacPhone_Map', method: 'focusMarker',
-  args: [name] } }` and calls
+  args: [name, { highlight: true, fallbackPosition: position }] } }` and calls
   `resolveAsync({ service: 'messenger', panelId: 'Messaging', openIfMissing: true })`
   then `MessengerApi.shareObject()`. Messenger owns its target selector and its
   dialogs; the Map only shows a notification when sharing really fails (not on a
   user cancel).
 - **Renderer**: while any Map panel is mounted, a `map.marker` renderer is
-  registered with a mounted Messenger panel (`describe` reuses the stored
-  preview for icon/color). The registration follows `interApp.onDidChange`, so
-  it attaches when Messenger mounts later, and is released on unmount; several
-  Map panels share one registration.
-- **Click**: the serialized `action` routes to the Map service with
-  `policy: 'ask'` and calls `focusMarker(name)`. When it returns false, Messenger
-  keeps the card, reports the marker as deleted, and offers a button that flies
-  to `data.position`.
+  registered with a mounted Messenger panel. `describe` reuses the stored
+  preview for icon/color. Its `activate()` owns the click: it resolves the `map`
+  service and calls `focusMarker(name, { highlight: true, fallbackPosition })`,
+  so a deleted marker still opens its last known position and notifies the user.
+  The registration follows `interApp.onDidChange`, so it attaches when Messenger
+  mounts later, and is released on unmount; several Map panels share one
+  registration.
+- **Serialized action / fallback**: the chat object also carries the
+  `focusMarker` action with `{highlight: true, fallbackPosition}`. Messenger uses
+  it only when no renderer is registered (for example the Map app is closed),
+  opening the Map through `resolveAsync()`. Messenger has no map-specific code.
 
 
 ## Options (`src/MapOptions.ts`)

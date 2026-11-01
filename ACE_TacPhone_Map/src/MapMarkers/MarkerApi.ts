@@ -1,4 +1,5 @@
 import { POLYLINE_MEASUREMENTS_TAG } from './PolylineMeasurements';
+import { clampMarkerText } from './MarkerColorUtils';
 
 /**
  * Everything the Web UI knows about a marker that should be created.
@@ -57,6 +58,9 @@ export function createMarker(marker: MarkerCreationData): Promise<{ name: string
         marker: {
             ...marker,
             channel: marker.channel ?? 0,
+            // The dialog input caps its length, but every caller must be clamped.
+            ...(marker.label === undefined ? {} : { label: clampMarkerText(marker.label) }),
+            ...(marker.text === undefined ? {} : { text: clampMarkerText(marker.text) }),
         },
     }).then((result) => {
         const name = (result as { name?: unknown }).name;
@@ -141,6 +145,8 @@ export function updateMarker(
         c: 'CreateMarker',
         marker: {
             ...changes,
+            ...(changes.label === undefined ? {} : { label: clampMarkerText(changes.label) }),
+            ...(changes.text === undefined ? {} : { text: clampMarkerText(changes.text) }),
             name,
         },
     }).then(() => undefined);

@@ -2,8 +2,9 @@
 
 Read this when changing the host page, panel system, layout, app loader,
 transport, inter-app registry, interests, or notifications. App-facing rules are
-in [`apps.md`](apps.md); game-side plumbing is in [`sqf.md`](sqf.md). The full
-reference is [`ACE_TacPhone_Main/README.md`](../ACE_TacPhone_Main/README.md).
+in [`apps.md`](apps.md); game-side plumbing is in [`sqf.md`](sqf.md). The
+user-facing overview and development setup are in
+[`ACE_TacPhone_Main/README.md`](../ACE_TacPhone_Main/README.md).
 
 ## File map
 
@@ -28,6 +29,7 @@ reference is [`ACE_TacPhone_Main/README.md`](../ACE_TacPhone_Main/README.md).
 | Notifications | `src/Backend/Notifications.ts`, `src/Panels/NotificationHost.tsx` |
 | Audio (synthesised sounds, output device) | `src/Backend/Audio.ts` |
 | App options registry and Options panel | `src/Backend/AppOptions.ts`, `src/MainApps/OptionsPanel.tsx` |
+| Reusable host components | `src/Components/SelectMenu.tsx` (+ `.module.css`) |
 | Built-in `main` app | `src/MainApps/main.tsx` |
 | Error UI | `src/Panels/AppErrorBoundary.tsx` |
 | Styles | `src/App.css`, `src/index.css`, `src/Panels/*.module.css`, `src/MainApps/*.module.css` |
@@ -128,9 +130,11 @@ Declaration and authoring rules are in
   registered panel. Clients with a precise pointer (`(hover: hover) and
   (pointer: fine)`, i.e. desktop browsers) also get a sticky search field that
   filters by panel title, app name and panel id; touch clients get the grid
-  alone. Tiles use the resolved icon and fall back to a generated monogram, and
-  apps that failed to load are listed in a separate section. The grid refreshes
-  through `appDirectory.onDidChange` because icons resolve after the first paint.
+  alone. Tiles use the resolved icon and only fall back to a generated monogram
+  when the app has no icon or the image fails to decode, so icon and text never
+  overlap; apps that failed to load are listed in a separate section. The grid
+  refreshes through `appDirectory.onDidChange` because icons resolve after the
+  first paint.
 - The persisted app choice is the tab config `panelId`. `AppChooserPanel` reads
   it back on mount, and `PanelInstance.setApp()` writes it for the next reload.
   Panel `id`s are persisted in layouts; renaming one breaks saved layouts.
@@ -174,7 +178,8 @@ it only calls `networking.ReplyTerrainSVG(uid, config)`; the private helpers in
 `Backend/Networking.ts` split the SVG into standalone per-layer documents,
 compress each layer and stream `ReplyRequestTerrainSVG` chunks back (with
 `part`/`parts` fragments when a layer is still too large). Textures reply with
-`ReplyRequestTexture` as before. `LoadGameTerrain` resolves to a `TerrainData`
+`ReplyRequestTexture` as the WebP data URL unchanged; they are already
+compressed. `LoadGameTerrain` resolves to a `TerrainData`
 (`width`, `height`, `layers: [{ name, svg }]`); a legacy whole-SVG reply is still
 accepted by decompressing and splitting it locally. `ReplyTerrainSVG` is not
 implemented by the browser transport. A game add-on built with `__A3_DEBUG__`
@@ -216,6 +221,35 @@ proper UTF-8 and does not decode anything.
 - `TargetChooserDialog` installs the `policy: 'ask'` handler once from `App.tsx`.
 - Everything is page-local and unauthenticated; the game cannot reach these APIs.
 
+`resolve`/`resolveAsync` target fields:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `service` | required | Service name to find. |
+| `policy` | `auto` | `auto`, `focused`, `largest`, `first` or `ask`. |
+| `version` | highest | Requested major version; a mismatch is skipped. |
+| `panelId` | any | Restrict candidates to one app panel id. |
+| `instanceId` | none | Explicit target (instance or tab id); wins over the policy. |
+| `openIfMissing` | `false` | Open the app when nothing provides it; needs `panelId`. |
+| `placement` | `float` | Placement used with `openIfMissing`. |
+| `activate` | `true` | Activate the target before waiting for registration. |
+| `waitMs` | `3000` | Mount/registration budget, capped at 30000. |
+
+`resolve()` is synchronous, never waits and falls back from `ask` to `auto`.
+`resolveAsync()` activates/opens and waits; `call()` throws when the service,
+method or method call fails. A `PanelInfo` is a snapshot; re-resolve instead of
+caching an API across panel closes.
+
+Panel routing (`window.TacPhone.panels`):
+
+- `open(panelId, { placement, select, tabsetId, rect, config })` returns
+  `{ tabId, layoutId, tabSetId }`; `placement` is `float` (default) or `tab`.
+  Floats are persisted in the layout under `subLayouts`.
+- `list()`, `get(instanceId)`, `find(panelId)`, `focused()`, `largest(panelId?)`,
+  `activate(instanceId)` and `onDidChange(listener)` are the query/lifecycle
+  surface. `largest()` ranks only the main layout; native window popouts are
+  unsupported.
+
 ## Interests (`Backend/InterestRegistry.ts`)
 
 `acquire(name)` is page-scoped and reference-counted. The first reference sends
@@ -232,10 +266,20 @@ duration is 15 s, `0` means permanent, and at most 5 banners are kept (oldest
 dropped silently). `action` is a page-local function, not a game message. Apps can
 open/focus panels or call other services from it.
 
+Options: `title` (required), `body`, `app` (resolves a default icon), `icon`
+(overrides it), `duration`, `data` (payload for `action`), `sound`
+(`message`/`alert`/`success`) and `action`. The action may be async. There is no
+persistent notification history or center screen.
+
 `show()` plays `options.sound` once per notification through
 `Backend/Audio.ts`; the sound is optional and notification behaviour is otherwise
 unchanged. The audio engine throttles bursts, so several notifications shown in
 the same instant can share one sound.
+
+`Host.Log` warnings (including "target not connected" delivery diagnostics) are
+logged and shown as banners only while `GameInfo.debug` is true; this is checked
+in the web UI, so a release bundle against a debug game still shows them. Errors
+remain visible.
 
 ## Audio (`Backend/Audio.ts`)
 
@@ -295,6 +339,27 @@ window.TacPhone.options.register({
 - Changes are live: subscribe with `options.onDidChange()` and re-read; panels
   that are not mounted pick up the current values when they mount.
 
+## Reusable host components (`src/Components/`)
+
+`window.TacPhone.components` exposes host UI components so apps do not import
+host code or reimplement them:
+
+- `SelectMenu` — a listbox-style select. The opened menu is portaled to
+  `document.body` and positioned with `position: fixed` from the trigger rect
+  (z-index 4000, above the Map's marker dialog at 2000), so opening it never
+  changes the layout of the panel or dialog that owns the trigger and never adds
+  a scrollbar there. It supports a per-option icon/swatch, disabled options,
+  `renderOption`/`renderValue`, an optional filter field, stable `testId` hooks
+  (`<testId>`, `<testId>-menu`, `select-menu-search`,
+  `select-menu-option-<value>`), and `data-dropdown-menu` on the menu (the Map's
+  lazy marker-icon `IntersectionObserver` uses it as root). Theme it through the
+  class-name props and the `--select-*` / `--select-menu-*` CSS variables; do not
+  reach into its CSS module. Escape/arrows/Enter are handled in the capture
+  phase so an enclosing dialog does not also react to them.
+
+The Options panel uses `SelectMenu` for its `select` widgets. The Map's marker
+dialog uses it for marker type (searchable) and channel.
+
 ## Changing the public API
 
 1. Add or change the types in `packages/tacphone-api/src/index.ts` (and
@@ -309,9 +374,10 @@ window.TacPhone.options.register({
 ## Build
 
 ```powershell
-npm run build
-Copy-Item dist\index.html ..\..\data\index.html
+npm run build:debug    # development build; root script copies data/index.html
+npm run build          # release, only when explicitly requested
 ```
 
-Release builds remove `console.log/debug/info`; `warn`/`error` stay. Do not edit
-`dist/index.html` or the copied `data/index.html` by hand.
+The root scripts also copy the output into `..\data\index.html`. Release builds
+remove `console.log/debug/info`; `warn`/`error` stay. Do not edit `dist/index.html`
+or the copied `data/index.html` by hand.

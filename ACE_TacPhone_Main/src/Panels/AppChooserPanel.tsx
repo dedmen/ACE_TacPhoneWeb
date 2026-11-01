@@ -53,6 +53,8 @@ type AppChooserPanelState = {
     searchable: boolean;
     /** Panels to show, refreshed when the catalog or its icons change. */
     panels: PanelMeta[];
+    /** Panel ids whose icon failed to decode; they show the monogram instead. */
+    brokenIcons: ReadonlySet<string>;
 };
 
 /**
@@ -180,7 +182,7 @@ function monogramStyle(id: string): React.CSSProperties {
     };
 }
 
-/** Hides an icon that failed to decode, revealing the monogram underneath. */
+/** Hides an icon that failed to decode so the monogram replaces it. */
 function hideBrokenIcon(event: React.SyntheticEvent<HTMLImageElement>): void {
     event.currentTarget.style.display = "none";
 }
@@ -191,6 +193,7 @@ export class AppChooserPanel extends React.Component<AppChooserPanelProps, AppCh
         filter: "",
         searchable: isSearchableClient(),
         panels: readCatalog(),
+        brokenIcons: new Set<string>(),
     };
 
     /** Installed while mounted; drives the search field on desktop clients. */
@@ -316,9 +319,23 @@ export class AppChooserPanel extends React.Component<AppChooserPanelProps, AppCh
         );
     }
 
+    /** Marks a tile's icon as broken so its monogram replaces it. */
+    private handleIconError = (panelId: string, event: React.SyntheticEvent<HTMLImageElement>): void => {
+        hideBrokenIcon(event);
+
+        this.setState(state => state.brokenIcons.has(panelId)
+            ? null
+            : { brokenIcons: new Set(state.brokenIcons).add(panelId) });
+    };
+
     /** One app tile: icon (or monogram), title, and the owning app when it differs. */
     private renderTile(entry: PanelMeta): React.ReactNode {
         const showAppName = entry.appName.length > 0 && entry.appName !== entry.title;
+        // The icon is the primary visual; the monogram is only a fallback, so
+        // text and image never share the tile.
+        const showIcon = typeof entry.icon === "string"
+            && entry.icon.length > 0
+            && !this.state.brokenIcons.has(entry.id);
 
         return (
             <button
@@ -329,10 +346,15 @@ export class AppChooserPanel extends React.Component<AppChooserPanelProps, AppCh
                 onClick={() => this.switchToApp(entry.id)}
             >
                 <span className={styles.Icon} style={monogramStyle(entry.id)}>
-                    <span className={styles.Monogram} aria-hidden="true">{monogram(entry.title)}</span>
-                    {entry.icon
-                        ? <img key={entry.icon} className={styles.IconImage} src={entry.icon} alt="" onError={hideBrokenIcon} />
-                        : null}
+                    {showIcon
+                        ? <img
+                            key={entry.icon}
+                            className={styles.IconImage}
+                            src={entry.icon}
+                            alt=""
+                            onError={event => this.handleIconError(entry.id, event)}
+                        />
+                        : <span className={styles.Monogram} aria-hidden="true">{monogram(entry.title)}</span>}
                 </span>
                 <span className={styles.Label}>{entry.title}</span>
                 {showAppName ? <span className={styles.AppName}>{entry.appName}</span> : null}

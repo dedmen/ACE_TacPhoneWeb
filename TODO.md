@@ -188,6 +188,12 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
 
 ### Lifecycle and feedback
 
+- [x] **[decision]** Default marker color: the Web UI sends `color: "Default"`
+  and resolves it to the selected marker type's `color[]` for the swatch, type
+  previews and label text. `fnc_createMarker.sqf` always applies the supplied
+  color with `setMarkerColorLocal`, including `"Default"`; it has no
+  `_useTypeColor` special case. The real `CfgMarkerColors.Default` class stays
+  hidden because it duplicates `Black`.
 - [ ] **[wontfix]** Marker creation failures stay invisible. `Map.tsx:311-316`
   closes the dialog immediately and only logs the error. This is deliberate: the
   dialog should not turn into an error UI. No action planned.
@@ -299,19 +305,15 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
 
 ## Host (`ACE_TacPhone_Main`)
 
-- [ ] **[feature]** Extract the custom select menu from
-  `src/MainApps/OptionsPanel.tsx` into a reusable host component library that
-  other apps can use through the host API. The current select is inline in
-  `OptionControl`, so every app would reimplement it.
-  - Expose the component without apps importing host code (for example through
-    `window.TacPhone` or the shared-module/import-map mechanism).
-  - Put `SelectMenu` in that library first.
-  - Support a leading icon per option (the Map marker-create menu needs marker
-    type/icon rows), disabled options, and custom class names or theme tokens so
-    the Marker Create and Options panel UIs can keep their different designs.
-  - Keep the keyboard, touch, outside-click and ARIA behavior of the current
-    in-page listbox.
-  - Migrate `OptionsPanel` and the Map `MarkerCreateDialog` dropdowns to it.
+- [x] **[feature]** Extract the custom select menu into a reusable host
+  component library that other apps can use through the host API.
+  `src/Components/SelectMenu.tsx` is exposed as
+  `window.TacPhone.components.SelectMenu` (`ComponentsApi`); it supports a
+  leading icon/swatch per option, disabled options, a filter field, custom
+  `renderOption`/`renderValue` and theme class names/CSS variables. The opened
+  menu is portaled to `document.body` with `position: fixed` (z-index 4000), so
+  it no longer grows its owner or pushes the following options down.
+  `OptionsPanel` and the Map `MarkerCreateDialog` (type + channel) use it.
 
 - [ ] **[bug]** `NetworkingA3.Request` has no timeout (`Networking.ts:306-346`),
   so a promise the game never resolves hangs the in-game UI forever. Add the same
@@ -391,6 +393,21 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
 
 ## Tooling and dependencies
 
+- [x] **[cleanup]** The Map browser scenarios have an optional Playwright dev
+  dependency. `playwright` is installed with
+  `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` and launches the installed Chrome channel
+  (`chromium.launch({ channel: 'chrome' })`); no Playwright browser download is
+  required. A missing Chrome/Playwright install is reported as `SKIP`; the Node
+  marker scenario and
+  `ACE_TacPhone_Map/test/browser/marker-create-checklist.md` still work.
+  The Map suite now has five scenarios (`marker-protocol`, `marker-channels`,
+  `marker-ui`, `polyline-draw`, `map-view`); `marker-channels` runs a
+  singleplayer subset and logs the skipped multiplayer-only checks, and
+  `polyline-draw` runs in a touch-capable context. The Messenger has a separate
+  Playwright UI suite (`test:messaging-ui`) for rooms, messages, marker sharing
+  and Map focus. `npm run test:all` runs the host, Messenger WebSocket, Messenger
+  UI and Map suites in one pass and prints one summary.
+  `test:host` and `test:messaging` stay Node-only.
 - [ ] **[cleanup]** rerun `npm audit`, both builds, and `check:importmap`.
 - [ ] **[enhancement]** Brotli app bundles. The container header already carries
   the codec (`TACPHONE-BUNDLE:<version>:<codec>:<base64>`), so the build only has

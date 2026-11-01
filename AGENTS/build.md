@@ -16,7 +16,7 @@ copying artifacts into the game. Runtime rules live in the area docs.
 | `WebServerExtension/` | .NET 10 NativeAOT `arma_webhost_x64`; external-browser dev only. See [`webhost.md`](webhost.md). |
 | `RemoteServer/` | .NET 10 relay + static host for public remote access. Separate deployable, not part of the add-on. See [`remote.md`](remote.md). |
 | `WebHostExtension_FeatureFlagsExport/` | C shim for `RVExtensionFeatureFlags`; `WebServerExtension/featureflags.obj` is checked in and linked. |
-| `scripts/` | `copy-data.mjs`: post-build copy of web outputs into the game `data\` folders. |
+| `scripts/` | `build-all.mjs`: changed-only build/install; `copy-data.mjs`: post-build copy of web outputs into the game `data\` folders; `test-all.mjs`: all live suites. |
 | `../` (`addons/tacphone`) | Parent game add-on: SQF, config, apps. See [`sqf.md`](sqf.md). |
 
 ## Commands
@@ -27,6 +27,7 @@ From this directory (workspace root):
 npm install            # one root lockfile, hoisted workspace deps
 npm run dev            # host Vite server; open the printed URL
 npm run build:debug    # DEFAULT for development: host + every app + data copy
+npm run build:all      # changed-only web/PBO/native build and install
 npm run build          # RELEASE ONLY when the user explicitly asks for it
 npm run build:host     # host build + data copy
 npm run build:host:debug # development host build + data copy
@@ -38,7 +39,10 @@ npm run lint
 npm run check:importmap
 npm run sync:api-types -- <source.d.ts> <target-dir-or-file>...
 npm run test:host      # live host runtime tests; needs the game running
-npm run test:messaging # live Messenger runtime tests; needs the game running
+npm run test:messaging # live Messenger WebSocket tests; needs the game running
+npm run test:messaging-ui # Playwright Messenger UI tests; needs the game and host page
+npm run test:map       # Map protocol + Playwright browser tests; needs the game running
+npm run test:all       # every suite above, in one summary; needs the game running
 ```
 
 **Default to `npm run build:debug` during development.** Only run the release
@@ -48,6 +52,20 @@ Debug output is unminified, keeps `console.log`, and carries an inline source ma
 so the in-game developer console maps the blob-imported bundle back to the
 original `.tsx`. The data folders are git-ignored, so a debug bundle there is a
 local test artifact, not a release.
+
+`npm run build:all` is the normal build-and-install command for the game. It
+checks whether Arma is running (and refuses to install while it is; use
+`-- --build-only` to compile anyway), compares web sources to their `dist`
+outputs, compares the PBO output to the game-side sources, and compares the
+native web-host sources to the publish DLL. It rebuilds only the changed pieces,
+copies changed web data, builds the PBO with `hemtt build --no-bin --just
+tacphone` (debug) or `hemtt build --just tacphone` (release), and copies the PBO
+and `arma_webhost_x64.dll` into the game folders. `-- --check` prints the
+decisions, `-- --release` selects a release web/PBO build (manual use only),
+`-- --force` rebuilds everything, and `ARMA3_PATH` or `--arma-path` overrides the
+Arma installation path. Without an override the script reads
+`HKLM\SOFTWARE\WOW6432Node\bohemia interactive\arma 3` value `main` (and the
+`...\main` key shape). The native web host is always published in Release.
 
 Host (`ACE_TacPhone_Main`):
 
@@ -128,9 +146,11 @@ The game loads that PBO from `@acedev\addons` on the next start. Never replace i
 while Arma has the file open.
 
 The native extension is separate: the game loads
-`D:\Spiele\SteamLibrary\steamapps\common\Arma 3\arma_webhost_x64.dll`. After
-rebuilding `WebServerExtension`, ask the user to exit the game, back up the old
-DLL, then replace that file. The game only picks it up on restart.
+`D:\Spiele\SteamLibrary\steamapps\common\Arma 3\arma_webhost_x64.dll`. Use
+`npm run build:all`; it compares the `WebServerExtension` sources with the
+publish DLL, runs `dotnet publish` only when needed, and copies the result to the
+game root. The game only picks it up on restart. It refuses to install while Arma
+is running.
 
 ## Build behavior
 
@@ -158,10 +178,18 @@ DLL, then replace that file. The game only picks it up on restart.
   while another package is built, so a stale `dist/` cannot block unrelated
   builds.
 - Live runtime suites need the game and web host running: `npm run test:host`
-  (see [`ACE_TacPhone_Main/test/README.md`](../ACE_TacPhone_Main/test/README.md))
-  and `npm run test:messaging` (see
-  [`MessagingApp/test/README.md`](../MessagingApp/test/README.md)). The host
-  suite also has a browser checklist for the Options panel and Map settings.
+  (see [`ACE_TacPhone_Main/test/README.md`](../ACE_TacPhone_Main/test/README.md)),
+  `npm run test:messaging` (see
+  [`MessagingApp/test/README.md`](../MessagingApp/test/README.md)),
+  `npm run test:messaging-ui` (Playwright Messenger UI, including marker sharing
+  and Map focus), and
+  `npm run test:map` (see [`ACE_TacPhone_Map/test/README.md`](../ACE_TacPhone_Map/test/README.md);
+  its browser scenario uses Playwright with an installed Chrome channel). The
+  host suite also has a browser checklist for the Options panel and Map settings.
+  `npm run test:all` runs all four sequentially and prints one summary; use
+  `-- --suite host,map`, `-- --no-browser` or `-- --fail-fast` to narrow it.
+  Add `-- --slow` to the browser suites (or `test:all`) to show the Playwright
+  browser and slow every action; `--slow-ms <ms>` changes the delay.
 
 ## `@ace-tacphone/api`
 

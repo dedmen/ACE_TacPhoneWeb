@@ -1,32 +1,23 @@
 /**
  * Click handling for chat objects.
  *
- * Resolution order (see the app plan):
- * 1. a renderer registered through `MessengerApi.registerObjectRenderer()`;
- * 2. the serialized `action`, routed through `interApp.resolveAsync()`;
- * 3. a deleted `map.marker` keeps its card and offers the stored position.
+ * Resolution order:
+ * 1. the `activate()` callback of the renderer registered by the app that owns
+ *    the object kind (for example the Map app for `map.marker`);
+ * 2. the serialized `action`, routed through `interApp.resolveAsync()`.
  *
- * Everything here is defensive: a missing app, a rejected promise or a bad
- * payload turns into a notification, never into a broken panel.
+ * Messenger never contains kind-specific routing. Everything here is defensive:
+ * a missing app, a rejected promise or a bad payload turns into a notification,
+ * never into a broken panel.
  */
 
 import type { ChatObject, ChatObjectAction } from './api';
 import { MESSAGING_APP_NAME } from './api';
 import { chatStore } from './state/ChatStore';
 
-/** Chat object kind of a shared map marker. */
-export const MARKER_OBJECT_KIND = 'map.marker';
-
-/** Inter-app service of the Map app. */
-const MAP_SERVICE = 'map';
-
-/** Panel id of the Map app. */
-const MAP_PANEL_ID = 'ACE_TacPhone_Map';
-
 /** Outcome of activating one chat object card. */
 export type ObjectActivation =
     | { status: 'ok' }
-    | { status: 'deleted-marker' }
     | { status: 'error'; error: string };
 
 type AnyMethod = (...args: unknown[]) => unknown;
@@ -44,20 +35,6 @@ function describeError(error: unknown): string {
     if (error instanceof Error && error.message !== '') return error.message;
 
     return String(error);
-}
-
-/** Reads a `[x, y]` position out of an object payload. */
-export function readObjectPosition(data: unknown): { x: number; y: number } | undefined {
-    if (typeof data !== 'object' || data === null) return undefined;
-
-    const position = (data as { position?: unknown }).position;
-    if (!Array.isArray(position) || position.length < 2) return undefined;
-
-    const [x, y] = position;
-    if (typeof x !== 'number' || typeof y !== 'number') return undefined;
-    if (!Number.isFinite(x) || !Number.isFinite(y)) return undefined;
-
-    return { x, y };
 }
 
 async function callAction(action: ChatObjectAction): Promise<unknown> {
@@ -81,9 +58,9 @@ async function callAction(action: ChatObjectAction): Promise<unknown> {
 /**
  * Activates one chat object card.
  *
- * Resolves `deleted-marker` only for `map.marker`, whose `focusMarker()` returns
- * false when the marker no longer exists. The caller keeps the card and offers
- * the last known position.
+ * The provider's renderer handles its own semantics, including when the target
+ * no longer exists. The serialized action is only a fallback for a provider that
+ * is not currently mounted.
  */
 export async function activateChatObject(object: ChatObject): Promise<ObjectActivation> {
     const renderer = chatStore.getObjectRenderer(object.kind);
@@ -109,8 +86,11 @@ export async function activateChatObject(object: ChatObject): Promise<ObjectActi
     try {
         const result = await callAction(action);
 
-        if (result === false && object.kind === MARKER_OBJECT_KIND) {
-            return { status: 'deleted-marker' };
+        if (result === false) {
+            const message = 'This item is no longer available.';
+            notify('Could not open the item', message);
+
+            return { status: 'error', error: message };
         }
 
         return { status: 'ok' };
@@ -119,41 +99,6 @@ export async function activateChatObject(object: ChatObject): Promise<ObjectActi
         notify('Could not open the item', message);
 
         return { status: 'error', error: message };
-    }
-}
-
-/**
- * Opens the Map app at the position stored in a `map.marker` object.
- *
- * Used when the marker was deleted but the message remembered where it was.
- */
-export async function showLastKnownPosition(object: ChatObject): Promise<boolean> {
-    const position = readObjectPosition(object.data);
-    if (!position) {
-        notify('No stored position', 'This item does not contain a position.');
-
-        return false;
-    }
-
-    try {
-        const info = await window.TacPhone.interApp.resolveAsync({
-            service: MAP_SERVICE,
-            panelId: MAP_PANEL_ID,
-            openIfMissing: true,
-        });
-
-        const api = info?.api as { flyTo?: (options: { x: number; y: number }) => unknown } | undefined;
-        if (!api || typeof api.flyTo !== 'function') {
-            throw new Error('The Map app is not available.');
-        }
-
-        api.flyTo(position);
-
-        return true;
-    } catch (error) {
-        notify('Could not open the map', describeError(error));
-
-        return false;
     }
 }
 

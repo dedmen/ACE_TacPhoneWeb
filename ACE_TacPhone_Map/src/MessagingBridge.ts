@@ -14,6 +14,8 @@
  *   marker through `MapApi.focusMarker()`.
  */
 
+import type { MapFocusMarkerOptions } from './api';
+
 /** App name in `ace_tacphone_apps`; key of `window.TacPhone.apps.knownApps`. */
 export const MESSENGER_APP_NAME = 'Messaging';
 
@@ -150,7 +152,13 @@ export function buildMarkerChatObject(marker: MarkerChatPayload): ChatObject {
             service: MAP_SERVICE_NAME,
             panelId: MAP_PANEL_ID,
             method: 'focusMarker',
-            args: [marker.name],
+            args: [
+                marker.name,
+                {
+                    highlight: true,
+                    fallbackPosition: data.position,
+                },
+            ],
             // Several Map panels: let the host target chooser pick the instance.
             policy: 'ask',
         },
@@ -269,6 +277,39 @@ const markerObjectRenderer: MessengerObjectRenderer = {
             icon: storedPreview?.icon,
             color: storedPreview?.color,
         };
+    },
+    /**
+     * The Map app owns how a `map.marker` object is opened. Messenger only
+     * invokes this callback; it never contains map-specific routing.
+     */
+    async activate(data): Promise<void> {
+        const marker = readMarkerObjectData(data);
+        if (!marker) {
+            throw new Error('This marker object has no usable data.');
+        }
+
+        const info = await window.TacPhone.interApp.resolveAsync({
+            service: MAP_SERVICE_NAME,
+            panelId: MAP_PANEL_ID,
+            openIfMissing: true,
+        });
+
+        const api = info?.api as {
+            focusMarker?: (name: string, options?: MapFocusMarkerOptions) => Promise<boolean>;
+        } | undefined;
+
+        if (!api || typeof api.focusMarker !== 'function') {
+            throw new Error('The Map app is not available.');
+        }
+
+        const focused = await api.focusMarker(marker.name, {
+            highlight: true,
+            fallbackPosition: marker.position,
+        });
+
+        if (focused === false) {
+            throw new Error('This marker was deleted.');
+        }
     },
 };
 
