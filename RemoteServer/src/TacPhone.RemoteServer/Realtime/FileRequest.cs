@@ -19,6 +19,16 @@ public static class FileRequest
     public const string Command = "GetFile";
 
     /// <summary>
+    /// Files the relay caches: app bundles (<c>.js</c>) and the stringtables the
+    /// web UI loads for localization (<c>.xml</c>).
+    /// </summary>
+    private static bool IsCacheablePath(string path)
+    {
+        return path.EndsWith(".js", StringComparison.OrdinalIgnoreCase) ||
+               path.EndsWith(".xml", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// Parses <c>{"k":"...","d":{"a":"main","c":"GetFile","path":"..."}}</c>.
     /// Returns false for every other command or a malformed frame, so the relay
     /// forwards it untouched.
@@ -58,7 +68,7 @@ public static class FileRequest
                 return false;
             }
 
-            if (!rawPath.EndsWith(".js", StringComparison.OrdinalIgnoreCase) ||
+            if (!IsCacheablePath(rawPath) ||
                 rawPath.Contains("..", StringComparison.Ordinal))
             {
                 return false;

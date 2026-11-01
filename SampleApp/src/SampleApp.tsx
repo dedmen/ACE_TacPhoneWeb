@@ -6,10 +6,11 @@ import {
     SAMPLEAPP_SERVICE_VERSION,
     type SampleAppApi,
 } from './api';
+import { t } from './i18n';
 
 /** Message text used by both the phone notification and the game-side hint. */
 function incrementText(count: number): string {
-    return `Counter incremented to ${count}`;
+    return t('STR_ACE_Tacphone_SampleApp_Incremented', count);
 }
 
 export function SampleApp(props: AppProps): React.JSX.Element {
@@ -50,7 +51,7 @@ export function SampleApp(props: AppProps): React.JSX.Element {
             host.notifications.dismiss(lastNotificationId.current);
         }
         lastNotificationId.current = host.notifications.show({
-            title: 'SampleApp',
+            title: t('STR_ACE_Tacphone_SampleApp_NotificationTitle'),
             body: text,
             app: 'SampleApp',
         });
@@ -70,7 +71,7 @@ export function SampleApp(props: AppProps): React.JSX.Element {
         <div style={styles.container}>
             <div style={styles.counter}>{count}</div>
             <button type="button" style={styles.button} onClick={increment}>
-                Increment
+                {t('STR_ACE_Tacphone_SampleApp_Increment')}
             </button>
         </div>
     );

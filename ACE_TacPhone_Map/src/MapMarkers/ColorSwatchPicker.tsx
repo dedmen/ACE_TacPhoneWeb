@@ -12,6 +12,7 @@ import {
     rgbToMarkerColor,
 } from './MarkerColorUtils';
 import ColorStyle from './ColorSwatchPicker.module.scss';
+import { t } from '../i18n';
 
 export interface ColorSwatchPickerProps {
     /** Colors from the game's CfgMarkerColors. */
@@ -75,7 +76,7 @@ export function ColorSwatchPicker({
     customInputTestId,
     customAlphaTestId,
     customPopoverTestId,
-    ariaLabel = 'Color',
+    ariaLabel = t('str_3den_marker_attribute_color_displayname'),
 }: ColorSwatchPickerProps): React.JSX.Element {
     const customButtonRef = useRef<HTMLButtonElement>(null);
     const customPopoverRef = useRef<HTMLDivElement>(null);
@@ -233,8 +234,8 @@ export function ColorSwatchPicker({
                         type="button"
                         className={`${ColorStyle.swatch} ${ColorStyle.custom}${customActive ? ` ${ColorStyle.selected}` : ''}`}
                         style={customCss ? { background: customCss } : undefined}
-                        title="Custom"
-                        aria-label="Custom"
+                        title={t('STR_3DEN_Group_Mode_Custom')}
+                        aria-label={t('STR_3DEN_Group_Mode_Custom')}
                         aria-pressed={customActive}
                         aria-expanded={customOpen}
                         data-color-class="Custom"
@@ -261,11 +262,11 @@ export function ColorSwatchPicker({
                                 width: customPosition.width,
                             }}
                             role="dialog"
-                            aria-label="Custom color"
+                            aria-label={t('STR_ACE_Tacphone_Map_ColorPicker_CustomColor')}
                             data-testid={customPopoverTestId}
                         >
                             <label className={ColorStyle.custom_color_row}>
-                                <span>Color</span>
+                                <span>{t('str_3den_marker_attribute_color_displayname')}</span>
                                 <input
                                     ref={colorInputRef}
                                     className={ColorStyle.custom_color_input}
@@ -280,14 +281,14 @@ export function ColorSwatchPicker({
                                 />
                             </label>
                             <label className={ColorStyle.alpha}>
-                                <span>Alpha</span>
+                                <span>{t('str_3den_marker_attribute_alpha_displayname')}</span>
                                 <input
                                     type="range"
                                     min={MIN_MARKER_COLOR_ALPHA}
                                     max={1}
                                     step={0.01}
                                     value={alphaValue}
-                                    aria-label="Custom color alpha"
+                                    aria-label={t('STR_ACE_Tacphone_Map_ColorPicker_AlphaAria')}
                                     data-testid={customAlphaTestId}
                                     onChange={(event) => onCustomColorChange(rgbToMarkerColor(
                                         (customRgba?.r ?? 1) * 255,

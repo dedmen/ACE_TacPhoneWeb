@@ -57,15 +57,17 @@ changing discovery configuration.
 ## Build
 
 ```powershell
-npm run build:debug    # default for development
+npm run build:all      # build + install into the game (web + PBO + native DLL)
+npm run build:debug    # web-only iteration (no PBO install)
 npm run build          # release, only when explicitly requested
 ```
 
-Both produce a single self-contained `dist/index.html` with the script and import
-map inlined. The root scripts also copy it to `..\data\index.html`; no manual copy
-is needed. Debug builds are unminified with an inline source map. Release builds
-are minified, omit the source map and strip `console.log/debug/info`, while
-keeping `warn`/`error`.
+Both web builds produce a single self-contained `dist/index.html` with the script
+and import map inlined. The root scripts also copy it to `..\data\index.html`; no
+manual copy is needed. `build:all` is still required to rebuild and install the
+PBO. Debug builds are unminified with an inline source map. Release builds are
+minified, omit the source map and strip `console.log/debug/info`, while keeping
+`warn`/`error`.
 
 ## Layout persistence
 
@@ -90,6 +92,15 @@ development discovery are documented in:
 - [`SampleApp/README.md`](../SampleApp/README.md) — copy-and-rename template.
 - [`packages/tacphone-api/README.md`](../packages/tacphone-api/README.md) — exported types.
 - [`AGENTS/host.md`](../AGENTS/host.md) — host internals and public API changes.
+
+## Localization
+
+All user-readable text goes through `window.TacPhone.localization.t()`; keys live
+in `addons/tacphone/stringtable.xml` (`Host`, `Options`, `RemoteAccess`,
+`Common` containers for the host). The host decodes a compressed default table
+bundled into `index.html` before the first render and replaces it with the game
+stringtable once connected. See
+[`AGENTS/localization.md`](AGENTS/localization.md).
 
 ## Tests
 

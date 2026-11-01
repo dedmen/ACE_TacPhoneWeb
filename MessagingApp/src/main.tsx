@@ -1,12 +1,14 @@
 import type { AppPanelInfo } from '@ace-tacphone/api';
 import { TACPHONE_API_VERSION } from '@ace-tacphone/api';
 
-import { MESSAGING_PANEL_ID, MESSENGER_DISPLAY_NAME } from './api';
+import { MESSAGING_PANEL_ID } from './api';
+import { MESSENGER_BASE_GAME_STRINGS } from './i18n';
 import { MessengerApp } from './MessengerApp';
 import { installMessengerNotifications } from './notifications';
 import type { GameMessage } from './protocol';
 import { PUSH_COMMANDS } from './protocol';
 import { chatStore } from './state/ChatStore';
+import { t } from './i18n';
 
 /** Version of the host contract this app was built against. */
 export const apiVersion = TACPHONE_API_VERSION;
@@ -36,7 +38,12 @@ let initialization: Promise<void> | undefined;
 export function init(): Promise<void> {
     if (!initialization) {
         installMessengerNotifications();
-        initialization = chatStore.initialize().catch(error => {
+        initialization = (async () => {
+            // Some UI labels reuse base-game keys; load them before the panel
+            // or a notification needs them.
+            await window.TacPhone.localization.load(MESSENGER_BASE_GAME_STRINGS);
+            await chatStore.initialize();
+        })().catch(error => {
             console.error('Messaging: app initialization failed:', error);
         });
     }
@@ -50,7 +57,7 @@ export function GetTacPhoneApps(): Array<AppPanelInfo> {
             id: MESSAGING_PANEL_ID,
             appComponent: MessengerApp,
             GetDefaultTitle() {
-                return MESSENGER_DISPLAY_NAME;
+                return t('STR_ACE_Tacphone_Messenger_Title');
             },
             GetTacPhoneIcon() {
                 // Simple chat bubble, encoded as a data URL (ascii only).

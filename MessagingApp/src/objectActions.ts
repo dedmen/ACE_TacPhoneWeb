@@ -14,6 +14,7 @@
 import type { ChatObject, ChatObjectAction } from './api';
 import { MESSAGING_APP_NAME } from './api';
 import { chatStore } from './state/ChatStore';
+import { t } from './i18n';
 
 /** Outcome of activating one chat object card. */
 export type ObjectActivation =
@@ -72,7 +73,7 @@ export async function activateChatObject(object: ChatObject): Promise<ObjectActi
             return { status: 'ok' };
         } catch (error) {
             const message = describeError(error);
-            notify('Could not open the item', message);
+            notify(t('STR_ACE_Tacphone_Messenger_Object_OpenFailedTitle'), message);
 
             return { status: 'error', error: message };
         }
@@ -80,15 +81,15 @@ export async function activateChatObject(object: ChatObject): Promise<ObjectActi
 
     const action = object.action;
     if (!action || typeof action.service !== 'string' || typeof action.method !== 'string') {
-        return { status: 'error', error: 'This item cannot be opened.' };
+        return { status: 'error', error: t('STR_ACE_Tacphone_Messenger_Object_CannotOpen') };
     }
 
     try {
         const result = await callAction(action);
 
         if (result === false) {
-            const message = 'This item is no longer available.';
-            notify('Could not open the item', message);
+            const message = t('STR_ACE_Tacphone_Messenger_Object_Unavailable');
+            notify(t('STR_ACE_Tacphone_Messenger_Object_OpenFailedTitle'), message);
 
             return { status: 'error', error: message };
         }
@@ -96,7 +97,7 @@ export async function activateChatObject(object: ChatObject): Promise<ObjectActi
         return { status: 'ok' };
     } catch (error) {
         const message = describeError(error);
-        notify('Could not open the item', message);
+        notify(t('STR_ACE_Tacphone_Messenger_Object_OpenFailedTitle'), message);
 
         return { status: 'error', error: message };
     }

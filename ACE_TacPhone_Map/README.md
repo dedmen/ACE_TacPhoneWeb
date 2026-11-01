@@ -123,6 +123,13 @@ Use `window.TacPhone.interApp.resolveAsync({ service: 'map', ... })` to route to
 mounted Map, including one that is not currently selected. Types are exported by
 the generated `dist/ace_tacphone_map.d.ts`.
 
+## Localization
+
+UI text is read with `window.TacPhone.localization.t()` and lives in the `Map`
+container of `addons/tacphone/stringtable.xml`. Map option labels and presets are
+built when the app registers them, not at module scope. See
+[`AGENTS/localization.md`](../AGENTS/localization.md).
+
 ## Tests
 
 ```powershell

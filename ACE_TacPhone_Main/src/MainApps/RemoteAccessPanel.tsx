@@ -3,6 +3,7 @@ import type { AppProps } from "@ace-tacphone/api";
 import { IsArma } from "../Backend/Networking";
 import { appDirectory } from "../Backend/AppDirectory";
 import { sharedModules } from "../Backend/SharedModules";
+import { t } from "../Backend/i18n";
 
 type RemotePeer = {
     id: string;
@@ -32,11 +33,11 @@ type RemoteStatus = {
 };
 
 const TTL_OPTIONS = [
-    { label: "15 min", seconds: 900 },
-    { label: "1 hour", seconds: 3600 },
-    { label: "4 hours", seconds: 14400 },
-    { label: "8 hours", seconds: 28800 },
-    { label: "24 hours", seconds: 86400 },
+    { key: 'str_3den_attributes_preferencessavegame_min15_text', seconds: 900 },
+    { key: 'str_3den_attributes_preferencessavegame_min60_text', seconds: 3600 },
+    { key: 'STR_ACE_Tacphone_RemoteAccess_Ttl_4hours', seconds: 14400 },
+    { key: 'STR_ACE_Tacphone_RemoteAccess_Ttl_8hours', seconds: 28800 },
+    { key: 'STR_ACE_Tacphone_RemoteAccess_Ttl_24hours', seconds: 86400 },
 ];
 
 async function remoteCall(command: string, extra: object = {}): Promise<RemoteStatus> {
@@ -59,7 +60,7 @@ function formatTime(value: string): string {
 }
 
 function remaining(seconds: number): string {
-    if (seconds <= 0) return "expired";
+    if (seconds <= 0) return t('STR_ACE_Tacphone_Common_Expired');
     const minutes = Math.floor(seconds / 60);
     if (minutes < 1) return `${seconds}s`;
     if (minutes < 60) return `${minutes}m`;
@@ -210,8 +211,8 @@ export function RemoteAccessPanel(props: AppProps): React.ReactElement {
     if (!IsArma()) {
         return (
             <div style={styles.panel}>
-                <h2 style={styles.title}>Remote Access</h2>
-                <p style={styles.hint}>Open this panel in the in-game phone to pair a device.</p>
+                <h2 style={styles.title}>{t('STR_ACE_Tacphone_RemoteAccess_PanelTitle')}</h2>
+                <p style={styles.hint}>{t('STR_ACE_Tacphone_RemoteAccess_OpenInGameHint')}</p>
             </div>
         );
     }
@@ -271,7 +272,7 @@ function RemoteAccessPanelInner(_props: AppProps): React.ReactElement {
         try {
             const result = await remoteCall(command, extra);
             if (result.ok === false) {
-                setError(result.error ?? "request failed");
+                setError(result.error ?? t('STR_ACE_Tacphone_RemoteAccess_RequestFailed'));
             } else if (result.state) {
                 setStatus(result);
             }
@@ -294,7 +295,13 @@ function RemoteAccessPanelInner(_props: AppProps): React.ReactElement {
     };
 
     const state = status?.state ?? "idle";
-    const stateLabel = state === "online" ? "Connected" : state === "connecting" ? "Connecting…" : state === "error" ? "Error" : "Idle";
+    const stateLabel = state === "online"
+        ? t('STR_ACE_Tacphone_RemoteAccess_State_Connected')
+        : state === "connecting"
+            ? t('str_3den_tutorials_editing_sections_connecting_text')
+            : state === "error"
+                ? t('str_mis_state_error')
+                : t('STR_ACE_Tacphone_RemoteAccess_State_Idle');
     const stateColor = state === "online" ? "#238636" : state === "connecting" ? "#9e6a03" : state === "error" ? "#b62324" : "#30363d";
 
     const code = status?.code ?? "";
@@ -310,12 +317,12 @@ function RemoteAccessPanelInner(_props: AppProps): React.ReactElement {
     return (
         <div style={styles.panel}>
             <div style={styles.header}>
-                <h2 style={styles.title}>Remote Access</h2>
+                <h2 style={styles.title}>{t('STR_ACE_Tacphone_RemoteAccess_PanelTitle')}</h2>
                 <span style={{ ...styles.badge, backgroundColor: stateColor }}>{stateLabel}</span>
             </div>
 
             {status?.hostId ? (
-                <p style={styles.hint}>Host ID: <code>{status.hostId}</code></p>
+                <p style={styles.hint}>{t('STR_ACE_Tacphone_RemoteAccess_HostId')} <code>{status.hostId}</code></p>
             ) : null}
 
             {error || status?.error ? (
@@ -323,7 +330,7 @@ function RemoteAccessPanelInner(_props: AppProps): React.ReactElement {
             ) : null}
 
             {state === "connecting" ? (
-                <p style={styles.hint}>Connecting to the relay…</p>
+                <p style={styles.hint}>{t('STR_ACE_Tacphone_RemoteAccess_ConnectingRelay')}</p>
             ) : null}
 
             {state !== "online" && state !== "connecting" ? (
@@ -334,15 +341,15 @@ function RemoteAccessPanelInner(_props: AppProps): React.ReactElement {
                         disabled={busy}
                         onClick={() => void run("Start")}
                     >
-                        Start remote access
+                        {t('STR_ACE_Tacphone_RemoteAccess_Start')}
                     </button>
                 </div>
             ) : null}
 
             <div style={styles.section}>
-                <h3 style={styles.title}>This device</h3>
+                <h3 style={styles.title}>{t('STR_ACE_Tacphone_RemoteAccess_ThisDevice')}</h3>
                 <p style={styles.hint}>
-                    One-time code for your own phone. It expires in about two minutes and can be used once.
+                    {t('STR_ACE_Tacphone_RemoteAccess_CodeHint')}
                 </p>
 
                 <div style={styles.code}>{code || "------"}</div>
@@ -359,7 +366,9 @@ function RemoteAccessPanelInner(_props: AppProps): React.ReactElement {
                             />
                         </div>
                         <p style={styles.countdown}>
-                            {codeExpiresIn > 0 ? `${codeExpiresIn}s left` : "expired"}
+                            {codeExpiresIn > 0
+                                ? t('STR_ACE_Tacphone_RemoteAccess_SecondsLeft', codeExpiresIn)
+                                : t('STR_ACE_Tacphone_Common_Expired')}
                         </p>
                     </>
                 ) : null}
@@ -372,7 +381,7 @@ function RemoteAccessPanelInner(_props: AppProps): React.ReactElement {
                             disabled={busy || state !== "online"}
                             onClick={() => void run("NewCode")}
                         >
-                            New code
+                            {t('STR_ACE_Tacphone_RemoteAccess_NewCode')}
                         </button>
                     ) : (
                         <button
@@ -381,7 +390,7 @@ function RemoteAccessPanelInner(_props: AppProps): React.ReactElement {
                             disabled={busy}
                             onClick={() => void copy(code, "code")}
                         >
-                            {copied === "code" ? "Copied!" : "Copy code"}
+                            {copied === "code" ? t('STR_ACE_Tacphone_Common_Copied') : t('STR_ACE_Tacphone_RemoteAccess_CopyCode')}
                         </button>
                     )}
                 </div>
@@ -390,10 +399,9 @@ function RemoteAccessPanelInner(_props: AppProps): React.ReactElement {
             </div>
 
             <div style={styles.section}>
-                <h3 style={styles.title}>Share link</h3>
+                <h3 style={styles.title}>{t('STR_ACE_Tacphone_RemoteAccess_ShareLink')}</h3>
                 <p style={styles.hint}>
-                    Reusable link for other people. Creating a new link invalidates the current one and
-                    disconnects everyone using it.
+                    {t('STR_ACE_Tacphone_RemoteAccess_ShareHint')}
                 </p>
 
                 <div style={styles.row}>
@@ -404,7 +412,7 @@ function RemoteAccessPanelInner(_props: AppProps): React.ReactElement {
                         disabled={busy || state !== "online"}
                     >
                         {TTL_OPTIONS.map(option => (
-                            <option key={option.seconds} value={option.seconds}>{option.label}</option>
+                            <option key={option.seconds} value={option.seconds}>{t(option.key)}</option>
                         ))}
                     </select>
                     <button
@@ -413,7 +421,7 @@ function RemoteAccessPanelInner(_props: AppProps): React.ReactElement {
                         disabled={busy || state !== "online"}
                         onClick={() => void run("ShareCreate", { ttlSeconds: ttl })}
                     >
-                        {share ? "Replace link" : "Create link"}
+                        {share ? t('STR_ACE_Tacphone_RemoteAccess_ReplaceLink') : t('STR_ACE_Tacphone_RemoteAccess_CreateLink')}
                     </button>
                     {share ? (
                         <button
@@ -422,7 +430,7 @@ function RemoteAccessPanelInner(_props: AppProps): React.ReactElement {
                             disabled={busy}
                             onClick={() => void run("ShareRevoke")}
                         >
-                            Revoke
+                            {t('STR_ACE_Tacphone_RemoteAccess_Revoke')}
                         </button>
                     ) : null}
                 </div>
@@ -437,30 +445,30 @@ function RemoteAccessPanelInner(_props: AppProps): React.ReactElement {
                                 disabled={busy}
                                 onClick={() => void copy(share.url, "share")}
                             >
-                                {copied === "share" ? "Copied!" : "Copy link"}
+                                {copied === "share" ? t('STR_ACE_Tacphone_Common_Copied') : t('STR_ACE_Tacphone_RemoteAccess_CopyLink')}
                             </button>
-                            <span style={styles.hint}>Expires in {remaining(share.expiresIn)}</span>
+                            <span style={styles.hint}>{t('STR_ACE_Tacphone_RemoteAccess_ExpiresIn', remaining(share.expiresIn))}</span>
                         </div>
                         <div style={{ marginTop: 10 }}><QrCode text={share.url} /></div>
                         <p style={styles.warning}>
-                            Anyone with this link can control this phone until it expires or you stop remote access.
+                            {t('STR_ACE_Tacphone_RemoteAccess_ShareWarning')}
                         </p>
                     </>
                 ) : null}
             </div>
 
             <div style={styles.section}>
-                <h3 style={styles.title}>Connected devices</h3>
+                <h3 style={styles.title}>{t('STR_ACE_Tacphone_RemoteAccess_ConnectedDevices')}</h3>
 
                 {(status?.peers ?? []).length === 0 ? (
-                    <p style={styles.hint}>No devices connected.</p>
+                    <p style={styles.hint}>{t('STR_ACE_Tacphone_RemoteAccess_NoDevices')}</p>
                 ) : (
                     (status?.peers ?? []).map(peer => (
                         <div key={peer.id} style={styles.peer}>
                             <div>
-                                <div>{peer.label || "Unknown device"} {peer.via === "share" ? "(share)" : ""}</div>
+                                <div>{peer.label || t('STR_ACE_Tacphone_RemoteAccess_UnknownDevice')} {peer.via === "share" ? t('STR_ACE_Tacphone_RemoteAccess_ViaShare') : ""}</div>
                                 <div style={{ color: "#8b949e", fontSize: 11 }}>
-                                    first connected {formatTime(peer.firstSeenAt || peer.connectedAt)}
+                                    {t('STR_ACE_Tacphone_RemoteAccess_FirstConnected', formatTime(peer.firstSeenAt || peer.connectedAt))}
                                 </div>
                             </div>
                             <button
@@ -469,7 +477,7 @@ function RemoteAccessPanelInner(_props: AppProps): React.ReactElement {
                                 disabled={busy}
                                 onClick={() => void run("Kick", { peerId: peer.id })}
                             >
-                                Disconnect
+                                {t('STR_3DEN_Display3DEN_ControlsHint_Disconnect')}
                             </button>
                         </div>
                     ))
@@ -483,7 +491,7 @@ function RemoteAccessPanelInner(_props: AppProps): React.ReactElement {
                     disabled={busy}
                     onClick={() => void run("Stop")}
                 >
-                    Stop remote access
+                    {t('STR_ACE_Tacphone_RemoteAccess_Stop')}
                 </button>
             </div>
         </div>

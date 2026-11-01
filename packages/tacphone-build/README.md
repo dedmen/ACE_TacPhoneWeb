@@ -14,6 +14,7 @@ only and must not import host or app source.
 tacphone-build bundle-api-types --app <dir> [--entry src/api.ts] [--name <name>] [--output <file>]
 tacphone-build sync-api-types <source.d.ts> <target-dir-or-file>...
 tacphone-build check-shared-imports
+tacphone-build check-strings
 tacphone-build facade build --app <dir> --package <name> --prefix <prefix> --out <file> [--manifest <file>]
 ```
 
@@ -112,6 +113,86 @@ rebuild hint, so a stale artifact cannot be shipped silently.
 Each checked bundle is reported as `OK  <path> (<n> imports)`. The command fails
 when nothing could be checked, which usually means neither the host nor an app has
 been built yet.
+
+### `check-strings`
+
+Safety net for localization. Scans `ACE_TacPhone_Main/src`, `ACE_TacPhone_Map/src`,
+`MessagingApp/src` and `SampleApp/src` for `STR_ACE_Tacphone_*` keys, parses
+`../stringtable.xml`, and fails when a key is used but not defined, or has no
+English text. Keys that exist but are not referenced from web code are listed as
+a note (game-only keys are expected there). It runs as part of `npm run check` and
+is also available as `npm run check:strings`.
+
+### `base-strings`
+
+Lists base-game stringtable entries whose English text matches an add-on key, with
+every language translation, so an existing vanilla string can be reused instead
+of adding a duplicate. The dataset is BrettMayson's official-stringtable dump —
+`strings.cbor`, ~30 MB, not committed (older JSON dumps still work):
+
+```powershell
+tacphone-build base-strings --download
+tacphone-build base-strings --json C:\path\to\strings.cbor --area Map
+```
+
+Reused keys are not in the add-on stringtable and must be preloaded at runtime
+(`window.TacPhone.localization.load(...)` from the owning app's `i18n.ts` /
+`init()`). Pre-connection UI (host pairing/loading/error) keeps its own keys in
+`stringtable.xml` so the build-time default table has them.
+
+### `translate`
+
+Fills the add-on stringtable with AI translations for every supported language
+(19 in total, English first). Each machine-translated language tag is marked
+`ai-translated="true"`; keys/languages with existing valid translations are left
+alone. English is never marked.
+
+```powershell
+tacphone-build translate --check
+tacphone-build translate
+tacphone-build translate --only German,French
+tacphone-build translate --force
+```
+
+Results are cached in `node_modules/.cache/tacphone/translation-cache.json`; only
+missing/changed keys are requested. Translation uses the public
+`clients5.google.com/translate_a/t` endpoint, so the command needs network access.
+Batches are rate-limited and retried; `%1` placeholders are validated and a
+result that loses one falls back to the English text.
+
+### `mark-ai`
+
+HEMTT's `hemtt ln sort` strips unknown attributes, including
+`ai-translated="true"`. The per-key AI language list is persisted in
+`node_modules/.cache/tacphone/ai-translated.json`; re-apply it after a sort:
+
+```powershell
+tacphone-build mark-ai
+tacphone-build mark-ai --check
+tacphone-build mark-ai --save
+tacphone-build mark-ai --from-translations
+tacphone-build mark-ai --clear STR_ACE_Tacphone_Some_Key
+```
+
+`translate` updates the same list, so new translations are remembered.
+
+
+Vite plugin (also exported as `tacphoneStringtable`) that turns the add-on
+stringtable into a virtual module:
+
+```ts
+tacphoneStringtable({ path: '../../stringtable.xml', languages: ['English'] })
+```
+
+`virtual:tacphone-stringtable` exports one string: `base64(gzip(JSON))` of
+`{ language: { key: text } }`. The host decodes it with `decompressFromBase64`
+before the first render, so the remote pairing screen and the fatal error screen
+have text without a game connection. This bundled table is currently the **only**
+runtime source: HEMTT compiles `stringtable.xml` to `stringtable.bin`, so the
+host's runtime XML loader is disabled (`LOAD_STRINGTABLE_FILE = false`); the game
+language from `Localization.Info` selects the language block. `languages` is an
+optional filter; the whole file is bundled when it is omitted. Editing the XML
+triggers a full reload in development.
 
 ## `shared-modules.js`
 

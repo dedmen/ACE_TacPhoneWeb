@@ -30,6 +30,7 @@ export type {
     GameInfo,
     GameInfoApi,
     InterestRegistryApi,
+    LocalizationApi,
     Networking,
     NotificationAction,
     NotificationCenterApi,

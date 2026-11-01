@@ -2,6 +2,9 @@ import React from 'react';
 import './App.css'
 // Installs window.TacPhone before the first panel renders.
 import { GetTacPhoneHost } from './Backend/Host'
+import { localization } from './Backend/Localization'
+import { HOST_BASE_GAME_STRINGS } from './Backend/i18n'
+import { appDirectory } from './Backend/AppDirectory'
 import { compressAndToBase64, decompressFromBase64 } from './Backend/Compression'
 import { appOptions } from './Backend/AppOptions'
 
@@ -79,38 +82,40 @@ function createModelFromLayout(layout: IJsonModel | undefined): Model | undefine
     }
 }
 
-const defaultLayout: IJsonModel = {
-    global: {tabEnablePopoutFloatIcon: true, tabEnablePopout: false},
-    borders: [],
-    layout: {
-        type: "row",
-        weight: 100,
-        children: [
-            {
-                type: "tabset",
-                weight: 50,
-                children: [
-                    {
-                        type: "tab",
-                        name: "One",
-                        component: "AppChooser",
-                    }
-                ]
-            },
-            {
-                type: "tabset",
-                weight: 50,
-                children: [
-                    {
-                        type: "tab",
-                        name: "Two",
-                        component: "AppChooser",
-                    }
-                ]
-            }
-        ]
-    }
-};
+function defaultLayout(): IJsonModel {
+    return {
+        global: {tabEnablePopoutFloatIcon: true, tabEnablePopout: false},
+        borders: [],
+        layout: {
+            type: "row",
+            weight: 100,
+            children: [
+                {
+                    type: "tabset",
+                    weight: 50,
+                    children: [
+                        {
+                            type: "tab",
+                            name: localization.t('STR_ACE_Tacphone_Host_Tab_DefaultOne'),
+                            component: "AppChooser",
+                        }
+                    ]
+                },
+                {
+                    type: "tabset",
+                    weight: 50,
+                    children: [
+                        {
+                            type: "tab",
+                            name: localization.t('STR_ACE_Tacphone_Host_Tab_DefaultTwo'),
+                            component: "AppChooser",
+                        }
+                    ]
+                }
+            ]
+        }
+    };
+}
 
 function createLayoutModel(): Model {
     const storage = getLayoutStorage();
@@ -134,7 +139,7 @@ function createLayoutModel(): Model {
         }
     }
 
-    return Model.fromJson(defaultLayout);
+    return Model.fromJson(defaultLayout());
 }
 
 import type { NotificationTapHandler, PanelInstance, TacPhoneNotification } from '@ace-tacphone/api';
@@ -166,6 +171,8 @@ class App extends React.Component<{}, {loading: boolean, error: string | undefin
     private persistenceReady = false;
     /** Releases the app options subscription. */
     private unsubscribeOptions: (() => void) | undefined;
+    /** Releases the localization subscription. */
+    private unsubscribeLocalization: (() => void) | undefined;
 
     constructor(props: {})
     {
@@ -197,7 +204,7 @@ class App extends React.Component<{}, {loading: boolean, error: string | undefin
         const panelInfo = host.apps.knownPanels.get(panelId);
 
         if (!panelInfo)
-            return <div>Unknown panel?? {panelId}/{node.getName()}</div>;
+            return <div>{localization.t('STR_ACE_Tacphone_Host_App_UnknownPanel')} {panelId}/{node.getName()}</div>;
 
         const AppComponent = panelInfo.appComponent;
         const title = host.apps.getPanelMeta(panelId)?.title ?? panelId;
@@ -406,12 +413,12 @@ class App extends React.Component<{}, {loading: boolean, error: string | undefin
             renderValues.stickyButtons.push(
                 <button
                     key="Add"
-                    title="Add"
+                    title={localization.t('str_a3_cfgvehicles_modulecuratoraddeditableobjects_arguments_addcrew_values_yes')}
                     className="flexlayout__tab_toolbar_button"
                     onClick={() => {
                         this.model.doAction(Actions.addTab({
                             component: "AppChooser",
-                            name: "Added "
+                            name: localization.t('STR_ACE_Tacphone_Host_App_AddedTab')
                         }, node.getId(), DockLocation.CENTER, -1, true));
                     }}
                 ><AddIcon/></button>);
@@ -461,6 +468,15 @@ class App extends React.Component<{}, {loading: boolean, error: string | undefin
         try {
             const host = GetTacPhoneHost();
             await host.networking.WhenReady();
+
+            // Load the add-on stringtable before any UI asks for text. Never
+            // rejects: a failed load keeps the bundled table and enables the
+            // on-demand lookups.
+            await host.localization.whenReady();
+
+            // Base-game keys used by the host are not bundled; ask for them in
+            // one batch before the panels render.
+            await host.localization.load(HOST_BASE_GAME_STRINGS);
 
             const [layout] = await Promise.all([
                 this.loadLayoutFromGame(),
@@ -515,6 +531,19 @@ class App extends React.Component<{}, {loading: boolean, error: string | undefin
         this.unsubscribeOptions = appOptions.onDidChange(() => {
             this.scheduleSave(OPTIONS_SAVE_INTERVAL_MS);
         });
+
+        // Strings may arrive after the first render (on-demand lookups, app
+        // stringtables); re-render so text that was still a key is replaced.
+        this.unsubscribeLocalization = localization.onDidChange(() => {
+            if (!this.mounted)
+                return;
+
+            // Panel titles are cached at registration; a title that was still a
+            // raw key becomes readable when its translation arrives.
+            appDirectory.refreshPanelTitles();
+            this.forceUpdate();
+        });
+
         window.addEventListener('pagehide', this.handlePageHide);
 
         void this.loadApps();
@@ -530,19 +559,24 @@ class App extends React.Component<{}, {loading: boolean, error: string | undefin
             this.unsubscribeOptions = undefined;
         }
 
+        if (this.unsubscribeLocalization) {
+            this.unsubscribeLocalization();
+            this.unsubscribeLocalization = undefined;
+        }
+
         this.flushPendingSave();
     }
 
     render() {
         if (this.state.loading)
-            return <div>LOADING!</div>;
+            return <div>{localization.t('STR_ACE_Tacphone_Host_App_Loading')}</div>;
 
         if (this.state.error)
             return (
                 <div style={{ padding: 24, color: 'white', backgroundColor: '#2a1111', height: '100%', boxSizing: 'border-box' }}>
-                    <h2>TacPhone failed to start</h2>
+                    <h2>{localization.t('STR_ACE_Tacphone_Host_App_LoadFailedTitle')}</h2>
                     <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{this.state.error}</pre>
-                    <button type="button" onClick={() => void this.loadApps()}>Retry</button>
+                    <button type="button" onClick={() => void this.loadApps()}>{localization.t('STR_ACE_Tacphone_Common_Retry')}</button>
                 </div>
             );
 

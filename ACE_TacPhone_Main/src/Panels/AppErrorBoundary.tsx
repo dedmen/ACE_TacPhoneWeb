@@ -1,5 +1,6 @@
 import React from "react";
 import styles from './AppErrorBoundary.module.css'
+import { t } from '../Backend/i18n'
 
 type AppErrorBoundaryProps = {
     appName: string;
@@ -26,14 +27,14 @@ export class AppErrorBoundary extends React.Component<AppErrorBoundaryProps, App
         if (this.state.error) {
             return (
                 <div className={styles.ErrorPanel} role="alert">
-                    <div className={styles.ErrorTitle}>{this.props.appName} failed to start</div>
+                    <div className={styles.ErrorTitle}>{t('STR_ACE_Tacphone_Host_ErrorBoundary_Title', this.props.appName)}</div>
                     <div className={styles.ErrorMessage}>{this.state.error.message}</div>
                     <button
                         type="button"
                         className={styles.RetryButton}
                         onClick={() => this.setState({ error: undefined })}
                     >
-                        Retry
+                        {t('STR_ACE_Tacphone_Common_Retry')}
                     </button>
                 </div>
             );

@@ -11,6 +11,7 @@ import { chatStore } from '../state/ChatStore';
 import { useMessengerUi } from '../ui';
 import { ChatIcon, ForwardIcon } from './icons';
 import { useObjectIcon } from './useObjectIcon';
+import { t } from '../i18n';
 import styles from './ChatObjectCard.module.css';
 
 interface ChatObjectCardProps {
@@ -56,12 +57,12 @@ function RoomInviteCard({ invite, joined }: { invite: RoomInviteObjectData; join
                 return;
             }
 
-            setError(result.error ?? 'Could not join the room.');
-            notify('Could not join the room', result.error);
+            setError(result.error ?? t('STR_ACE_Tacphone_Messenger_Invite_JoinFailed'));
+            notify(t('STR_ACE_Tacphone_Messenger_Invite_JoinFailedTitle'), result.error);
         } catch (caught) {
             const message = caught instanceof Error ? caught.message : String(caught);
             setError(message);
-            notify('Could not join the room', message);
+            notify(t('STR_ACE_Tacphone_Messenger_Invite_JoinFailedTitle'), message);
         } finally {
             setBusy(false);
         }
@@ -73,8 +74,8 @@ function RoomInviteCard({ invite, joined }: { invite: RoomInviteObjectData; join
                 <ChatIcon className={styles.glyph} />
             </div>
             <div className={styles.inviteText}>
-                <div className={styles.title}>{invite.roomName.trim() || 'Room invite'}</div>
-                <div className={styles.subtitle}>Room invite</div>
+                <div className={styles.title}>{invite.roomName.trim() || t('STR_ACE_Tacphone_Messenger_Invite_Title')}</div>
+                <div className={styles.subtitle}>{t('STR_ACE_Tacphone_Messenger_Invite_Title')}</div>
                 {error && <div className={styles.error}>{error}</div>}
             </div>
             <button
@@ -85,7 +86,11 @@ function RoomInviteCard({ invite, joined }: { invite: RoomInviteObjectData; join
                     void join();
                 }}
             >
-                {joined ? 'Joined' : busy ? 'Joining...' : 'Join'}
+                {joined
+                    ? t('STR_ACE_Tacphone_Messenger_Invite_Joined')
+                    : busy
+                        ? t('STR_ACE_Tacphone_Messenger_Invite_Joining')
+                        : t('str_a3_rscdisplaydynamicgroups_button_join')}
             </button>
         </div>
     );

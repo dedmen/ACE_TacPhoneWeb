@@ -23,6 +23,7 @@
 
 import React from "react";
 import type { TacPhoneNotification } from "@ace-tacphone/api";
+import { t } from "../Backend/i18n";
 import styles from "./NotificationHost.module.css";
 
 type NotificationHostProps = {
@@ -203,7 +204,7 @@ function NotificationCard(props: NotificationCardProps): React.ReactNode {
             <button
                 type="button"
                 className={styles.Close}
-                aria-label="Dismiss notification"
+                aria-label={t('STR_ACE_Tacphone_Common_DismissNotification')}
                 onPointerDown={handleClosePointerDown}
                 onClick={handleCloseClick}
             >
@@ -229,7 +230,7 @@ export function NotificationHost(props: NotificationHostProps): React.ReactNode 
 
     // The store appends, so the newest notification is the last one.
     return (
-        <div className={styles.Host} role="region" aria-label="Notifications" aria-live="polite">
+        <div className={styles.Host} role="region" aria-label={t('STR_ACE_Tacphone_Host_Notifications_Label')} aria-live="polite">
             {notifications.toReversed().map(notification => (
                 <NotificationCard
                     key={notification.id}

@@ -27,6 +27,25 @@ flexlayout model, and the Remote Access relay.
   states and restores `CLOSED` at the end. It also needs an `__A3_DEBUG__` build
   with **Allow debug mode**.
 
+### Trusting the local certificate
+
+The web host uses a self-signed certificate. Export the certificate the running
+host presents and point Node at it (never disable verification):
+
+```powershell
+$out = Join-Path $env:TEMP 'tacphone-localhost.pem'
+$tcp = [System.Net.Sockets.TcpClient]::new('localhost', 8001)
+$ssl = [System.Net.Security.SslStream]::new($tcp.GetStream(), $false, { param($s, $c, $ch, $e) $true })
+$ssl.AuthenticateAsClient('localhost')
+$cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($ssl.RemoteCertificate)
+[IO.File]::WriteAllText($out, "-----BEGIN CERTIFICATE-----`n" + [Convert]::ToBase64String($cert.RawData, 'InsertLineBreaks') + "`n-----END CERTIFICATE-----`n")
+$env:NODE_EXTRA_CA_CERTS = $out
+```
+
+The certificate changes when the web host regenerates it, so re-export it if the
+suites report `self-signed certificate`. Run all suites in the same PowerShell
+session, or set `NODE_EXTRA_CA_CERTS` permanently for the user.
+
 ## Run
 
 From `websource`:

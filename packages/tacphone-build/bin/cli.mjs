@@ -2,6 +2,10 @@
 import { runBundleApiTypes } from '../api-types.mjs'
 import { runSyncApiTypes } from '../sync-api-types.mjs'
 import { runCheckSharedImports } from '../check-shared-imports.mjs'
+import { runCheckStrings } from '../check-strings.mjs'
+import { runBaseStrings } from '../base-strings.mjs'
+import { runMarkAI } from '../ai-marks.mjs'
+import { runTranslate } from '../translate.mjs'
 import { runFacadeBuild } from '../facade.js'
 
 const [command, ...args] = process.argv.slice(2)
@@ -10,6 +14,13 @@ const commands = {
     'bundle-api-types': runBundleApiTypes,
     'sync-api-types': runSyncApiTypes,
     'check-shared-imports': runCheckSharedImports,
+    'check-strings': async () => {
+        if (!await runCheckStrings())
+            process.exitCode = 1
+    },
+    'base-strings': runBaseStrings,
+    'translate': runTranslate,
+    'mark-ai': runMarkAI,
     'facade': runFacadeBuild,
 }
 
@@ -19,6 +30,10 @@ Commands:
   bundle-api-types --app <dir> [--entry src/api.ts] [--name <name>] [--output <file>]
   sync-api-types <source.d.ts> <target-dir-or-file>...
   check-shared-imports
+  check-strings
+  base-strings [--download] [--json <path>] [--area <Area>]
+  translate [--check] [--force] [--only <Languages>]
+  mark-ai [--check] [--save] [--from-translations] [--clear <Key>...]
   facade build --app <dir> --package <name> --prefix <prefix> --out <file> [--manifest <file>]
 `
 

@@ -1,7 +1,8 @@
 import type { CSSProperties, JSX } from 'react';
 
 import type { ChatPresence } from '../api';
-import { initialsOf, safeColor } from '../format';
+import { initialsOf, presenceText, safeColor } from '../format';
+import { t } from '../i18n';
 import styles from './Ui.module.css';
 
 interface PresenceDotProps {
@@ -18,11 +19,11 @@ export function PresenceDot({ presence, withLabel = false, className }: Presence
     return (
         <span
             className={[styles.presence, className].filter(Boolean).join(' ')}
-            title={value}
+            title={presenceText(value)}
             data-presence={value}
         >
             <span className={styles.presenceDot} data-presence={value} aria-hidden="true" />
-            {withLabel && <span className={styles.presenceLabel}>{value}</span>}
+            {withLabel && <span className={styles.presenceLabel}>{presenceText(value)}</span>}
         </span>
     );
 }
@@ -64,7 +65,7 @@ interface SearchInputProps {
 export function SearchInput({
     value,
     onChange,
-    placeholder = 'Search',
+    placeholder = t('str_3den_display3den_menubar_search_text'),
     autoFocus = false,
     ariaLabel,
 }: SearchInputProps): JSX.Element {
@@ -89,7 +90,7 @@ export function SearchInput({
                 <button
                     type="button"
                     className={styles.searchClear}
-                    aria-label="Clear search"
+                    aria-label={t('STR_ACE_Tacphone_Common_ClearSearch')}
                     onClick={() => {
                         onChange('');
                     }}

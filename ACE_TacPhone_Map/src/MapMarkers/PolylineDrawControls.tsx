@@ -3,6 +3,7 @@ import type { MarkerColor } from './MarkerLayer';
 import { ColorSwatchPicker } from './ColorSwatchPicker';
 import { parseMarkerColor } from './MarkerColorUtils';
 import PolylineStyle from './PolylineDrawControls.module.scss';
+import { t } from '../i18n';
 
 export interface PolylineDrawControlsProps {
     /** True while the polyline drawing mode is armed. */
@@ -48,9 +49,9 @@ export function PolylineDrawControls({
                 type="button"
                 className={`${PolylineStyle.polyline_toggle_btn}${isActive ? ` ${PolylineStyle.active}` : ''}`}
                 onClick={onToggle}
-                title="Draw polyline marker"
+                title={t('STR_ACE_Tacphone_Map_Polyline_DrawTitle')}
                 aria-pressed={isActive}
-                aria-label="Draw polyline marker"
+                aria-label={t('STR_ACE_Tacphone_Map_Polyline_DrawTitle')}
             >
                 ✏️
             </button>
@@ -59,9 +60,9 @@ export function PolylineDrawControls({
                 <div
                     className={PolylineStyle.polyline_panel}
                     role="group"
-                    aria-label="Polyline drawing"
+                    aria-label={t('STR_ACE_Tacphone_Map_Polyline_GroupLabel')}
                 >
-                    <div className={PolylineStyle.panel_header}>Polyline</div>
+                    <div className={PolylineStyle.panel_header}>{t('STR_ACE_Tacphone_Map_Polyline_Title')}</div>
 
                     <label className={PolylineStyle.mode_row}>
                         <input
@@ -69,16 +70,16 @@ export function PolylineDrawControls({
                             checked={clickPerPoint}
                             onChange={(event) => onClickPerPointChange(event.target.checked)}
                         />
-                        <span>Click per point</span>
+                        <span>{t('STR_ACE_Tacphone_Map_Polyline_ClickPerPoint')}</span>
                     </label>
 
-                    <div className={PolylineStyle.panel_muted}>Right-drag to pan</div>
+                    <div className={PolylineStyle.panel_muted}>{t('STR_ACE_Tacphone_Map_Polyline_RightDragPan')}</div>
                     {channelLabel !== '' && (
-                        <div className={PolylineStyle.panel_muted}>Channel: {channelLabel}</div>
+                        <div className={PolylineStyle.panel_muted}>{t('STR_ACE_Tacphone_Map_Polyline_Channel', channelLabel)}</div>
                     )}
 
                     {colors.length === 0 ? (
-                        <div className={PolylineStyle.panel_muted}>Loading colors…</div>
+                        <div className={PolylineStyle.panel_muted}>{t('STR_ACE_Tacphone_Map_Polyline_LoadingColors')}</div>
                     ) : (
                         <div className={PolylineStyle.swatch_grid}>
                             <ColorSwatchPicker
@@ -94,12 +95,12 @@ export function PolylineDrawControls({
                                 customInputTestId="polyline-color-custom-input"
                                 customAlphaTestId="polyline-color-custom-alpha"
                                 customPopoverTestId="polyline-color-custom-popover"
-                                ariaLabel="Polyline color"
+                                ariaLabel={t('STR_ACE_Tacphone_Map_Polyline_Color')}
                             />
                         </div>
                     )}
 
-                    <div className={PolylineStyle.panel_muted}>Points: {vertexCount}</div>
+                    <div className={PolylineStyle.panel_muted}>{t('STR_ACE_Tacphone_Map_Polyline_Points', vertexCount)}</div>
 
                     <div className={PolylineStyle.panel_actions}>
                         <button
@@ -108,14 +109,14 @@ export function PolylineDrawControls({
                             onClick={onUndo}
                             disabled={!canUndo}
                         >
-                            Undo
+                            {t('str_3den_display3den_menubar_undo_text')}
                         </button>
                         <button
                             type="button"
                             className={PolylineStyle.action_button}
                             onClick={onCancel}
                         >
-                            Cancel
+                            {t('STR_3DEN_Display3DEN_ControlsHint_Cancel')}
                         </button>
                         <button
                             type="button"
@@ -123,7 +124,7 @@ export function PolylineDrawControls({
                             onClick={onFinish}
                             disabled={!canFinish}
                         >
-                            Done
+                            {t('STR_ACE_Tacphone_Common_Done')}
                         </button>
                     </div>
                 </div>

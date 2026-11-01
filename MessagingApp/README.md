@@ -81,6 +81,13 @@ Resolve it with
 `window.TacPhone.interApp.resolveAsync({ service: 'messenger', panelId: 'Messaging', openIfMissing: true })`.
 Types come from the generated declaration.
 
+## Localization
+
+UI text is read with `window.TacPhone.localization.t()` and lives in the
+`Messenger` container of `addons/tacphone/stringtable.xml`. Presence labels,
+dialog titles and target-selector labels are resolved when they render. See
+[`AGENTS/localization.md`](../AGENTS/localization.md).
+
 ## Tests
 
 ```powershell

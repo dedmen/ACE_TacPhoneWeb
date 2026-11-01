@@ -74,6 +74,7 @@ import {
     effectiveRoomPresence,
     sortRoomSummaries,
 } from './roomUtils';
+import { t } from '../i18n';
 
 export type { ChatMessagesByRoom } from './roomUtils';
 
@@ -326,7 +327,7 @@ class ChatStoreImpl implements ChatStoreApi {
 
         const networking = this.getNetworking();
         if (!networking) {
-            this.setState({ connected: false, lastError: 'TacPhone networking is not available.' });
+            this.setState({ connected: false, lastError: t('STR_ACE_Tacphone_Messenger_Error_NetworkingUnavailable') });
             return;
         }
 
@@ -839,7 +840,7 @@ class ChatStoreImpl implements ChatStoreApi {
                 ok: false,
                 roomId,
                 clientMessageId: '',
-                error: 'Cannot send an empty message.',
+                error: t('STR_ACE_Tacphone_Messenger_Error_EmptyMessage'),
             };
         }
 
@@ -861,7 +862,7 @@ class ChatStoreImpl implements ChatStoreApi {
                 ok: false,
                 roomId,
                 clientMessageId,
-                error: this.state.lastError ?? 'The message could not be sent.',
+                error: this.state.lastError ?? t('STR_ACE_Tacphone_Messenger_Composer_SendFailed'),
             };
         }
 
@@ -872,7 +873,7 @@ class ChatStoreImpl implements ChatStoreApi {
                 ok: false,
                 roomId,
                 clientMessageId,
-                error: result.error ?? 'The message was rejected.',
+                error: result.error ?? t('STR_ACE_Tacphone_Messenger_Error_MessageRejected'),
             };
         }
 
@@ -893,7 +894,7 @@ class ChatStoreImpl implements ChatStoreApi {
 
         const result = await this.roomCommand(
             { c: CMD_CREATE_ROOM, room },
-            'Could not create the room.',
+            t('STR_ACE_Tacphone_Messenger_CreateRoom_Failed'),
         );
 
         if (!result.ok) {
@@ -928,7 +929,7 @@ class ChatStoreImpl implements ChatStoreApi {
             timer: window.setTimeout(() => {
                 this.settlePendingRoomCreate(pending, {
                     ok: false,
-                    error: 'The room was created, but the game did not announce it in time.',
+                    error: t('STR_ACE_Tacphone_Messenger_Error_RoomNotAnnounced'),
                 });
             }, 5000),
             resolve: resolvePromise,
@@ -998,14 +999,14 @@ class ChatStoreImpl implements ChatStoreApi {
     addParticipants(roomId: string, playerUids: string[], groupIds: string[] = []): Promise<CommandResult> {
         return this.command(
             { c: CMD_ADD_PARTICIPANTS, roomId, playerUids, groupIds },
-            'Could not add the participants.',
+            t('STR_ACE_Tacphone_Messenger_AddParticipants_Failed'),
         );
     }
 
     removeParticipants(roomId: string, playerUids: string[]): Promise<CommandResult> {
         return this.command(
             { c: CMD_REMOVE_PARTICIPANTS, roomId, playerUids },
-            'Could not remove the participants.',
+            t('STR_ACE_Tacphone_Messenger_Error_RemoveParticipantsFailed'),
         );
     }
 
@@ -1018,7 +1019,7 @@ class ChatStoreImpl implements ChatStoreApi {
                 targetRoomId: target.roomId,
                 newRoom: target.newRoom,
             },
-            'Could not forward the message.',
+            t('STR_ACE_Tacphone_Messenger_Target_ForwardFailed'),
         );
     }
 
@@ -1031,7 +1032,7 @@ class ChatStoreImpl implements ChatStoreApi {
                 playerUids: options.playerUids ?? [],
                 groupIds: options.groupIds ?? [],
             },
-            'Could not send the invite.',
+            t('STR_ACE_Tacphone_Messenger_Target_InviteFailed'),
         );
     }
 
@@ -1043,11 +1044,11 @@ class ChatStoreImpl implements ChatStoreApi {
         });
 
         if (!result) {
-            return { ok: false, roomId, error: this.state.lastError ?? 'Could not join the room.' };
+            return { ok: false, roomId, error: this.state.lastError ?? t('STR_ACE_Tacphone_Messenger_Invite_JoinFailed') };
         }
 
         if (result.ok === false) {
-            return { ok: false, roomId, error: result.error ?? 'Could not join the room.' };
+            return { ok: false, roomId, error: result.error ?? t('STR_ACE_Tacphone_Messenger_Invite_JoinFailed') };
         }
 
         return { ok: true, roomId: result.roomId ?? roomId };
@@ -1137,7 +1138,7 @@ class ChatStoreImpl implements ChatStoreApi {
         for (const pending of [...this.pendingRoomCreates]) {
             this.settlePendingRoomCreate(pending, {
                 ok: false,
-                error: 'The room request was cancelled.',
+                error: t('STR_ACE_Tacphone_Messenger_Error_RoomRequestCancelled'),
             });
         }
     }
@@ -1159,7 +1160,7 @@ class ChatStoreImpl implements ChatStoreApi {
     private async request<T = CommandResult>(payload: object): Promise<T | undefined> {
         const networking = this.getNetworking();
         if (!networking) {
-            this.reportError('TacPhone networking is not available.');
+            this.reportError(t('STR_ACE_Tacphone_Messenger_Error_NetworkingUnavailable'));
 
             return undefined;
         }

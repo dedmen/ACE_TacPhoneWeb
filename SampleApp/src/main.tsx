@@ -2,6 +2,7 @@ import type { AppPanelInfo } from '@ace-tacphone/api';
 import { TACPHONE_API_VERSION } from '@ace-tacphone/api';
 
 import { SampleApp } from './SampleApp';
+import { t } from './i18n';
 
 /** Version of the host contract this app was built against. */
 export const apiVersion = TACPHONE_API_VERSION;
@@ -12,7 +13,7 @@ export function GetTacPhoneApps(): Array<AppPanelInfo> {
             id: 'SampleApp',
             appComponent: SampleApp,
             GetDefaultTitle() {
-                return 'Sample App';
+                return t('STR_ACE_Tacphone_SampleApp_Title');
             },
             GetTacPhoneIcon() {
                 // Font Awesome "plus" icon (https://fontawesome.com/icons/plus), encoded as a data URL.

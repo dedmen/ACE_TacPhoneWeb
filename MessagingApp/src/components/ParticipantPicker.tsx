@@ -1,9 +1,10 @@
 import type { JSX } from 'react';
 import { useMemo, useState } from 'react';
 
-import { filterGroups, filterPlayers } from '../format';
+import { filterGroups, filterPlayers, presenceText } from '../format';
 import type { GroupListEntry, PlayerListEntry } from '../protocol';
 import { SearchInput } from './Ui';
+import { t } from '../i18n';
 import styles from './Dialogs.module.css';
 
 export interface ParticipantSelection {
@@ -28,6 +29,20 @@ function toggle(list: readonly string[], value: string): string[] {
     return list.includes(value) ? list.filter(item => item !== value) : [...list, value];
 }
 
+/** "%1 player" / "%1 players". */
+function playerCountText(count: number): string {
+    return count === 1
+        ? t('STR_ACE_Tacphone_Messenger_Picker_PlayerCount_One')
+        : t('STR_ACE_Tacphone_Messenger_Picker_PlayerCount_Other', count);
+}
+
+/** "%1 group" / "%1 groups". */
+function groupCountText(count: number): string {
+    return count === 1
+        ? t('STR_ACE_Tacphone_Messenger_Picker_GroupCount_One')
+        : t('STR_ACE_Tacphone_Messenger_Picker_GroupCount_Other', count);
+}
+
 /**
  * Combined player/group selector with search.
  *
@@ -43,7 +58,7 @@ export function ParticipantPicker({
     disabledPlayerUids,
     disabledGroupIds,
     allowGroups = true,
-    placeholder = 'Search players and groups',
+    placeholder = t('STR_ACE_Tacphone_Messenger_Picker_SearchPlaceholder'),
 }: ParticipantPickerProps): JSX.Element {
     const [tab, setTab] = useState<'players' | 'groups'>('players');
     const [query, setQuery] = useState('');
@@ -69,7 +84,7 @@ export function ParticipantPicker({
             <SearchInput value={query} onChange={setQuery} placeholder={placeholder} />
 
             {showGroups && (
-                <div className={styles.tabs} role="tablist" aria-label="Participant type">
+                <div className={styles.tabs} role="tablist" aria-label={t('STR_ACE_Tacphone_Messenger_Picker_TabsLabel')}>
                     <button
                         type="button"
                         role="tab"
@@ -80,7 +95,7 @@ export function ParticipantPicker({
                             setTab('players');
                         }}
                     >
-                        Players
+                        {t('str_a3_rscdisplaydynamicgroups_players')}
                     </button>
                     <button
                         type="button"
@@ -92,7 +107,7 @@ export function ParticipantPicker({
                             setTab('groups');
                         }}
                     >
-                        Groups
+                        {t('str_a3_rscdisplaycurator_modegroups_tooltip')}
                     </button>
                 </div>
             )}
@@ -123,11 +138,11 @@ export function ParticipantPicker({
                                 <span className={styles.optionText}>
                                     <span className={styles.optionName}>{player.name}</span>
                                     <span className={styles.optionMeta}>
-                                        {disabled ? 'Already in the room' : player.groupName ?? 'No group'}
+                                        {disabled ? t('STR_ACE_Tacphone_Messenger_Picker_AlreadyInRoom') : player.groupName ?? t('STR_ACE_Tacphone_Messenger_Picker_NoGroup')}
                                     </span>
                                 </span>
                                 {!disabled && player.presence !== 'available' && (
-                                    <span className={styles.optionHint}>{player.presence}</span>
+                                    <span className={styles.optionHint}>{presenceText(player.presence)}</span>
                                 )}
                             </button>
                         );
@@ -158,11 +173,11 @@ export function ParticipantPicker({
                                 <span className={styles.checkbox} data-checked={isSelected} aria-hidden="true" />
                                 <span className={styles.optionText}>
                                     <span className={styles.optionName}>
-                                        {group.name || 'Unnamed group'}
+                                        {group.name || t('STR_ACE_Tacphone_Messenger_Picker_UnnamedGroup')}
                                         <span className={styles.countBadge}>{memberNames.length}</span>
                                     </span>
                                     <span className={styles.optionMeta}>
-                                        {memberNames.length > 0 ? memberNames.join(', ') : 'No players'}
+                                        {memberNames.length > 0 ? memberNames.join(', ') : t('STR_ACE_Tacphone_Messenger_Picker_NoPlayers')}
                                     </span>
                                 </span>
                             </button>
@@ -170,16 +185,21 @@ export function ParticipantPicker({
                     })}
 
                 {(tab === 'players' || !showGroups) && visiblePlayers.length === 0 && (
-                    <div className={styles.optionEmpty}>No players match the search.</div>
+                    <div className={styles.optionEmpty}>{t('STR_ACE_Tacphone_Messenger_Picker_NoPlayersMatch')}</div>
                 )}
                 {tab === 'groups' && showGroups && visibleGroups.length === 0 && (
-                    <div className={styles.optionEmpty}>No groups match the search.</div>
+                    <div className={styles.optionEmpty}>{t('STR_ACE_Tacphone_Messenger_Picker_NoGroupsMatch')}</div>
                 )}
             </div>
 
             <div className={styles.selectionSummary}>
-                {selected.playerUids.length} player{selected.playerUids.length === 1 ? '' : 's'}
-                {showGroups ? `, ${selected.groupIds.length} group${selected.groupIds.length === 1 ? '' : 's'}` : ''} selected
+                {showGroups
+                    ? t(
+                        'STR_ACE_Tacphone_Messenger_Picker_SelectionWithGroups',
+                        playerCountText(selected.playerUids.length),
+                        groupCountText(selected.groupIds.length),
+                    )
+                    : t('STR_ACE_Tacphone_Messenger_Picker_Selection', playerCountText(selected.playerUids.length))}
             </div>
         </div>
     );

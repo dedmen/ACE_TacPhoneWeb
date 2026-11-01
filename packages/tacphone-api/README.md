@@ -21,9 +21,11 @@ consumed through the workspace's TypeScript build, not prebuilt `.d.ts` files.
 | `TACPHONE_API_VERSION` | Contract version (`2`). Every app module must export the same `apiVersion`. |
 | `AppProps` | Props of every panel component: `appId`, `panelId`, `node`, `model`, `panel`. The host is the global `window.TacPhone`. |
 | `AppModule`, `AppPanelInfo`, `AppComponent` | App entry module and panel registration. |
-| `TacPhoneHost` | The `window.TacPhone` object: `apiVersion`, `reactVersion`, `networking`, `apps`, `panels`, `interApp`, `interests`, `notifications`, `audio`, `gameInfo`, `options`, `utils`, `components`. |
+| `TacPhoneHost` | The `window.TacPhone` object: `apiVersion`, `reactVersion`, `networking`, `apps`, `panels`, `interApp`, `interests`, `notifications`, `audio`, `gameInfo`, `localization`, `options`, `utils`, `components`. |
 | `ComponentsApi`, `SelectMenuProps`, `SelectOption` | `window.TacPhone.components`: reusable host components. `SelectMenu` is the listbox select whose menu is portaled to `document.body` (fixed position, above the rest of the UI, no layout/scrollbar impact on the owner). |
 | `GameInfo`, `GameInfoApi` | One-time mission snapshot: `multiplayer`, `playerId`, `missionName`, `terrainName`, `gameVersion`, `debug`; access through `window.TacPhone.gameInfo.whenReady()`, `get()` and `isDebug()`. |
+| `LocalizationApi` | `window.TacPhone.localization`: `t(key, ...args)`, `has`, `load`, `whenReady`, `loadStringtables`, `language`, `onDidChange`. Keys live in the add-on stringtable; see `AGENTS/localization.md`. |
+| `AppInfo` | Also carries `stringtable`: the app's own stringtable path, empty when it shares the host add-on's file. |
 | `Networking` | `WhenReady`, `Request`, `OnConnectionChange`, `LoadGameFileText`, `LoadGameFileTexture`, `LoadGameTerrain`, `ReplyTerrainSVG`, `OnMessageFromGame`. |
 | `TerrainData`, `TerrainLayer` | Return type of `LoadGameTerrain()`: terrain `width`/`height` and standalone per-layer SVG documents. |
 | `AppCatalog`, `AppInfo`, `PanelMeta` | Read-only app and panel catalog (`window.TacPhone.apps`). |

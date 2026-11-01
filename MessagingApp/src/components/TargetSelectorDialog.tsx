@@ -9,6 +9,7 @@ import { sendObjectMessage } from '../service';
 import { DialogActions, FloatingDialog } from './FloatingDialog';
 import type { ParticipantSelection } from './ParticipantPicker';
 import { ParticipantPicker } from './ParticipantPicker';
+import { t } from '../i18n';
 import styles from './Dialogs.module.css';
 
 /** What the selector is used for. */
@@ -37,15 +38,15 @@ interface TargetSelectorDialogProps {
 const EMPTY_SELECTION: ParticipantSelection = { playerUids: [], groupIds: [] };
 
 const TITLES: Record<TargetSelectorMode, string> = {
-    forward: 'Forward message',
-    invite: 'Invite people',
-    share: 'Share to Messenger',
+    forward: 'STR_ACE_Tacphone_Messenger_Target_ForwardTitle',
+    invite: 'STR_ACE_Tacphone_Messenger_Target_InviteTitle',
+    share: 'STR_ACE_Tacphone_Messenger_Target_ShareTitle',
 };
 
 const CONFIRM_LABELS: Record<TargetSelectorMode, string> = {
-    forward: 'Forward',
-    invite: 'Send invite',
-    share: 'Share',
+    forward: 'str_a3_forward',
+    invite: 'STR_ACE_Tacphone_Messenger_Target_SendInvite',
+    share: 'STR_ACE_Tacphone_Messenger_Target_Share',
 };
 
 function initialRoomId(
@@ -161,7 +162,7 @@ export function TargetSelectorDialog({
                 );
 
                 if (!result.ok) {
-                    setError(result.error ?? 'Could not forward the message.');
+                    setError(result.error ?? t('STR_ACE_Tacphone_Messenger_Target_ForwardFailed'));
 
                     return;
                 }
@@ -177,7 +178,7 @@ export function TargetSelectorDialog({
                 if (newRoom) {
                     const created = await chatStore.createRoom(spec);
                     if (!created.ok || created.roomId === undefined || created.roomId === '') {
-                        setError(created.error ?? 'Could not create the room.');
+                        setError(created.error ?? t('STR_ACE_Tacphone_Messenger_CreateRoom_Failed'));
 
                         return;
                     }
@@ -186,14 +187,14 @@ export function TargetSelectorDialog({
                 }
 
                 if (roomId === undefined) {
-                    setError('Choose a room.');
+                    setError(t('STR_ACE_Tacphone_Messenger_Target_ChooseRoom'));
 
                     return;
                 }
 
                 const result = await sendObjectMessage(roomId, objects ?? []);
                 if (!result.ok) {
-                    setError(result.error ?? 'Could not share the item.');
+                    setError(result.error ?? t('STR_ACE_Tacphone_Messenger_Target_ShareFailed'));
 
                     return;
                 }
@@ -214,7 +215,7 @@ export function TargetSelectorDialog({
                 });
 
             if (!result.ok) {
-                setError(result.error ?? 'Could not send the invite.');
+                setError(result.error ?? t('STR_ACE_Tacphone_Messenger_Target_InviteFailed'));
 
                 return;
             }
@@ -229,25 +230,25 @@ export function TargetSelectorDialog({
 
     const subtitle = newRoom
         ? mode === 'invite'
-            ? 'Create a room with these people'
+            ? t('STR_ACE_Tacphone_Messenger_Target_NewRoomInviteHint')
             : mode === 'forward'
-                ? 'Create a room and forward the message into it'
-                : 'Create a room and send the item there'
+                ? t('STR_ACE_Tacphone_Messenger_Target_NewRoomForwardHint')
+                : t('STR_ACE_Tacphone_Messenger_Target_NewRoomShareHint')
         : mode === 'forward'
-            ? 'Choose where this message goes'
+            ? t('STR_ACE_Tacphone_Messenger_Target_ForwardHint')
             : mode === 'invite'
-                ? 'Choose a room and the players to invite'
-                : 'Choose a room for this item';
+                ? t('STR_ACE_Tacphone_Messenger_Target_InviteHint')
+                : t('STR_ACE_Tacphone_Messenger_Target_ShareHint');
 
     return (
         <FloatingDialog
-            title={TITLES[mode]}
+            title={t(TITLES[mode])}
             subtitle={subtitle}
             onClose={onClose}
             footer={(
                 <DialogActions>
                     <button type="button" className={styles.button} onClick={onClose} disabled={busy}>
-                        Cancel
+                        {t('STR_3DEN_Display3DEN_ControlsHint_Cancel')}
                     </button>
                     <button
                         type="button"
@@ -257,15 +258,15 @@ export function TargetSelectorDialog({
                         }}
                         disabled={!canConfirm}
                     >
-                        {busy ? 'Sending...' : CONFIRM_LABELS[mode]}
+                        {busy ? t('STR_ACE_Tacphone_Messenger_Target_Sending') : t(CONFIRM_LABELS[mode])}
                     </button>
                 </DialogActions>
             )}
         >
             {!newRoom && (
                 <>
-                    <div className={styles.sectionTitle}>Rooms</div>
-                    <div className={styles.roomList} role="listbox" aria-label="Rooms">
+                    <div className={styles.sectionTitle}>{t('STR_ACE_Tacphone_Messenger_Target_Rooms')}</div>
+                    <div className={styles.roomList} role="listbox" aria-label={t('STR_ACE_Tacphone_Messenger_Target_Rooms')}>
                         {visibleRooms.map(room => {
                             const isSelected = effectiveRoomId === room.id;
 
@@ -287,17 +288,18 @@ export function TargetSelectorDialog({
                                             {roomDisplayName(room, selfUid)}
                                         </span>
                                         <span className={styles.roomMeta}>
-                                            {room.kind === 'direct' ? 'Direct' : 'Group'}
+                                            {room.kind === 'direct' ? t('STR_A3_TargetBootcampTable_direct') : t('STR_ACE_Tacphone_Messenger_Target_Group')}
                                             {' - '}
-                                            {room.participants.length} participant
-                                            {room.participants.length === 1 ? '' : 's'}
+                                            {room.participants.length === 1
+                                                ? t('STR_ACE_Tacphone_Messenger_ChatView_Participant_One')
+                                                : t('STR_ACE_Tacphone_Messenger_ChatView_Participant_Other', room.participants.length)}
                                         </span>
                                     </span>
                                 </button>
                             );
                         })}
                         {visibleRooms.length === 0 && (
-                            <div className={styles.optionEmpty}>No rooms yet.</div>
+                            <div className={styles.optionEmpty}>{t('STR_ACE_Tacphone_Messenger_Target_NoRooms')}</div>
                         )}
                     </div>
 
@@ -308,7 +310,7 @@ export function TargetSelectorDialog({
                             setNewRoom(true);
                         }}
                     >
-                        + New room
+                        {t('STR_ACE_Tacphone_Messenger_Target_NewRoom')}
                     </button>
                 </>
             )}
@@ -317,13 +319,13 @@ export function TargetSelectorDialog({
                 <>
                     <div className={styles.field}>
                         <label className={styles.label} htmlFor="messenger-target-room-name">
-                            Room name (optional)
+                            {t('STR_ACE_Tacphone_Messenger_CreateRoom_NameLabel')}
                         </label>
                         <input
                             id="messenger-target-room-name"
                             className={styles.input}
                             value={roomName}
-                            placeholder="Leave empty for a direct message"
+                            placeholder={t('STR_ACE_Tacphone_Messenger_CreateRoom_NamePlaceholder')}
                             maxLength={64}
                             onChange={event => {
                                 setRoomName(event.currentTarget.value);
@@ -332,7 +334,7 @@ export function TargetSelectorDialog({
                     </div>
 
                     <div className={styles.sectionTitle}>
-                        {mode === 'invite' ? 'Room participants' : 'Participants'}
+                        {mode === 'invite' ? t('STR_ACE_Tacphone_Messenger_Target_RoomParticipants') : t('STR_ACE_Tacphone_Messenger_CreateRoom_Participants')}
                     </div>
                     <ParticipantPicker
                         players={players}
@@ -340,7 +342,7 @@ export function TargetSelectorDialog({
                         selected={selection}
                         onChange={setSelection}
                         disabledPlayerUids={disabledPlayerUids}
-                        placeholder="Search players and groups"
+                        placeholder={t('STR_ACE_Tacphone_Messenger_Picker_SearchPlaceholder')}
                     />
 
                     <button
@@ -350,21 +352,21 @@ export function TargetSelectorDialog({
                             setNewRoom(false);
                         }}
                     >
-                        Back to existing rooms
+                        {t('STR_ACE_Tacphone_Messenger_Target_BackToRooms')}
                     </button>
                 </>
             )}
 
             {mode === 'invite' && !newRoom && (
                 <>
-                    <div className={styles.sectionTitle}>People to invite</div>
+                    <div className={styles.sectionTitle}>{t('STR_ACE_Tacphone_Messenger_Target_PeopleToInvite')}</div>
                     <ParticipantPicker
                         players={invitePlayerList}
                         groups={inviteGroupList}
                         selected={selection}
                         onChange={setSelection}
                         disabledPlayerUids={disabledPlayerUids}
-                        placeholder="Search players and groups"
+                        placeholder={t('STR_ACE_Tacphone_Messenger_Picker_SearchPlaceholder')}
                     />
                 </>
             )}

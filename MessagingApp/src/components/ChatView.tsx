@@ -2,7 +2,7 @@ import type { JSX } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type { ChatRoomSummary, SendResult } from '../api';
-import { PRESENCE_LABEL, showsSenderGroups } from '../format';
+import { presenceText, showsSenderGroups } from '../format';
 import type { ChatStoreState } from '../state/ChatStore';
 import { chatStore } from '../state/ChatStore';
 import { roomDisplayName } from '../state/roomUtils';
@@ -11,6 +11,7 @@ import { Composer } from './Composer';
 import { BackIcon, InviteIcon, UserPlusIcon, UsersIcon } from './icons';
 import { MessageItem } from './MessageItem';
 import { EmptyState, PresenceDot, StatusStrip } from './Ui';
+import { t } from '../i18n';
 import styles from './ChatView.module.css';
 
 interface ChatViewProps {
@@ -80,13 +81,13 @@ export function ChatView({ room, state, now, narrow, onBack }: ChatViewProps): J
     const participantCount = room.participants.length;
 
     return (
-        <section className={styles.view} aria-label="Conversation">
+        <section className={styles.view} aria-label={t('STR_ACE_Tacphone_Messenger_ChatView_Conversation')}>
             <header className={styles.header}>
                 {narrow && (
                     <button
                         type="button"
                         className={`${styles.iconButton} ${styles.back}`}
-                        aria-label="Back to rooms"
+                        aria-label={t('STR_ACE_Tacphone_Messenger_ChatView_Back')}
                         onClick={onBack}
                     >
                         <BackIcon className={styles.icon} />
@@ -100,8 +101,10 @@ export function ChatView({ room, state, now, narrow, onBack }: ChatViewProps): J
                     <div className={styles.meta}>
                         {presence && <PresenceDot presence={presence} />}
                         <span>
-                            {participantCount} participant{participantCount === 1 ? '' : 's'}
-                            {presence ? ` - ${PRESENCE_LABEL[presence]}` : ''}
+                            {participantCount === 1
+                                ? t('STR_ACE_Tacphone_Messenger_ChatView_Participant_One')
+                                : t('STR_ACE_Tacphone_Messenger_ChatView_Participant_Other', participantCount)}
+                            {presence ? ` - ${presenceText(presence)}` : ''}
                         </span>
                     </div>
                 </div>
@@ -110,9 +113,9 @@ export function ChatView({ room, state, now, narrow, onBack }: ChatViewProps): J
                     <button
                         type="button"
                         className={styles.iconButton}
-                        title="Members"
-                        data-tooltip="Show room members"
-                        aria-label="Members"
+                        title={t('STR_ACE_Tacphone_Messenger_ChatView_Members')}
+                        data-tooltip={t('STR_ACE_Tacphone_Messenger_ChatView_MembersHint')}
+                        aria-label={t('STR_ACE_Tacphone_Messenger_ChatView_Members')}
                         onClick={() => {
                             ui.openMembers(room.id);
                         }}
@@ -123,9 +126,9 @@ export function ChatView({ room, state, now, narrow, onBack }: ChatViewProps): J
                         <button
                             type="button"
                             className={styles.iconButton}
-                            title="Invite people"
-                            data-tooltip="Invite someone to this room"
-                            aria-label="Invite people"
+                            title={t('STR_ACE_Tacphone_Messenger_ChatView_Invite')}
+                            data-tooltip={t('STR_ACE_Tacphone_Messenger_ChatView_InviteHint')}
+                            aria-label={t('STR_ACE_Tacphone_Messenger_ChatView_Invite')}
                             onClick={() => {
                                 ui.openInvite(room.id);
                             }}
@@ -137,9 +140,9 @@ export function ChatView({ room, state, now, narrow, onBack }: ChatViewProps): J
                         <button
                             type="button"
                             className={styles.iconButton}
-                            title="Add participants"
-                            data-tooltip="Add players or groups"
-                            aria-label="Add participants"
+                            title={t('STR_ACE_Tacphone_Messenger_ChatView_AddParticipants')}
+                            data-tooltip={t('STR_ACE_Tacphone_Messenger_ChatView_AddParticipantsHint')}
+                            aria-label={t('STR_ACE_Tacphone_Messenger_ChatView_AddParticipants')}
                             onClick={() => {
                                 ui.openAddParticipants(room.id);
                             }}
@@ -151,10 +154,10 @@ export function ChatView({ room, state, now, narrow, onBack }: ChatViewProps): J
             </header>
 
             {!state.connected && (
-                <StatusStrip tone="error">Not connected to the game. Messages are unavailable.</StatusStrip>
+                <StatusStrip tone="error">{t('STR_ACE_Tacphone_Messenger_ChatView_Disconnected')}</StatusStrip>
             )}
             {state.connected && state.syncing && messages.length === 0 && (
-                <StatusStrip>Syncing messages...</StatusStrip>
+                <StatusStrip>{t('STR_ACE_Tacphone_Messenger_ChatView_Syncing')}</StatusStrip>
             )}
             {error && (
                 <StatusStrip
@@ -163,7 +166,7 @@ export function ChatView({ room, state, now, narrow, onBack }: ChatViewProps): J
                         <button
                             type="button"
                             className={styles.dismiss}
-                            aria-label="Dismiss"
+                            aria-label={t('str_disp_close')}
                             onClick={() => {
                                 setDismissedError(state.lastError);
                             }}
@@ -179,8 +182,8 @@ export function ChatView({ room, state, now, narrow, onBack }: ChatViewProps): J
             <div className={styles.messages} ref={listRef}>
                 {messages.length === 0 ? (
                     <EmptyState
-                        title="No messages yet"
-                        hint={`Say hello to ${displayName || 'the room'}.`}
+                        title={t('STR_ACE_Tacphone_Messenger_ChatView_EmptyTitle')}
+                        hint={t('STR_ACE_Tacphone_Messenger_ChatView_EmptyHint', displayName || t('STR_ACE_Tacphone_Messenger_ChatView_TheRoom'))}
                     />
                 ) : (
                     messages.map((message, index) => {
@@ -209,8 +212,8 @@ export function ChatView({ room, state, now, narrow, onBack }: ChatViewProps): J
                 disabled={!state.connected || !isParticipant}
                 disabledReason={
                     !state.connected
-                        ? 'Not connected to the game'
-                        : 'You are not a participant of this room'
+                        ? t('STR_ACE_Tacphone_Messenger_ChatView_NotConnectedReason')
+                        : t('STR_ACE_Tacphone_Messenger_ChatView_NotParticipantReason')
                 }
                 onSend={send}
             />

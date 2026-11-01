@@ -13,6 +13,7 @@ import {
     resolveMarkerColor,
 } from './MarkerColorUtils';
 import DialogStyle from './MarkerCreateDialog.module.scss';
+import { t } from '../i18n';
 
 export interface MarkerDialogDraft {
     position: [number, number];
@@ -266,8 +267,8 @@ export function MarkerCreateDialog({
     containerSize,
     onChannelChange,
     onDraftChange,
-    title = 'Add Marker',
-    submitLabel = 'Create',
+    title = t('STR_ACE_Tacphone_Map_MarkerDialog_AddTitle'),
+    submitLabel = t('STR_A3_RscDisplayMain_Spotlight_Create'),
 }: MarkerCreateDialogProps): React.JSX.Element {
     const SelectMenu = window.TacPhone.components.SelectMenu;
 
@@ -405,7 +406,7 @@ export function MarkerCreateDialog({
     if (!channelOptions.some((channel) => channel.id === selectedChannel)) {
         channelOptions.unshift({
             id: selectedChannel,
-            label: `Channel ${selectedChannel}`,
+            label: t('STR_ACE_Tacphone_Map_Channel_Number', selectedChannel),
             custom: true,
             mapMarkersEnabled: true,
         });
@@ -502,7 +503,7 @@ export function MarkerCreateDialog({
                 loadMarkerIcon={loadMarkerIcon}
             />
             <span className={DialogStyle.option_label}>
-                {option ? option.label : (markerTypes.length === 0 ? 'Loading types…' : 'Select marker type')}
+                {option ? option.label : (markerTypes.length === 0 ? t('STR_ACE_Tacphone_Map_MarkerDialog_LoadingTypes') : t('STR_ACE_Tacphone_Map_MarkerDialog_SelectType'))}
             </span>
         </>
     );
@@ -533,33 +534,33 @@ export function MarkerCreateDialog({
                     : { left: 0, top: 0, visibility: 'hidden' }}
             >
                 <label className={DialogStyle.field}>
-                    <span className={DialogStyle.field_label}>Marker Name (optional)</span>
+                    <span className={DialogStyle.field_label}>{t('STR_ACE_Tacphone_Map_MarkerDialog_NameLabel')}</span>
                     <input
                         ref={inputRef}
                         className={DialogStyle.text_input}
                         type="text"
                         value={label}
                         maxLength={MAX_MARKER_TEXT_LENGTH}
-                        placeholder="Enter marker name"
+                        placeholder={t('STR_ACE_Tacphone_Map_MarkerDialog_NamePlaceholder')}
                         onChange={(event) => setLabel(event.target.value)}
                         onKeyDown={handleInputKeyDown}
                     />
                 </label>
 
                 <div className={DialogStyle.field}>
-                    <span className={DialogStyle.field_label}>Marker Type</span>
+                    <span className={DialogStyle.field_label}>{t('STR_ACE_Tacphone_Map_MarkerDialog_TypeLabel')}</span>
                     <SelectMenu
                         value={selectedType}
                         options={typeOptions}
                         onChange={(value) => selectType(String(value))}
-                        placeholder="Select marker type"
+                        placeholder={t('STR_ACE_Tacphone_Map_MarkerDialog_SelectType')}
                         disabled={markerTypes.length === 0}
                         searchable
-                        searchPlaceholder="Search types…"
+                        searchPlaceholder={t('STR_ACE_Tacphone_Map_MarkerDialog_SearchTypes')}
                         size="compact"
                         testId="marker-type-select"
-                        ariaLabel="Marker type"
-                        emptyMessage="No marker types match"
+                        ariaLabel={t('STR_ACE_Tacphone_Map_MarkerDialog_TypeAria')}
+                        emptyMessage={t('STR_ACE_Tacphone_Map_MarkerDialog_NoTypesMatch')}
                         className={DialogStyle.select_control}
                         buttonClassName={DialogStyle.select_trigger}
                         menuClassName={DialogStyle.select_menu}
@@ -570,13 +571,13 @@ export function MarkerCreateDialog({
                 </div>
 
                 <div className={DialogStyle.field}>
-                    <span className={DialogStyle.field_label}>Marker Color</span>
+                    <span className={DialogStyle.field_label}>{t('str_a3_rscdiary_markercolor_tooltip')}</span>
                     <ColorSwatchPicker
                         colors={markerColors}
                         selectedColor={selectedColor}
                         onSelect={selectColor}
                         compact
-                        leadingDefault={{ color: typeDefaultColor, label: 'Default (type color)' }}
+                        leadingDefault={{ color: typeDefaultColor, label: t('STR_ACE_Tacphone_Map_MarkerDialog_DefaultColor') }}
                         excludeClassName="Default"
                         onCustomColorChange={selectColor}
                         customColor={parseMarkerColor(selectedColor) ? selectedColor : undefined}
@@ -586,22 +587,22 @@ export function MarkerCreateDialog({
                         customInputTestId="marker-color-custom-input"
                         customAlphaTestId="marker-color-custom-alpha"
                         customPopoverTestId="marker-color-custom-popover"
-                        ariaLabel="Marker color"
+                        ariaLabel={t('str_a3_rscdiary_markercolor_tooltip')}
                     />
                 </div>
 
                 {multiplayer && (
                     <div className={DialogStyle.field}>
-                        <span className={DialogStyle.field_label}>Channel</span>
+                        <span className={DialogStyle.field_label}>{t('str_a3_cfgvehicles_modulechat_f_arguments_channel_0')}</span>
                         <SelectMenu
                             value={selectedChannel}
                             options={channelSelectOptions}
                             onChange={(value) => selectChannel(Number(value))}
-                            placeholder="Loading channels…"
+                            placeholder={t('STR_ACE_Tacphone_Map_MarkerDialog_LoadingChannels')}
                             disabled={channelOptions.length === 0}
                             size="compact"
                             testId="marker-channel-select"
-                            ariaLabel="Channel"
+                            ariaLabel={t('str_a3_cfgvehicles_modulechat_f_arguments_channel_0')}
                             className={DialogStyle.select_control}
                             buttonClassName={DialogStyle.select_trigger}
                             menuClassName={DialogStyle.select_menu}
@@ -612,7 +613,7 @@ export function MarkerCreateDialog({
 
                 <label className={DialogStyle.field}>
                     <span className={DialogStyle.field_label}>
-                        Direction
+                        {t('str_a3_rscdisplayarcademodules_direction')}
                         <span className={DialogStyle.field_value}>{dir}°</span>
                     </span>
                     <input
@@ -628,7 +629,7 @@ export function MarkerCreateDialog({
 
                 <label className={DialogStyle.field}>
                     <span className={DialogStyle.field_label}>
-                        Scale
+                        {t('str_usract_buld_scale')}
                         <span className={DialogStyle.field_value}>{scale.toFixed(2)}×</span>
                     </span>
                     <input
@@ -649,7 +650,7 @@ export function MarkerCreateDialog({
                         onClick={onCancel}
                         data-testid="marker-cancel"
                     >
-                        Cancel
+                        {t('STR_3DEN_Display3DEN_ControlsHint_Cancel')}
                     </button>
                     <button
                         type="button"

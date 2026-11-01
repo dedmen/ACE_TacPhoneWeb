@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom';
 
 import theme from '../styles/theme.module.css';
 import { CloseIcon } from './icons';
+import { t } from '../i18n';
 import styles from './FloatingDialog.module.css';
 
 interface FloatingDialogProps {
@@ -76,7 +77,7 @@ export function FloatingDialog({
                         <h2 className={styles.title}>{title}</h2>
                         {subtitle && <div className={styles.subtitle}>{subtitle}</div>}
                     </div>
-                    <button type="button" className={styles.close} aria-label="Close" onClick={onClose}>
+                    <button type="button" className={styles.close} aria-label={t('str_disp_close')} onClick={onClose}>
                         <CloseIcon className={styles.closeIcon} />
                     </button>
                 </header>

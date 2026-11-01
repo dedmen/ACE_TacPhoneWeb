@@ -26,8 +26,8 @@ From this directory (workspace root):
 ```powershell
 npm install            # one root lockfile, hoisted workspace deps
 npm run dev            # host Vite server; open the printed URL
-npm run build:debug    # DEFAULT for development: host + every app + data copy
-npm run build:all      # changed-only web/PBO/native build and install
+npm run build:all      # DEFAULT for building/installing into the game: web + PBO + native DLL
+npm run build:debug    # web assets only (no PBO): host + every app + data copy
 npm run build          # RELEASE ONLY when the user explicitly asks for it
 npm run build:host     # host build + data copy
 npm run build:host:debug # development host build + data copy
@@ -45,13 +45,23 @@ npm run test:map       # Map protocol + Playwright browser tests; needs the game
 npm run test:all       # every suite above, in one summary; needs the game running
 ```
 
-**Default to `npm run build:debug` during development.** Only run the release
-`npm run build` when the user explicitly asks for a release build or a shipping
-artifact; never infer a release build from a generic "build the project" request.
-Debug output is unminified, keeps `console.log`, and carries an inline source map,
-so the in-game developer console maps the blob-imported bundle back to the
-original `.tsx`. The data folders are git-ignored, so a debug bundle there is a
-local test artifact, not a release.
+**When asked to build for the game or copy files into the game, run
+`npm run build:all`.** It is the only root command that builds the PBO and copies
+it (plus the native DLL) into the game; it defaults to debug. It refuses to
+install while Arma is running, so ask the user to close the game first (or use
+`-- --build-only`).
+
+`npm run build:debug` is a web-only iteration command. It builds the host and
+every app and copies those files into the game's git-ignored `data\` folders, but
+it does **not** build or install the PBO or the native DLL. A `build:debug` run
+alone does not update what the game actually loads from `@acedev`.
+
+Only run the release `npm run build` when the user explicitly asks for a release
+build or a shipping artifact; never infer a release build from a generic "build
+the project" request. Debug output is unminified, keeps `console.log`, and
+carries an inline source map, so the in-game developer console maps the
+blob-imported bundle back to the original `.tsx`. The data folders are
+git-ignored, so a debug bundle there is a local test artifact, not a release.
 
 `npm run build:all` is the normal build-and-install command for the game. It
 checks whether Arma is running (and refuses to install while it is; use
@@ -130,12 +140,17 @@ the game before a host copy or expect `EBUSY`.
 
 ## Applying the game build
 
-HEMTT writes the PBO to `.hemttout/build/addons/ace_tacphone.pbo`; it does not
-update the game's dev mod directory.
+Use `npm run build:all`; it builds the changed web/PBO/native pieces, copies web
+data, then copies the PBO into `@acedev\addons` and the native DLL into the game
+root. It refuses to install while Arma is running.
 
-When the PBO needs to be updated and Arma is running, ask the user to exit the
-game first. Then copy the built PBO over the dev mod copy and let the user
-restart:
+HEMTT writes the PBO to `.hemttout/build/addons/ace_tacphone.pbo`; a bare
+`hemtt build` does **not** update the game, and neither does `npm run build:debug`
+(web assets only). If `build:all` cannot find the installation, set `ARMA3_PATH`
+or pass `-- --arma-path "<Arma 3 root>"`.
+
+Only if you must copy the PBO by hand, close Arma first and copy the built PBO
+over the dev mod copy, then restart:
 
 ```powershell
 Copy-Item .hemttout\build\addons\ace_tacphone.pbo `
@@ -154,9 +169,12 @@ is running.
 
 ## Build behavior
 
-- `npm run build:debug` is the default development build: unminified with an
+- `npm run build:all` is the normal game build-and-install command: changed web
+  apps, the PBO, and the native DLL, then the install copies.
+- `npm run build:debug` is the web-only development build: unminified with an
   inline source map. Its outputs are copied into the git-ignored game `data\`
-  folders for local testing. Never ship them.
+  folders for local testing; it does not build or install the PBO. Never ship
+  them.
 - `npm run build` is a release build: minified, no source map, and
   `console.log/debug/info` calls are removed. Run it only when the user
   explicitly asks for a release/shipping artifact. `console.warn` and
@@ -224,6 +242,21 @@ before changing it. The parts that affect day-to-day work:
   one compressed facade module; the Map app runs it after `vite build`.
 - `tacphone-build check-shared-imports` validates the host import map and every
   discovered app bundle; it also runs at the end of every build.
+- `tacphone-build check-strings` (part of `npm run check`) fails when web code
+  uses a stringtable key that is undefined or has no English text, and lists
+  unused keys. See [`localization.md`](localization.md).
+- `tacphone-build base-strings --download` lists base-game stringtable entries
+  whose English text matches an add-on key, with all their translations, so an
+  existing vanilla string can be reused instead of adding a new one.
+- `tacphone-build translate` fills missing languages with AI translations and
+  marks those language tags `ai-translated="true"`. See
+  [`localization.md`](localization.md#ai-translations).
+- `hemtt ln sort` drops unknown XML attributes; run `tacphone-build mark-ai`
+  afterwards to restore the per-language `ai-translated="true"` marks from the
+  saved list.
+- `tacphoneStringtable({ path })` (host `vite.config.ts`) bundles the add-on
+  stringtable into `index.html` as a compressed default table; do not parse the
+  XML at runtime for it.
 
 The host no longer generates or syncs `TacPhoneMain.d.ts`, and no app keeps a
 copy of the host contract.

@@ -7,6 +7,7 @@ import { roomDisplayName } from '../state/roomUtils';
 import { chatStore } from '../state/ChatStore';
 import { DialogActions, FloatingDialog } from './FloatingDialog';
 import { Avatar, PresenceDot } from './Ui';
+import { t } from '../i18n';
 import styles from './Dialogs.module.css';
 
 interface MemberListDialogProps {
@@ -68,7 +69,7 @@ export function MemberListDialog({ room, selfUid, onClose }: MemberListDialogPro
             const result = await chatStore.removeParticipants(room.id, [selfUid]);
 
             if (!result.ok) {
-                setError(result.error ?? 'Could not leave the room.');
+                setError(result.error ?? t('STR_ACE_Tacphone_Messenger_Members_LeaveFailed'));
 
                 return;
             }
@@ -88,7 +89,7 @@ export function MemberListDialog({ room, selfUid, onClose }: MemberListDialogPro
         try {
             const result = await chatStore.removeParticipants(room.id, [uid]);
 
-            if (!result.ok) setError(result.error ?? 'Could not remove the participant.');
+            if (!result.ok) setError(result.error ?? t('STR_ACE_Tacphone_Messenger_Members_RemoveFailed'));
         } catch (caught) {
             setError(caught instanceof Error ? caught.message : String(caught));
         } finally {
@@ -107,9 +108,9 @@ export function MemberListDialog({ room, selfUid, onClose }: MemberListDialogPro
                 <div className={styles.memberInfo}>
                     <div className={styles.memberName}>
                         <span>{participant.name}</span>
-                        {isSelf && <span className={styles.creatorBadge}>You</span>}
+                        {isSelf && <span className={styles.creatorBadge}>{t('str_a3_rscdisplaydynamicgroups_you')}</span>}
                         {participant.creator && !isSelf && (
-                            <span className={styles.creatorBadge}>Creator</span>
+                            <span className={styles.creatorBadge}>{t('STR_ACE_Tacphone_Messenger_Members_Creator')}</span>
                         )}
                     </div>
                     <div className={styles.memberMeta}>
@@ -120,7 +121,7 @@ export function MemberListDialog({ room, selfUid, onClose }: MemberListDialogPro
                                 aria-hidden="true"
                             />
                         )}
-                        <span>{participant.groupName ?? 'No group'}</span>
+                        <span>{participant.groupName ?? t('STR_ACE_Tacphone_Messenger_Picker_NoGroup')}</span>
                         <PresenceDot presence={participant.presence} withLabel />
                     </div>
                 </div>
@@ -133,7 +134,7 @@ export function MemberListDialog({ room, selfUid, onClose }: MemberListDialogPro
                             void remove(participant.uid);
                         }}
                     >
-                        {isRemoving ? 'Removing...' : 'Remove'}
+                        {isRemoving ? t('STR_ACE_Tacphone_Messenger_Members_Removing') : t('str_a3_cfgvehicles_modulecuratoraddaddons_f_arguments_mode_values_remove')}
                     </button>
                 )}
             </div>
@@ -143,28 +144,32 @@ export function MemberListDialog({ room, selfUid, onClose }: MemberListDialogPro
     return (
         <FloatingDialog
             title={roomDisplayName(room, selfUid)}
-            subtitle={`${participants.length} participant${participants.length === 1 ? '' : 's'}`}
+            subtitle={participants.length === 1
+                ? t('STR_ACE_Tacphone_Messenger_ChatView_Participant_One')
+                : t('STR_ACE_Tacphone_Messenger_ChatView_Participant_Other', participants.length)}
             onClose={onClose}
             footer={(
                 <DialogActions>
                     {groupLocked && (
                         <span className={styles.leaveNote}>
-                            Your whole group is invited; you cannot leave individually.
+                            {t('STR_ACE_Tacphone_Messenger_Members_GroupLockedNote')}
                         </span>
                     )}
                     <button
                         type="button"
                         className={`${styles.button} ${styles.buttonDanger}`}
                         disabled={selfUid === undefined || leaving || groupLocked || removing !== undefined}
-                        title={groupLocked ? 'Your whole group is invited to this room' : 'Leave this room'}
+                        title={groupLocked
+                            ? t('STR_ACE_Tacphone_Messenger_Members_GroupLockedTitle')
+                            : t('STR_ACE_Tacphone_Messenger_Members_LeaveTitle')}
                         onClick={() => {
                             void leave();
                         }}
                     >
-                        {leaving ? 'Leaving...' : 'Leave room'}
+                        {leaving ? t('STR_ACE_Tacphone_Messenger_Members_Leaving') : t('STR_ACE_Tacphone_Messenger_Members_Leave')}
                     </button>
                     <button type="button" className={styles.button} onClick={onClose}>
-                        Close
+                        {t('str_disp_close')}
                     </button>
                 </DialogActions>
             )}
@@ -182,7 +187,7 @@ export function MemberListDialog({ room, selfUid, onClose }: MemberListDialogPro
                             )}
                             <span>{group.name}</span>
                             {group.members.some(member => member.groupInvited === true) && (
-                                <span className={styles.creatorBadge}>Group invited</span>
+                                <span className={styles.creatorBadge}>{t('STR_ACE_Tacphone_Messenger_Members_GroupInvited')}</span>
                             )}
                             <span className={styles.memberGroupCount}>{group.members.length}</span>
                         </div>
@@ -193,7 +198,7 @@ export function MemberListDialog({ room, selfUid, onClose }: MemberListDialogPro
                 {ungrouped.length > 0 && (
                     <div className={styles.memberGroup}>
                         {grouped.size > 0 && (
-                            <div className={styles.memberGroupHeader}>No group</div>
+                            <div className={styles.memberGroupHeader}>{t('STR_ACE_Tacphone_Messenger_Picker_NoGroup')}</div>
                         )}
                         {ungrouped.map(renderParticipant)}
                     </div>

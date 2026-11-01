@@ -8,6 +8,7 @@ import {
 import { mapCommandRegistry } from './CommandRegistry.ts';
 import { registerMapOptions } from './MapOptions.ts';
 import { installMapTestHooks } from './MapMarkers/MapTestHooks.ts';
+import { MAP_BASE_GAME_STRINGS, t } from './i18n.ts';
 // Registers the module-scope marker notification backup handler, so a marker
 // still notifies while no Map panel (and therefore no marker layer) is mounted.
 import './MapMarkers/MarkerNotifications.ts';
@@ -16,7 +17,11 @@ import './MapMarkers/MarkerNotifications.ts';
 export const apiVersion = TACPHONE_API_VERSION;
 
 /** Registers the Map options shown in the host Options panel. */
-export function init(): void {
+export async function init(): Promise<void> {
+    // Labels use some base-game keys that are not in the add-on stringtable;
+    // preload them before the option schema and panels are built.
+    await window.TacPhone.localization.load(MAP_BASE_GAME_STRINGS);
+
     registerMapOptions();
     installMapTestHooks();
 }
@@ -33,7 +38,7 @@ export function GetTacPhoneApps(): Array<AppPanelInfo> {
         id: "ACE_TacPhone_Map",
         appComponent: App,
         GetDefaultTitle() {
-            return "Map";
+            return t('str_a3_map1');
         },
         GetTacPhoneIcon() {
             // https://fontawesome.com/icons

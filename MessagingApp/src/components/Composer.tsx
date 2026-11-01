@@ -2,6 +2,7 @@ import type { JSX } from 'react';
 import { useEffect, useRef, useState } from 'react';
 
 import { SendIcon } from './icons';
+import { t } from '../i18n';
 import styles from './Composer.module.css';
 
 interface SendOutcome {
@@ -44,7 +45,7 @@ export function Composer({ disabled, disabledReason, onSend }: ComposerProps): J
             const result = await onSend(value);
 
             if (result.ok) setText('');
-            else setError(result.error ?? 'The message could not be sent.');
+            else setError(result.error ?? t('STR_ACE_Tacphone_Messenger_Composer_SendFailed'));
         } catch (caught) {
             setError(caught instanceof Error ? caught.message : String(caught));
         } finally {
@@ -64,8 +65,8 @@ export function Composer({ disabled, disabledReason, onSend }: ComposerProps): J
                     rows={1}
                     value={text}
                     disabled={disabled}
-                    placeholder={disabled ? (disabledReason ?? 'Messaging is unavailable') : 'Message'}
-                    aria-label="Message"
+                    placeholder={disabled ? (disabledReason ?? t('STR_ACE_Tacphone_Messenger_Composer_Unavailable')) : t('STR_ACE_Tacphone_Messenger_Composer_Placeholder')}
+                    aria-label={t('STR_ACE_Tacphone_Messenger_Composer_Placeholder')}
                     onChange={event => {
                         setText(event.currentTarget.value);
                     }}
@@ -80,8 +81,8 @@ export function Composer({ disabled, disabledReason, onSend }: ComposerProps): J
                     type="button"
                     className={styles.send}
                     disabled={!canSend}
-                    aria-label="Send message"
-                    title="Send (Enter)"
+                    aria-label={t('STR_ACE_Tacphone_Messenger_Composer_Send')}
+                    title={t('STR_ACE_Tacphone_Messenger_Composer_SendHint')}
                     onClick={() => {
                         void send();
                     }}

@@ -31,6 +31,7 @@ import {
     registerMarkerObjectRenderer,
     shareMarkerToMessenger,
 } from '../MessagingBridge';
+import { t } from '../i18n';
 
 // Game-side marker interest. Must match INTEREST_MARKERS in
 // addons/tacphone/apps/map/script_component.hpp.
@@ -307,8 +308,8 @@ export const MarkerOverlay = forwardRef<MarkerOverlayHandle, MarkerOverlayProps>
 
     const showShareError = useCallback((detail: string | undefined): void => {
         window.TacPhone.notifications.show({
-            title: 'Could not share marker',
-            body: detail && detail !== '' ? detail : 'Messenger is not available.',
+            title: t('STR_ACE_Tacphone_Map_Marker_ShareFailedTitle'),
+            body: detail && detail !== '' ? detail : t('STR_ACE_Tacphone_Map_Marker_MessengerUnavailable'),
             app: MAP_APP_NAME,
             sound: 'alert',
         });
@@ -455,8 +456,8 @@ export const MarkerOverlay = forwardRef<MarkerOverlayHandle, MarkerOverlayProps>
                     containerSize={dialog.containerSize}
                     onChannelChange={handleMarkerChannelChange}
                     onDraftChange={handleMarkerDraftChange}
-                    title={dialog.mode === 'edit' ? 'Edit Marker' : 'Add Marker'}
-                    submitLabel={dialog.mode === 'edit' ? 'Save' : 'Create'}
+                    title={dialog.mode === 'edit' ? t('str_arcmark_title2') : t('STR_ACE_Tacphone_Map_MarkerDialog_AddTitle')}
+                    submitLabel={dialog.mode === 'edit' ? t('str_3den_display3den_menubar_missionsave_text') : t('STR_A3_RscDisplayMain_Spotlight_Create')}
                     onSubmit={handleMarkerDialogSubmit}
                     onCancel={closeMarkerDialog}
                 />

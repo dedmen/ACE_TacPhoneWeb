@@ -8,6 +8,7 @@ import { chatStore } from '../state/ChatStore';
 import { DialogActions, FloatingDialog } from './FloatingDialog';
 import type { ParticipantSelection } from './ParticipantPicker';
 import { ParticipantPicker } from './ParticipantPicker';
+import { t } from '../i18n';
 import styles from './Dialogs.module.css';
 
 interface AddParticipantsDialogProps {
@@ -56,7 +57,7 @@ export function AddParticipantsDialog({
                 return;
             }
 
-            setError(result.error ?? 'Could not add the participants.');
+            setError(result.error ?? t('STR_ACE_Tacphone_Messenger_AddParticipants_Failed'));
         } catch (caught) {
             setError(caught instanceof Error ? caught.message : String(caught));
         } finally {
@@ -66,13 +67,13 @@ export function AddParticipantsDialog({
 
     return (
         <FloatingDialog
-            title="Add participants"
+            title={t('STR_ACE_Tacphone_Messenger_AddParticipants_Title')}
             subtitle={roomDisplayName(room, selfUid)}
             onClose={onClose}
             footer={(
                 <DialogActions>
                     <button type="button" className={styles.button} onClick={onClose} disabled={busy}>
-                        Cancel
+                        {t('STR_3DEN_Display3DEN_ControlsHint_Cancel')}
                     </button>
                     <button
                         type="button"
@@ -82,7 +83,7 @@ export function AddParticipantsDialog({
                         }}
                         disabled={!canAdd}
                     >
-                        {busy ? 'Adding...' : 'Add'}
+                        {busy ? t('STR_ACE_Tacphone_Messenger_AddParticipants_Adding') : t('str_a3_cfgvehicles_modulecuratoraddeditableobjects_arguments_addcrew_values_yes')}
                     </button>
                 </DialogActions>
             )}
@@ -93,7 +94,7 @@ export function AddParticipantsDialog({
                 selected={selection}
                 onChange={setSelection}
                 disabledPlayerUids={presentUids}
-                placeholder="Search players and groups"
+                placeholder={t('STR_ACE_Tacphone_Messenger_Picker_SearchPlaceholder')}
             />
 
             {error && <div className={styles.error}>{error}</div>}

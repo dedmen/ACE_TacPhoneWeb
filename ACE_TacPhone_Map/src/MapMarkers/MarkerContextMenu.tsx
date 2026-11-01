@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import MenuStyle from './MarkerContextMenu.module.scss';
+import { t } from '../i18n';
 
 // A tap that opens the menu ends with a pointerup; browsers then derive a click
 // for the same tap, which could land on a menu item that appeared under the
@@ -127,9 +128,9 @@ export function MarkerContextMenu({
             className={MenuStyle.menu}
             style={{ left: x, top: y }}
             role="menu"
-            aria-label="Marker"
+            aria-label={t('STR_3DEN_Marker_textSingular')}
         >
-            <div className={MenuStyle.heading}>Marker</div>
+            <div className={MenuStyle.heading}>{t('STR_3DEN_Marker_textSingular')}</div>
             {canShare && onShare !== undefined && (
                 <button
                     type="button"
@@ -142,7 +143,7 @@ export function MarkerContextMenu({
                     onPointerLeave={() => { pressedRef.current = null; }}
                     onClick={handleItemClick}
                 >
-                    Share to Messenger
+                    {t('STR_ACE_Tacphone_Map_Marker_Menu_Share')}
                 </button>
             )}
             <button
@@ -157,7 +158,7 @@ export function MarkerContextMenu({
                 onPointerLeave={() => { pressedRef.current = null; }}
                 onClick={handleItemClick}
             >
-                Edit marker
+                {t('str_arcmark_title2')}
             </button>
             <button
                 type="button"
@@ -171,7 +172,7 @@ export function MarkerContextMenu({
                 onPointerLeave={() => { pressedRef.current = null; }}
                 onClick={handleItemClick}
             >
-                Delete marker
+                {t('STR_ACE_Tacphone_Map_Marker_Menu_Delete')}
             </button>
         </div>
     );

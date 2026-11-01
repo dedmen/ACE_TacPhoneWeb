@@ -21,6 +21,7 @@ import {
 } from "@ace-tacphone/build/bundle-format";
 
 import { decompressFromBase64 } from "./Compression";
+import { normalizeGamePath } from "./Internal";
 import { IsArma, networking } from "./Networking";
 import { sha256Hex as sha256HexJs } from "./Sha256";
 
@@ -91,10 +92,6 @@ function collectBareImports(source: string): Set<string> {
     }
 
     return specifiers;
-}
-
-function normalizeGamePath(path: string): string {
-    return path.replaceAll("/", "\\").replace(/^\\+/, "").toLowerCase();
 }
 
 function isRecordOfStrings(value: unknown): value is Record<string, string> {

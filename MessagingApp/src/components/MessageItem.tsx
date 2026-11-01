@@ -7,6 +7,7 @@ import { useMessengerUi } from '../ui';
 import { ChatObjectCard } from './ChatObjectCard';
 import { ForwardIcon, WarningIcon } from './icons';
 import { Avatar } from './Ui';
+import { t } from '../i18n';
 import styles from './MessageItem.module.css';
 
 interface MessageItemProps {
@@ -65,7 +66,7 @@ export function MessageItem({
                 {showHeader && (
                     <div className={styles.header}>
                         <span className={styles.sender} style={nameStyle}>
-                            {own ? 'You' : message.senderName}
+                            {own ? t('str_a3_rscdisplaydynamicgroups_you') : message.senderName}
                         </span>
                         {groupName && (
                             <span className={styles.group} style={nameStyle}>
@@ -83,11 +84,18 @@ export function MessageItem({
                         <div className={styles.forwarded}>
                             <ForwardIcon className={styles.forwardedIcon} />
                             <span>
-                                Forwarded from <strong>{message.forwarded.roomName || 'another room'}</strong>
-                                {' '}by <strong>{message.forwarded.senderName}</strong>
                                 {message.forwarded.senderGroupName
-                                    ? ` (${message.forwarded.senderGroupName})`
-                                    : ''}
+                                    ? t(
+                                        'STR_ACE_Tacphone_Messenger_Message_ForwardedWithGroup',
+                                        message.forwarded.roomName || t('STR_ACE_Tacphone_Messenger_Message_AnotherRoom'),
+                                        message.forwarded.senderName,
+                                        message.forwarded.senderGroupName,
+                                    )
+                                    : t(
+                                        'STR_ACE_Tacphone_Messenger_Message_Forwarded',
+                                        message.forwarded.roomName || t('STR_ACE_Tacphone_Messenger_Message_AnotherRoom'),
+                                        message.forwarded.senderName,
+                                    )}
                             </span>
                         </div>
                     )}
@@ -112,25 +120,25 @@ export function MessageItem({
                     {message.failed === true && (
                         <div className={styles.failed}>
                             <WarningIcon className={styles.failedIcon} />
-                            Could not be sent.
+                            {t('STR_ACE_Tacphone_Messenger_Message_SendFailed')}
                         </div>
                     )}
                 </div>
 
                 <div className={styles.footer}>
-                    {message.pending === true && <span className={styles.pending}>Sending...</span>}
+                    {message.pending === true && <span className={styles.pending}>{t('STR_ACE_Tacphone_Messenger_Message_Sending')}</span>}
                     {canForward && (
                         <button
                             type="button"
                             className={styles.action}
-                            title="Forward message"
-                            aria-label="Forward message"
+                            title={t('STR_ACE_Tacphone_Messenger_Target_ForwardTitle')}
+                            aria-label={t('STR_ACE_Tacphone_Messenger_Target_ForwardTitle')}
                             onClick={() => {
                                 ui.openForward(room.id, message.id);
                             }}
                         >
                             <ForwardIcon className={styles.actionIcon} />
-                            Forward
+                            {t('str_a3_forward')}
                         </button>
                     )}
                 </div>

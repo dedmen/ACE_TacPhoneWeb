@@ -4,6 +4,8 @@ Read this when changing the Messenger web app or its game-side server. The app
 contract and packaging rules are in [`apps.md`](apps.md); the game-side wire and
 behaviour reference is
 [`../../apps/messaging/README.md`](../../apps/messaging/README.md).
+UI text uses `window.TacPhone.localization.t()` with the `Messenger` container of
+the add-on stringtable; see [`localization.md`](localization.md).
 
 ## File map
 

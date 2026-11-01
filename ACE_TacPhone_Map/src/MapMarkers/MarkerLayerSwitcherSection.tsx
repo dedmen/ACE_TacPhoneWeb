@@ -3,6 +3,7 @@ import React, { useSyncExternalStore } from 'react';
 import type { LayerSwitcherSectionProps } from './LayerSwitcherRegistry';
 import type { MarkerChannelStore } from './MarkerChannelStore';
 import LayerSwitcherStyle from '../LayerSwitcherStyle.module.scss';
+import { t } from '../i18n';
 
 interface MarkerLayerSwitcherSectionProps extends LayerSwitcherSectionProps {
     channels: MarkerChannelStore;
@@ -32,10 +33,10 @@ export function MarkerLayerSwitcherSection({
     return (
         <div className={LayerSwitcherStyle.marker_group}>
             <div className={LayerSwitcherStyle.marker_group_header}>
-                <span>Markers</span>
+                <span>{t('STR_3DEN_Marker_textPlural')}</span>
                 {snapshot.multiplayer && (
                     <span className={LayerSwitcherStyle.marker_group_active}>
-                        Active: {snapshot.activeChannelLabel}
+                        {t('STR_ACE_Tacphone_Map_Layers_ActiveChannel', snapshot.activeChannelLabel)}
                     </span>
                 )}
             </div>
@@ -62,8 +63,8 @@ export function MarkerLayerSwitcherSection({
                                 checked={channel === snapshot.activeChannel}
                                 onChange={() => channels.setActiveChannel(channel)}
                                 disabled={!available}
-                                title="Use this channel for new markers and polylines"
-                                aria-label={`Make ${layerData.title} the active marker channel`}
+                                title={t('STR_ACE_Tacphone_Map_Layers_ChannelUse')}
+                                aria-label={t('STR_ACE_Tacphone_Map_Layers_ChannelAria', layerData.title)}
                             />
                         )}
                         <label htmlFor={`layer-${layerData.id}`}>{layerData.title}</label>

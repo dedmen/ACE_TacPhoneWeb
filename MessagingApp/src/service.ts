@@ -23,6 +23,7 @@ import { MESSENGER_SERVICE, MESSENGER_SERVICE_VERSION } from './api';
 import { requestShareTarget } from './dialogBus';
 import type { PanelInstance } from '@ace-tacphone/api';
 import { chatStore } from './state/ChatStore';
+import { t } from './i18n';
 
 /**
  * Sends objects as a message with empty text.
@@ -34,7 +35,7 @@ export async function sendObjectMessage(roomId: string, objects: ChatObject[]): 
     const result = await chatStore.sendMessage(roomId, '', objects);
 
     if (!result.ok) {
-        return { ok: false, roomId, error: result.error ?? 'The item could not be sent.' };
+        return { ok: false, roomId, error: result.error ?? t('STR_ACE_Tacphone_Messenger_Service_SendFailed') };
     }
 
     return { ok: true, roomId, message: result.message };

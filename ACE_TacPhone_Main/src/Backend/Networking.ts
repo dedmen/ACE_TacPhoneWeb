@@ -3,6 +3,7 @@ import { SendMessageToApp } from "./AppMessaging";
 import { compressAndToBase64, decompressFromBase64 } from "./Compression";
 import { decodeGameText, decodeGameTextDeep } from "./GameText";
 import type { Networking, TerrainData, TerrainLayer } from "./Types";
+import { t } from "./i18n";
 
 /** Target maximum size of one terrain chunk's base64 payload. */
 const MAX_TERRAIN_CHUNK_CHARS = 6 * 1024 * 1024;
@@ -550,7 +551,7 @@ class NetworkingWebsocket implements Networking {
     private attachCode(code: string): void {
         const normalized = normalizeCode(code);
         if (!normalized) {
-            this.setRemoteState("need-pairing", "Enter the code from the in-game Remote Access panel.");
+            this.setRemoteState("need-pairing", t('STR_ACE_Tacphone_RemoteAccess_PairingErrorInvalidCode'));
             return;
         }
 
@@ -646,18 +647,18 @@ class NetworkingWebsocket implements Networking {
             }
 
             case "host-offline":
-                this.setRemoteState("host-offline", "The phone is not connected in-game.");
+                this.setRemoteState("host-offline", t('STR_ACE_Tacphone_RemoteAccess_PairingErrorHostOffline'));
                 this.socket?.close();
                 break;
 
             case "rejected":
-                this.setRemoteState("rejected", `The relay rejected the connection (${frame.reason ?? "unknown"}).`);
+                this.setRemoteState("rejected", t('STR_ACE_Tacphone_RemoteAccess_PairingErrorRejected', frame.reason ?? t('STR_ACE_Tacphone_RemoteAccess_PairingErrorUnknownReason')));
                 this.pendingAttach = null;
                 this.socket?.close();
                 break;
 
             case "peer-kicked":
-                this.setRemoteState("host-offline", "The host ended this session.");
+                this.setRemoteState("host-offline", t('STR_ACE_Tacphone_RemoteAccess_PairingErrorSessionEnded'));
                 this.socket?.close();
                 break;
 

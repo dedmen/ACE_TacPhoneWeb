@@ -19,6 +19,7 @@
 
 import React from "react";
 import type { InterAppRegistry, PanelInfo, TargetChooser } from "@ace-tacphone/api";
+import { t } from "../Backend/i18n";
 import styles from "./TargetChooserDialog.module.css";
 
 /** One routing request waiting for a user decision. */
@@ -46,9 +47,9 @@ function candidateId(candidate: PanelInfo): string {
  * large it is. Instance ids are runtime-only, so an unmounted tab shows its id.
  */
 function describeCandidate(candidate: PanelInfo): string {
-    const owner = candidate.panelId ?? "unassigned tab";
+    const owner = candidate.panelId ?? t('STR_ACE_Tacphone_Host_TargetChooser_UnassignedTab');
     const app = candidate.appName && candidate.appName !== owner ? ` (${candidate.appName})` : "";
-    const identity = candidate.instanceId ?? `tab ${candidate.tabId}`;
+    const identity = candidate.instanceId ?? t('STR_ACE_Tacphone_Host_TargetChooser_Tab', candidate.tabId);
     const area = `${Math.round(candidate.area)} px²`;
 
     return `${owner}${app} · ${identity} · ${area}`;
@@ -167,12 +168,14 @@ export class TargetChooserDialog extends React.Component<{}, TargetChooserDialog
 
         // The reason describes the user's action, the service is the fallback.
         const heading = request.reason || request.service;
-        const count = request.candidates.length === 1 ? "1 panel" : `${request.candidates.length} panels`;
+        const count = request.candidates.length === 1
+            ? t('STR_ACE_Tacphone_Host_TargetChooser_PanelCount_One')
+            : t('STR_ACE_Tacphone_Host_TargetChooser_PanelCount_Other', request.candidates.length);
 
         return (
             <div className={styles.Backdrop} onClick={this.handleBackdropClick}>
                 <div className={styles.Dialog} onClick={this.handleDialogClick}>
-                    <h2 className={styles.Heading}>{`Choose a panel for "${heading}"`}</h2>
+                    <h2 className={styles.Heading}>{t('STR_ACE_Tacphone_Host_TargetChooser_Heading', heading)}</h2>
                     <div className={styles.Subtitle}>{`${request.service} · ${count}`}</div>
                     <div className={styles.List}>
                         {request.candidates.map(candidate => (
@@ -184,12 +187,12 @@ export class TargetChooserDialog extends React.Component<{}, TargetChooserDialog
                                 onClick={() => this.settle(candidateId(candidate))}
                             >
                                 <span className={styles.RowTitle}>{candidate.title}</span>
-                                {candidate.isFloating ? <span className={styles.Badge}>floating</span> : null}
+                                {candidate.isFloating ? <span className={styles.Badge}>{t('STR_ACE_Tacphone_Host_TargetChooser_Floating')}</span> : null}
                                 <span className={styles.RowMeta}>{describeCandidate(candidate)}</span>
                             </button>
                         ))}
                     </div>
-                    <button type="button" className={styles.Cancel} onClick={() => this.settle(undefined)}>Cancel</button>
+                    <button type="button" className={styles.Cancel} onClick={() => this.settle(undefined)}>{t('STR_3DEN_Display3DEN_ControlsHint_Cancel')}</button>
                 </div>
             </div>
         );

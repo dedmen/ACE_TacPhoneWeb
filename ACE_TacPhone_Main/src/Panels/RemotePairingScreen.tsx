@@ -1,5 +1,6 @@
 import React from "react";
 import { remoteSession, type RemoteState } from "../Backend/Networking";
+import { t } from "../Backend/i18n";
 import styles from "./RemotePairingScreen.module.css";
 
 /**
@@ -39,30 +40,27 @@ export function RemotePairingScreen(): React.ReactElement | null {
     return (
         <div className={styles.backdrop}>
             <div className={styles.card}>
-                <h1 className={styles.title}>TacPhone Remote Access</h1>
+                <h1 className={styles.title}>{t('STR_ACE_Tacphone_RemoteAccess_PairingTitle')}</h1>
 
                 {state === "attaching" && (
-                    <p className={styles.status}>Connecting to the game…</p>
+                    <p className={styles.status}>{t('STR_ACE_Tacphone_RemoteAccess_PairingConnecting')}</p>
                 )}
 
                 {state === "need-pairing" && (
                     <p className={styles.status}>
-                        Open the <strong>Remote Access</strong> panel in the in-game phone and
-                        enter the code it shows, or scan its QR code.
+                        {t('STR_ACE_Tacphone_RemoteAccess_PairingNeedCode')}
                     </p>
                 )}
 
                 {state === "host-offline" && (
                     <p className={styles.status}>
-                        The game is not connected. Open the <strong>Remote Access</strong> panel
-                        in-game; this page reconnects automatically.
+                        {t('STR_ACE_Tacphone_RemoteAccess_PairingHostOffline')}
                     </p>
                 )}
 
                 {state === "rejected" && (
                     <p className={styles.status}>
-                        That code or link is no longer valid. Get a fresh one from the in-game
-                        panel.
+                        {t('STR_ACE_Tacphone_RemoteAccess_PairingRejected')}
                     </p>
                 )}
 
@@ -79,7 +77,7 @@ export function RemotePairingScreen(): React.ReactElement | null {
                             inputMode="text"
                         />
                         <button className={styles.button} type="submit" disabled={!code.trim()}>
-                            Connect
+                            {t('STR_ACE_Tacphone_RemoteAccess_PairingConnect')}
                         </button>
                     </form>
                 )}
@@ -90,7 +88,7 @@ export function RemotePairingScreen(): React.ReactElement | null {
                         type="button"
                         onClick={() => session.retry()}
                     >
-                        Retry now
+                        {t('STR_ACE_Tacphone_RemoteAccess_PairingRetryNow')}
                     </button>
                 )}
 
@@ -99,7 +97,7 @@ export function RemotePairingScreen(): React.ReactElement | null {
                 )}
 
                 <p className={styles.footer}>
-                    This project is paid for by the supporters at{" "}
+                    {t('STR_ACE_Tacphone_RemoteAccess_PairingFooter')}{" "}
                     <a
                         href="https://www.patreon.com/c/dedmen"
                         target="_blank"

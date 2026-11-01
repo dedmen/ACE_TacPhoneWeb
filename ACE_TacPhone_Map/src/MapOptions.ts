@@ -5,6 +5,7 @@
 // stateless shortcuts that write several individual values at once.
 
 import type { AppOptionDefinition, AppOptionPreset } from "@ace-tacphone/api";
+import { t } from './i18n';
 
 /** App name used as the options registration key. */
 export const MAP_APP = "ACE_TacPhone_Map";
@@ -49,69 +50,69 @@ export interface MapRenderSettings {
     smoothScaling: boolean;
 }
 
-const MAP_OPTIONS: readonly AppOptionDefinition[] = [
+const MAP_OPTIONS = (): readonly AppOptionDefinition[] => [
     {
         key: MAP_OPTION_KEYS.terrainQuality,
-        label: "Terrain detail",
-        description: "How deep the terrain SVG tiles can zoom in and how sharp they are.",
+        label: t('STR_ACE_Tacphone_Map_Options_TerrainQuality_Label'),
+        description: t('STR_ACE_Tacphone_Map_Options_TerrainQuality_Desc'),
         type: "select",
         default: "balanced",
         choices: [
-            { label: "Low (weak phone)", value: "low" },
-            { label: "Balanced", value: "balanced" },
-            { label: "High (desktop)", value: "high" },
+            { label: t('STR_ACE_Tacphone_Map_Options_TerrainQuality_Low'), value: "low" },
+            { label: t('STR_ACE_Tacphone_Map_Options_TerrainQuality_Balanced'), value: "balanced" },
+            { label: t('STR_ACE_Tacphone_Map_Options_TerrainQuality_High'), value: "high" },
         ],
     },
     {
         key: MAP_OPTION_KEYS.tileCacheSize,
-        label: "Tile cache",
-        description: "Tiles kept per SVG layer. This is the largest memory knob.",
+        label: t('STR_ACE_Tacphone_Map_Options_TileCache_Label'),
+        description: t('STR_ACE_Tacphone_Map_Options_TileCache_Desc'),
         type: "select",
         default: 48,
         choices: [
-            { label: "16 tiles (weak phone)", value: 16 },
-            { label: "48 tiles (default)", value: 48 },
-            { label: "128 tiles (desktop)", value: 128 },
+            { label: t('STR_ACE_Tacphone_Map_Options_TileCache_16'), value: 16 },
+            { label: t('STR_ACE_Tacphone_Map_Options_TileCache_48'), value: 48 },
+            { label: t('STR_ACE_Tacphone_Map_Options_TileCache_128'), value: 128 },
         ],
     },
     {
         key: MAP_OPTION_KEYS.pixelRatio,
-        label: "Pixel ratio",
-        description: "Capping the device pixel ratio reduces the canvas resolution on high-DPI screens.",
+        label: t('STR_ACE_Tacphone_Map_Options_PixelRatio_Label'),
+        description: t('STR_ACE_Tacphone_Map_Options_PixelRatio_Desc'),
         type: "select",
         default: "device",
         choices: [
-            { label: "Device (sharpest)", value: "device" },
-            { label: "1.5x cap", value: "1.5" },
-            { label: "1x cap (fastest)", value: "1" },
+            { label: t('STR_ACE_Tacphone_Map_Options_PixelRatio_Device'), value: "device" },
+            { label: t('STR_ACE_Tacphone_Map_Options_PixelRatio_1_5'), value: "1.5" },
+            { label: t('STR_ACE_Tacphone_Map_Options_PixelRatio_1'), value: "1" },
         ],
     },
     {
         key: MAP_OPTION_KEYS.tilePreload,
-        label: "Tile preload",
-        description: "Load lower-resolution tiles ahead of time. More levels look smoother while panning.",
+        label: t('STR_ACE_Tacphone_Map_Options_TilePreload_Label'),
+        description: t('STR_ACE_Tacphone_Map_Options_TilePreload_Desc'),
         type: "select",
         default: 0,
         choices: [
-            { label: "0 (no prefetch)", value: 0 },
-            { label: "1 level", value: 1 },
-            { label: "2 levels (desktop)", value: 2 },
+            { label: t('STR_ACE_Tacphone_Map_Options_TilePreload_0'), value: 0 },
+            { label: t('STR_ACE_Tacphone_Map_Options_TilePreload_1'), value: 1 },
+            { label: t('STR_ACE_Tacphone_Map_Options_TilePreload_2'), value: 2 },
         ],
     },
     {
         key: MAP_OPTION_KEYS.smoothScaling,
-        label: "Smooth scaling",
-        description: "Interpolate scaled terrain images instead of showing nearest-neighbour pixels.",
+        label: t('STR_ACE_Tacphone_Map_Options_SmoothScaling_Label'),
+        description: t('STR_ACE_Tacphone_Map_Options_SmoothScaling_Desc'),
         type: "boolean",
         default: true,
     },
 ];
 
-const MAP_PRESETS: readonly AppOptionPreset[] = [
+const MAP_PRESETS = (): readonly AppOptionPreset[] => [
     {
         id: "weak",
-        label: "Weak phone",
-        description: "Low memory and pixel cost: smallest cache, no prefetch.",
+        label: t('STR_ACE_Tacphone_Map_Preset_Weak_Label'),
+        description: t('STR_ACE_Tacphone_Map_Preset_Weak_Desc'),
         values: {
             [MAP_OPTION_KEYS.terrainQuality]: "low",
             [MAP_OPTION_KEYS.tileCacheSize]: 16,
@@ -122,8 +123,8 @@ const MAP_PRESETS: readonly AppOptionPreset[] = [
     },
     {
         id: "balanced",
-        label: "Balanced",
-        description: "The default values, tuned for the in-game phone browser.",
+        label: t('STR_ACE_Tacphone_Map_Preset_Balanced_Label'),
+        description: t('STR_ACE_Tacphone_Map_Preset_Balanced_Desc'),
         values: {
             [MAP_OPTION_KEYS.terrainQuality]: "balanced",
             [MAP_OPTION_KEYS.tileCacheSize]: 48,
@@ -134,8 +135,8 @@ const MAP_PRESETS: readonly AppOptionPreset[] = [
     },
     {
         id: "desktop",
-        label: "Desktop",
-        description: "Sharper terrain and deeper zoom for a powerful desktop browser.",
+        label: t('STR_ACE_Tacphone_Map_Preset_Desktop_Label'),
+        description: t('STR_ACE_Tacphone_Map_Preset_Desktop_Desc'),
         values: {
             [MAP_OPTION_KEYS.terrainQuality]: "high",
             [MAP_OPTION_KEYS.tileCacheSize]: 128,
@@ -150,9 +151,9 @@ const MAP_PRESETS: readonly AppOptionPreset[] = [
 export function registerMapOptions(): void {
     window.TacPhone.options.register({
         app: MAP_APP,
-        title: "Map",
-        options: MAP_OPTIONS,
-        presets: MAP_PRESETS,
+        title: t('str_a3_map1'),
+        options: MAP_OPTIONS(),
+        presets: MAP_PRESETS(),
     });
 
     // Remove the old tile-size override; the tile size is now fixed.

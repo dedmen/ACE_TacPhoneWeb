@@ -2,6 +2,8 @@
 
 Read this only for the Map app. The shared app contract/packaging is in
 [`apps.md`](apps.md); the request protocol and interests in [`sqf.md`](sqf.md).
+UI text uses `window.TacPhone.localization.t()` with the `Map` container of the
+add-on stringtable; see [`localization.md`](localization.md).
 The full reference is [`ACE_TacPhone_Map/README.md`](../ACE_TacPhone_Map/README.md).
 
 ## File map

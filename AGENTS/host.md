@@ -12,6 +12,8 @@ user-facing overview and development setup are in
 | --- | --- |
 | Entry, shared globals, StrictMode | `src/main.tsx` |
 | Host object / API surface | `src/Backend/Host.ts`, `src/TacPhoneMain.ts`, `src/Backend/Types.ts` |
+| Host-internal helpers (`withTimeout`, game path normalization) | `src/Backend/Internal.ts` |
+| Host UI text helper and base-game key list | `src/Backend/i18n.ts` |
 | Layout shell, app factory, chooser, error boundary | `src/App.tsx` |
 | Panel/tab binding and context | `src/Panels/PanelHost.tsx`, `src/Panels/PanelContext.ts` |
 | Panel directory (list/focus/open/floats) | `src/Backend/PanelDirectory.ts` |
@@ -45,14 +47,18 @@ user-facing overview and development setup are in
 2. Importing `src/Backend/Host.ts` builds `window.TacPhone` from the service
    singletons (lazy and idempotent; also installed on a microtask).
 3. `App.tsx` creates the flexlayout model, loads option overrides saved in the
-   same layout envelope, attaches the model to `panelDirectory`, loads the
-   one-time `window.TacPhone.gameInfo` snapshot in parallel with the layout,
-   then loads apps through `window.TacPhone.apps.LoadAvailableApps()`, and
-   renders the app chooser panels. Game info and stored options are available
+   same layout envelope, attaches the model to `panelDirectory`, waits for
+   `window.TacPhone.localization.whenReady()` (game stringtable), then loads the
+   one-time `window.TacPhone.gameInfo` snapshot in parallel with the layout
+   before loading apps through `window.TacPhone.apps.LoadAvailableApps()` and
+   rendering the app chooser panels. Game info and stored options are available
    before any app `init()` runs.
+   `src/main.tsx` decodes the bundled default stringtable before the first
+   render, so the remote pairing screen has text without a game connection; see
+   [`localization.md`](localization.md).
 4. The app loader asks the game `{a:"main", c:"GetAvailableApps"}`, which returns
-   `{ file, devfile, icon, dependencies }` per app. Every app's metadata is
-   parsed first so all dependency declarations are known, then
+   `{ file, devfile, icon, dependencies, stringtable }` per app. Every app's
+   metadata is parsed first so all dependency declarations are known, then
    `Backend/ModuleRegistry.ts` reads and imports the dependency files and
    registers the shim import map (see below). Each app module is loaded from the
    packaged file, or from `/devapps/<Name>/<devfile>` in development, imported
@@ -63,8 +69,31 @@ user-facing overview and development setup are in
    for an `__A3_DEBUG__` build with the server/mission `allowDebug` CBA setting
    enabled.
 
-## App modules and dependencies (`Backend/ModuleRegistry.ts`)
+## Localization (`Backend/Localization.ts`, `Backend/Stringtable.ts`)
 
+`window.TacPhone.localization` is the host translation store; the rules and
+excluded text are in [`localization.md`](localization.md).
+
+- `Backend/Stringtable.ts` parses the XML with `DOMParser`, maps game/browser
+  language names to stringtable tags, and upper-cases keys for lookup.
+- `Backend/Localization.ts` holds the active table, the bundled table
+  (`virtual:tacphone-stringtable`, gzip+base64, decoded with
+  `decompressFromBase64`), the per-path cache and the on-demand queue.
+  `LOAD_STRINGTABLE_FILE = false` disables the runtime XML loader because HEMTT
+  ships only `stringtable.bin`; the bundled table is the live source and
+  `Localization.Info` only selects its language block.
+- `main.tsx` awaits `loadDefaults()` before the first render. `App.tsx` awaits
+  `whenReady()` after the transport is ready and re-renders on `onDidChange()`.
+- `AppDirectory.loadApps()` calls `loadStringtables()` for the distinct
+  `stringtable` paths reported by app metadata before any app `init()`; while the
+  XML loader is disabled this is a no-op.
+- Base-game keys are not in the add-on stringtable: the host preloads
+  `HOST_BASE_GAME_STRINGS` with one `localization.load()` after `whenReady()`,
+  and each app does the same with its own list in `init()`.
+- A failed file load logs one `console.warn` (kept in release builds) and
+  switches missing keys to `main / Localization.Get`, at most 100 per request.
+
+## App modules and dependencies (`Backend/ModuleRegistry.ts`)
 `index.html` sets `window.esmsInitOptions = { shimMode: true }` in a plain
 `<script>` before the module entry. A native import map must exist before the
 first module is fetched and cannot be extended afterwards, but app dependencies
@@ -369,12 +398,15 @@ dialog uses it for marker type (searchable) and channel.
 3. Re-export host-internal types through `src/Backend/Types.ts` and
    `src/TacPhoneMain.ts`.
 4. Update [`apps.md`](apps.md) / the Main README and any affected app.
-5. `npm run check`, then build the host and copy `dist/index.html`.
+5. `npm run check`, then `npm run build:all` to rebuild the PBO and install it
+   (or `npm run build:debug` for a web-only iteration, which does not update the
+   PBO).
 
 ## Build
 
 ```powershell
-npm run build:debug    # development build; root script copies data/index.html
+npm run build:all      # build + install into the game (web + PBO + native DLL)
+npm run build:debug    # web-only iteration; copies data/index.html, no PBO
 npm run build          # release, only when explicitly requested
 ```
 

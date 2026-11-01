@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 /**
  * Marker channel model shared by the Map's marker layers, dialog and layer
  * switcher.
@@ -22,21 +23,33 @@ export interface MarkerChannel {
     mapMarkersEnabled: boolean;
 }
 
-const STANDARD_LABELS = ['Global', 'Side', 'Command', 'Group', 'Vehicle', 'Direct'];
+/** Built-in channel labels 0..5, in channel order. */
+function standardLabels(): readonly string[] {
+    return [
+        t('str_channel_global'),
+        t('str_channel_side'),
+        t('str_channel_command'),
+        t('str_channel_group'),
+        t('str_channel_vehicle'),
+        t('str_channel_direct'),
+    ];
+}
 
 /** Built-in channels 0..5. */
-export const STANDARD_MARKER_CHANNELS: readonly MarkerChannel[] = STANDARD_LABELS.map(
-    (label, id) => ({
-        id,
-        label,
-        custom: false,
-        mapMarkersEnabled: true,
-    }),
-);
+export function standardMarkerChannels(): readonly MarkerChannel[] {
+    return standardLabels().map(
+        (label, id) => ({
+            id,
+            label,
+            custom: false,
+            mapMarkersEnabled: true,
+        }),
+    );
+}
 
 /** Fallback used when the game channel request fails or returns invalid data. */
 export function fallbackMarkerChannels(): MarkerChannel[] {
-    return STANDARD_MARKER_CHANNELS.map((channel) => ({ ...channel }));
+    return standardMarkerChannels().map((channel) => ({ ...channel }));
 }
 
 /**
@@ -66,7 +79,7 @@ export function parseMarkerChannels(value: unknown): MarkerChannel[] {
 
         const label = typeof entry[1] === 'string' && entry[1].trim() !== ''
             ? entry[1]
-            : `Channel ${id}`;
+            : t('STR_ACE_Tacphone_Map_Channel_Number', id);
         const custom = entry[2] === true || (typeof entry[2] === 'number' && entry[2] !== 0);
         const mapMarkersEnabled = entry[3] !== false;
 
@@ -83,7 +96,7 @@ export function parseMarkerChannels(value: unknown): MarkerChannel[] {
 }
 
 export function getChannelLabel(channels: readonly MarkerChannel[], id: number): string {
-    return channels.find((channel) => channel.id === id)?.label ?? `Channel ${id}`;
+    return channels.find((channel) => channel.id === id)?.label ?? t('STR_ACE_Tacphone_Map_Channel_Number', id);
 }
 
 export function isChannelAvailable(channel: MarkerChannel | undefined): channel is MarkerChannel {

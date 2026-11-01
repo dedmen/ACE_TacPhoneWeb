@@ -16,6 +16,7 @@ import * as ReactJSXRuntime from 'react/jsx-runtime';
 import * as ReactCompilerRuntime from 'react/compiler-runtime';
 import qrcode from 'qrcode-generator';
 import { SHARED_MODULES } from '@ace-tacphone/build/shared-modules';
+import { tacphoneStringtable } from '@ace-tacphone/build';
 
 // TypeScript checks that this map covers every specifier in SHARED_MODULES.
 // The namespaces are only enumerated here to generate the import map; the
@@ -188,6 +189,10 @@ export default defineConfig(async ({ mode }): Promise<UserConfig> => {
         plugins: [
             react(),
             babel({ presets: [reactCompilerPreset()] }),
+            // Bundles the add-on stringtable into the host as a compressed
+            // `{ language: { key: text } }` table, so the pre-connection UI has
+            // text before the game can answer.
+            tacphoneStringtable({ path: '../../stringtable.xml' }),
             viteSingleFile(),
             devAppsPlugin(devApps, warnings),
 

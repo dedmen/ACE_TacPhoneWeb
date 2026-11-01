@@ -34,6 +34,7 @@ import styles from './AppChooserPanel.module.css'
 import { AppErrorBoundary } from './AppErrorBoundary';
 import { panelDirectory } from '../Backend/PanelDirectory';
 import { appDirectory } from '../Backend/AppDirectory';
+import { t } from '../Backend/i18n';
 
 export type AppChooserPanelProps = {
     /** Live handle of the tab this chooser runs in. */
@@ -383,7 +384,7 @@ export class AppChooserPanel extends React.Component<AppChooserPanelProps, AppCh
 
         return (
             <div className={styles.Toolbar}>
-                <span className={styles.ToolbarTitle}>Apps</span>
+                <span className={styles.ToolbarTitle}>{t('STR_ACE_Tacphone_Host_AppChooser_Title')}</span>
                 <div className={styles.SearchField}>
                     <svg className={styles.SearchIcon} viewBox="0 0 16 16" aria-hidden="true">
                         <circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" strokeWidth="1.6" />
@@ -396,8 +397,8 @@ export class AppChooserPanel extends React.Component<AppChooserPanelProps, AppCh
                         value={filter}
                         onChange={this.handleFilterChange}
                         onKeyDown={this.handleSearchKeyDown}
-                        placeholder="Search apps"
-                        aria-label="Search apps"
+                        placeholder={t('STR_ACE_Tacphone_Host_AppChooser_Search')}
+                        aria-label={t('STR_ACE_Tacphone_Host_AppChooser_Search')}
                         autoFocus
                         autoComplete="off"
                         spellCheck={false}
@@ -406,8 +407,8 @@ export class AppChooserPanel extends React.Component<AppChooserPanelProps, AppCh
                         ? <button
                             type="button"
                             className={styles.ClearButton}
-                            title="Clear search"
-                            aria-label="Clear search"
+                            title={t('STR_ACE_Tacphone_Common_ClearSearch')}
+                            aria-label={t('STR_ACE_Tacphone_Common_ClearSearch')}
                             onClick={this.clearFilter}
                         >×</button>
                         : null}
@@ -422,15 +423,17 @@ export class AppChooserPanel extends React.Component<AppChooserPanelProps, AppCh
         return (
             <div className={styles.Empty}>
                 <span className={styles.EmptyTitle}>
-                    {query.length > 0 ? `No apps match “${query}”` : "No apps are installed"}
+                    {query.length > 0
+                        ? t('STR_ACE_Tacphone_Host_AppChooser_NoMatch', query)
+                        : t('STR_ACE_Tacphone_Host_AppChooser_Empty')}
                 </span>
                 <span className={styles.EmptyHint}>
                     {query.length > 0
-                        ? "Try a different name, or clear the search."
-                        : "Apps appear here once the game reports them."}
+                        ? t('STR_ACE_Tacphone_Host_AppChooser_NoMatchHint')
+                        : t('STR_ACE_Tacphone_Host_AppChooser_EmptyHint')}
                 </span>
                 {query.length > 0
-                    ? <button type="button" className={styles.EmptyButton} onClick={this.clearFilter}>Clear search</button>
+                    ? <button type="button" className={styles.EmptyButton} onClick={this.clearFilter}>{t('STR_ACE_Tacphone_Common_ClearSearch')}</button>
                     : null}
             </div>
         );
@@ -459,7 +462,7 @@ export class AppChooserPanel extends React.Component<AppChooserPanelProps, AppCh
                     {hasFailed
                         ? (
                             <section className={styles.FailedSection}>
-                                <h2 className={styles.FailedHeading}>Could not load</h2>
+                                <h2 className={styles.FailedHeading}>{t('STR_ACE_Tacphone_Host_AppChooser_FailedHeading')}</h2>
                                 <div className={styles.Grid}>
                                     {failed.map(([name, error]) => this.renderFailedTile(name, error))}
                                 </div>

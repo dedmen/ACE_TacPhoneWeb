@@ -15,6 +15,7 @@
  */
 
 import type { MapFocusMarkerOptions } from './api';
+import { t } from './i18n';
 
 /** App name in `ace_tacphone_apps`; key of `window.TacPhone.apps.knownApps`. */
 export const MESSENGER_APP_NAME = 'Messaging';
@@ -125,8 +126,8 @@ interface MarkerObjectData {
 /** Survives a game reconnect: the card renders without the Map being mounted. */
 function buildMarkerPreview(data: MarkerChatPayload): ChatObjectPreview {
     return {
-        title: data.text || data.label || 'Marker',
-        subtitle: 'Map marker',
+        title: data.text || data.label || t('STR_3DEN_Marker_textSingular'),
+        subtitle: t('STR_ACE_Tacphone_Map_Marker_ObjectSubtitle'),
         icon: data.typeIcon || undefined,
         color: data.resolvedColor || undefined,
     };
@@ -270,8 +271,8 @@ const markerObjectRenderer: MessengerObjectRenderer = {
         }
 
         return {
-            title: marker.text || marker.label || 'Marker',
-            subtitle: 'Map marker',
+            title: marker.text || marker.label || t('STR_3DEN_Marker_textSingular'),
+            subtitle: t('STR_ACE_Tacphone_Map_Marker_ObjectSubtitle'),
             // The icon and color are not stored in `data`; the persisted preview
             // keeps them and is the best source once the sending Map is gone.
             icon: storedPreview?.icon,

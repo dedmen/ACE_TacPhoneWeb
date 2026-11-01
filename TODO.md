@@ -496,6 +496,25 @@ Remaining work:
   `TacPhone:TextureCache:*`. The cache is not per-host and is not cleared on
   host disconnect; a mod update at the same path is not detected until eviction
   or relay restart (documented in `RemoteServer/README.md`).
+- [ ] **[decision]** Relay cache for on-demand `Localization.Get` results. The
+  relay's `FileCache` only covers `GetFile` responses, so base-game keys reused
+  by the web UI (chat channels, `str_disp_*`, ...) are never in the preloaded
+  `stringtable.xml` and every browser asks the game for them again.
+  Intercept `{"a":"main","c":"Localization.Get"}` request/reply pairs and cache
+  the returned `key -> text` strings in the relay.
+  - No content hash or pin verification is needed: assume every player whose
+    game language is the same sees the same base-game/mod translations.
+  - The relay only sees the `localize` result, which is one language. It must
+    learn the connected host's language first, for example from the host's
+    `Localization.Info` reply (cache `language` per host session) or by adding
+    the language to the relay attach/handshake metadata.
+  - Key the cache by `(language, key)` and answer hits for any host/browser
+    with that language, so a German host does not serve cache entries to an
+    English one. Consider capping it like `TextureCache` and clearing entries
+    when a host with a new language connects.
+  - This is safe only while translations are add-on-independent; if per-player
+    mods can change a `STR_*` value, include the host's stringtable hash in the
+    key instead of relying on the language alone.
 - [ ] **[cleanup]** Measure the largest individual terrain layer/part on the
   biggest maps and record the margin under the future 10 MB SQF message limit.
 - [x] **[wontfix]** No `GetFile` allowlist. Only packed game/mod files are
@@ -531,6 +550,27 @@ Explore splitting the host bootstrap so it does not import React:
   `PanelContext`/`usePanel`,
 - the host dependency manifest including the React files.
 
-Goal: let the phone shell and app loading start before (or without) the React UI
-bundle.
+Goal: let the phone shell and app loading start before (or without) the React
+UI bundle.
+
+## Localization
+
+- [ ] **[cleanup]** All non-English strings are AI translations (each language
+  tag carries `ai-translated="true"`). Have native speakers review them before a
+  release and drop the attribute per language when a human rewrites it.
+- [ ] **[decision]** Runtime stringtable XML loading is disabled
+  (`LOAD_STRINGTABLE_FILE = false` in `Backend/Localization.ts`): HEMTT compiles
+  `stringtable.xml` to `stringtable.bin` and does not ship the source, so the
+  whole table is bundled into `index.html` at build time and the game language
+  from `Localization.Info` selects the language block. Re-enable the file loader
+  (and the per-app stringtable loader) when the XML is available in the game
+  files again.
+- [ ] **[cleanup]** The Map's `ACE_TacPhone_Map_Placeholder` panel still renders
+  `Wololo!` and keeps the default title `Placeholder`; it is a development stub.
+- [ ] **[robustness]** The bundled default table only ships the languages present
+  in `stringtable.xml` at build time. When translations are added, verify the
+  browser-language mapping in `Backend/Stringtable.ts` and the `index.html` size.
+- [ ] **[decision]** `Localization.Get` (on-demand fallback) was not exercised
+  against a deliberately broken stringtable path; do a manual failure drill when
+  changing the file loader.
 

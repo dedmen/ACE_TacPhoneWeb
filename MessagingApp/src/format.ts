@@ -11,6 +11,7 @@ import { useEffect, useReducer } from 'react';
 import type { ChatMessage, ChatParticipant, ChatPresence } from './api';
 import type { ChatStoreState } from './state/ChatStore';
 import type { GroupListEntry, PlayerListEntry } from './protocol';
+import { t } from './i18n';
 
 /** What we need from the store snapshot to extrapolate the server clock. */
 type ServerClock = Pick<ChatStoreState, 'serverTime' | 'serverTimeReceivedAt'>;
@@ -49,7 +50,7 @@ export function formatRelativeTime(timestamp: number, now: number): string {
     if (!Number.isFinite(timestamp) || timestamp <= 0) return '';
 
     const delta = Math.max(0, now - timestamp);
-    if (delta < 45) return 'now';
+    if (delta < 45) return t('str_a3_orange_hub_post_timelinelabel');
     if (delta < 3600) return `${Math.floor(delta / 60)}m`;
     if (delta < 86400) return `${Math.floor(delta / 3600)}h`;
 
@@ -69,17 +70,27 @@ export function formatMissionClock(timestamp: number): string {
     return `T+${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
 }
 
-export const PRESENCE_LABEL: Record<ChatPresence, string> = {
-    available: 'Available',
-    minimized: 'Minimized',
-    offline: 'Offline',
-};
+export const PRESENCE_LABEL = {
+    available: 'str_a3_vr_available',
+    minimized: 'STR_ACE_Tacphone_Messenger_Presence_Minimized',
+    offline: 'str_disp_xbox_friends_offline',
+} as const satisfies Record<ChatPresence, string>;
 
-export const PRESENCE_HINT: Record<ChatPresence, string> = {
-    available: 'Can see the phone',
-    minimized: 'Phone is closed',
-    offline: 'Not connected',
-};
+export const PRESENCE_HINT = {
+    available: 'STR_ACE_Tacphone_Messenger_PresenceHint_Available',
+    minimized: 'STR_ACE_Tacphone_Messenger_PresenceHint_Minimized',
+    offline: 'STR_ACE_Tacphone_Messenger_PresenceHint_Offline',
+} as const satisfies Record<ChatPresence, string>;
+
+/** Localized text helper. */
+export function presenceText(presence: ChatPresence): string {
+    return t(PRESENCE_LABEL[presence]);
+}
+
+/** Localized presence explanation. */
+export function presenceHintText(presence: ChatPresence): string {
+    return t(PRESENCE_HINT[presence]);
+}
 
 /** Coerces a game-supplied colour into something `CSS.supports` accepts. */
 export function safeColor(value: string | undefined): string | undefined {

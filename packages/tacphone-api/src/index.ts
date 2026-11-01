@@ -68,6 +68,7 @@ export interface TacPhoneHost {
     notifications: NotificationCenterApi;
     audio: AudioApi;
     gameInfo: GameInfoApi;
+    localization: LocalizationApi;
     options: AppOptionsApi;
     utils: TacPhoneUtils;
     components: ComponentsApi;
@@ -165,6 +166,41 @@ export interface GameInfoApi {
     isDebug(): boolean;
 }
 
+/**
+ * Host-provided translations (`window.TacPhone.localization`).
+ *
+ * The table is loaded from the add-on stringtable once the game is reachable;
+ * before that it holds the copy bundled into the host at build time. Lookups
+ * never wait on the game.
+ */
+export interface LocalizationApi {
+    /**
+     * Translated text of one key, with `%1`..`%9` replaced by `args`.
+     * Returns the key itself when it is unknown; the key is then queued for an
+     * on-demand lookup, so a later call may succeed.
+     */
+    t(key: string, ...args: Array<string | number>): string;
+    /** True when the key is in the active table. */
+    has(key: string): boolean;
+    /**
+     * Ask the game for the given keys (at most 100 per request) and resolve
+     * once they were merged. Resolves immediately when every key is known or
+     * the transport is unavailable.
+     */
+    load(keys: readonly string[]): Promise<void>;
+    /** Loads the host and app stringtables. Never rejects. */
+    whenReady(): Promise<void>;
+    /**
+     * Loads additional stringtables (apps from other add-ons) and merges them
+     * into the active table. Already loaded paths are skipped; failures warn.
+     */
+    loadStringtables(paths: readonly string[]): Promise<void>;
+    /** Active language name, e.g. "English". */
+    language(): string;
+    /** Fires when strings arrive or the table is replaced. Returns the unsubscribe function. */
+    onDidChange(listener: () => void): () => void;
+}
+
 /** Cached display data of one registered panel. */
 export interface PanelMeta {
     /** AppPanelInfo.id. */
@@ -211,6 +247,11 @@ export interface AppInfo {
     file: string;
     /** Runtime module dependencies, in game-config definition order. */
     dependencies: Array<AppDependency>;
+    /**
+     * Stringtable the app's keys live in, when the app ships in a different
+     * add-on than the host. Empty means "share the host's stringtable".
+     */
+    stringtable: string;
     module: AppModule;
     panels: Array<AppPanelInfo>;
 }

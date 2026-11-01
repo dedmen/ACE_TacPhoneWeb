@@ -14,6 +14,7 @@ import type {
 
 import { appOptions } from "../Backend/AppOptions";
 import { appDirectory } from "../Backend/AppDirectory";
+import { t } from "../Backend/i18n";
 import { SelectMenu } from "../Components/SelectMenu";
 import styles from "./OptionsPanel.module.css";
 
@@ -266,13 +267,13 @@ export class OptionsPanel extends React.Component<AppProps, OptionsPanelState> {
                         className={styles.ResetButton}
                         onClick={() => appOptions.reset(registration.app)}
                     >
-                        Reset
+                        {t('str_a3_rscdisplaycampaignlobby_reset')}
                     </button>
                 </header>
 
                 {presets.length > 0 && (
                     <section className={styles.Presets}>
-                        <div className={styles.SectionLabel}>Presets</div>
+                        <div className={styles.SectionLabel}>{t('STR_ACE_Tacphone_Options_Presets')}</div>
                         <div className={styles.PresetRow}>
                             {presets.map(preset => (
                                 <button
@@ -309,8 +310,8 @@ export class OptionsPanel extends React.Component<AppProps, OptionsPanelState> {
 
         return (
             <div className={styles.Panel}>
-                <nav className={styles.Sidebar} aria-label="Apps">
-                    <div className={styles.SidebarTitle}>Options</div>
+                <nav className={styles.Sidebar} aria-label={t('STR_ACE_Tacphone_Options_SidebarLabel')}>
+                    <div className={styles.SidebarTitle}>{t('STR_A3_RscDisplayMain_TitleOptions_text')}</div>
                     {registrations.map(registration => {
                         const title = appTitle(registration);
 
@@ -329,7 +330,7 @@ export class OptionsPanel extends React.Component<AppProps, OptionsPanelState> {
                         );
                     })}
                     {registrations.length === 0 && (
-                        <div className={styles.SidebarEmpty}>No options</div>
+                        <div className={styles.SidebarEmpty}>{t('STR_ACE_Tacphone_Options_NoOptions')}</div>
                     )}
                 </nav>
 
@@ -338,9 +339,9 @@ export class OptionsPanel extends React.Component<AppProps, OptionsPanelState> {
                         ? this.renderApp(selected)
                         : (
                             <div className={styles.Empty}>
-                                <div className={styles.EmptyTitle}>No app options yet</div>
+                                <div className={styles.EmptyTitle}>{t('STR_ACE_Tacphone_Options_EmptyTitle')}</div>
                                 <div className={styles.EmptyHint}>
-                                    Apps register their options at startup; they appear here.
+                                    {t('STR_ACE_Tacphone_Options_EmptyHint')}
                                 </div>
                             </div>
                         )}

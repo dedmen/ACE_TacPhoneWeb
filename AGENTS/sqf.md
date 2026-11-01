@@ -205,6 +205,7 @@ class ace_tacphone_apps {
         icon = "\path\to\icon.paa";              // optional default panel icon
         ace_tacphone_file = QPATHTOF(data\myapp.js);
         ace_tacphone_devFile = "src\main.tsx";   // dev entry, relative to the app folder
+        ace_tacphone_stringtable = "\my_mod\addons\myapp\stringtable.xml"; // optional
         ace_tacphone_requestProcessor = QFUNC(processBrowserRequest);
     };
 };
@@ -219,6 +220,24 @@ class ace_tacphone_apps {
   shared `APPNAME`/`COMPONENT` macros.
 - `ace_tacphone_file` is required for normal apps; `main` is built into the host
   and needs no file.
+- `ace_tacphone_stringtable` is optional; set it when the app's text lives in a
+  different add-on. It is exposed as `stringtable` in `GVAR(AppInfo)` and loaded
+  before the app's `init()`. Keys and containers are documented in
+  [`localization.md`](localization.md).
+
+## Localization requests
+
+The host bundles the whole stringtable into `index.html` at build time; HEMTT
+ships only `stringtable.bin`, so the XML file is not read at runtime. SQF never
+reads or parses the stringtable; it only answers these cheap `main` commands:
+
+| Command | Fields | Result |
+| --- | --- | --- |
+| `Localization.Info` | — | `{ language, stringtable }`; `language` is the engine `language`, `stringtable` is `QPATHTOF(stringtable.xml)`. |
+| `Localization.Get` | `keys` (array of key IDs) | `{ key: text }` for up to 100 keys, using `localize`. On-demand fallback only. |
+
+Key ownership and naming are in [`localization.md`](localization.md). Do not add
+bulk string lookups in SQF; bulk data must come from the file request.
 
 ## Interests
 

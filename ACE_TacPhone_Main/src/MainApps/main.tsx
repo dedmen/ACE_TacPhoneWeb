@@ -3,6 +3,7 @@ import { TACPHONE_API_VERSION } from "@ace-tacphone/api";
 import type { AppPanelInfo, AppProps, PanelInfo, TacPhoneHost } from "@ace-tacphone/api";
 import { RemoteAccessPanel } from "./RemoteAccessPanel";
 import { OptionsPanel } from "./OptionsPanel";
+import { t } from "../Backend/i18n";
 
 // These are apps included in TacPhone, even if no other apps are loaded. Core functionality like Notifications and Settings
 
@@ -119,7 +120,7 @@ const panelInspectorPanel: AppPanelInfo = {
 
 const remoteAccessPanel: AppPanelInfo = {
   id: "ACE_TacPhone_RemoteAccess",
-  GetDefaultTitle: () => "Remote Access",
+  GetDefaultTitle: () => t('STR_ACE_Tacphone_RemoteAccess_PanelTitle'),
   appComponent: RemoteAccessPanel,
 };
 
@@ -127,7 +128,7 @@ const OPTIONS_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/sv
 
 const optionsPanel: AppPanelInfo = {
   id: "ACE_TacPhone_Options",
-  GetDefaultTitle: () => "Options",
+  GetDefaultTitle: () => t('STR_A3_RscDisplayMain_TitleOptions_text'),
   GetTacPhoneIcon: () => OPTIONS_ICON,
   appComponent: OptionsPanel,
 };
@@ -161,7 +162,7 @@ function emitHostLog(entry: HostLogEntry): void {
   if ((level === "error" || level === "warning") && body) {
     try {
       window.TacPhone.notifications.show({
-        title: level === "error" ? "TacPhone host error" : "TacPhone host warning",
+        title: level === "error" ? t('STR_ACE_Tacphone_Host_Log_ErrorTitle') : t('STR_ACE_Tacphone_Host_Log_WarningTitle'),
         body,
         duration: level === "error" ? 0 : 20_000,
       });

@@ -26,6 +26,7 @@ import {
     messagePreview,
     roomDisplayName,
 } from './state/roomUtils';
+import { t } from './i18n';
 
 let unsubscribe: (() => void) | undefined;
 
@@ -119,11 +120,11 @@ function messageOptions(
 }
 
 function inviteOptions(message: ChatMessage, invite: RoomInviteObjectData): NotificationOptions {
-    const roomName = invite.roomName.trim() || 'a room';
+    const roomName = invite.roomName.trim() || t('STR_ACE_Tacphone_Messenger_Invite_ARoom');
 
     return {
-        title: `Invite to ${roomName}`,
-        body: `${message.senderName} invited you to ${roomName}`,
+        title: t('STR_ACE_Tacphone_Messenger_Invite_NotificationTitle', roomName),
+        body: t('STR_ACE_Tacphone_Messenger_Invite_NotificationBody', message.senderName, roomName),
         app: MESSAGING_APP_NAME,
         sound: 'message',
         data: {

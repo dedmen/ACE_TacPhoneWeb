@@ -51,7 +51,7 @@ const ICON_MAX_SIZE = 512;
  */
 const ICON_LOAD_WAIT_MS = 2000;
 
-type AppInfoSource = Pick<AppInfo, "devfile" | "file" | "dependencies">;
+type AppInfoSource = Pick<AppInfo, "devfile" | "file" | "dependencies" | "stringtable">;
 
 /** One app after metadata parsing; `error` means it cannot be loaded. */
 interface ParsedApp {
@@ -250,12 +250,13 @@ export class AppDirectory implements AppCatalog {
         const file = typeof data.file === "string" ? data.file : "";
         const devfile = typeof data.devfile === "string" ? data.devfile : "";
         const icon = typeof data.icon === "string" ? data.icon : "";
+        const stringtable = typeof data.stringtable === "string" ? data.stringtable : "";
         const dependencies = this.parseDependencies(name, data.dependencies);
 
         if (name !== "main" && file.length === 0)
             throw new Error(`App "${name}" does not define a file to load`);
 
-        return { file, devfile, icon, dependencies };
+        return { file, devfile, icon, dependencies, stringtable };
     }
 
     /**
@@ -401,6 +402,15 @@ export class AppDirectory implements AppCatalog {
                 }
             }
         }
+
+        // Translation keys of apps from other add-ons live in their own
+        // stringtable. Load every distinct path before any app module runs, so
+        // its init() and GetTacPhoneApps() can already call t().
+        await host.localization.loadStringtables(
+            parsed
+                .map(entry => entry.appInfoSource?.stringtable ?? "")
+                .filter(path => path.length > 0),
+        );
 
         // Load every app in parallel. One broken app must not prevent the rest from starting.
         const results = await Promise.allSettled(parsed.map(async (entry) => {
@@ -606,6 +616,30 @@ export class AppDirectory implements AppCatalog {
     /** Every registered panel, with cached display data. */
     listPanels(): PanelMeta[] {
         return this.knownPanels.size === 0 ? [] : [...this.panelMeta.values()];
+    }
+
+    /**
+     * Re-resolves the cached default titles, e.g. after the localization table
+     * changed. A title that was a raw key before its translation arrived is
+     * replaced in place; a broken panel keeps its previous title.
+     */
+    refreshPanelTitles(): void {
+        let changed = false;
+
+        for (const [panelId, panel] of this.knownPanels) {
+            const meta = this.panelMeta.get(panelId);
+            if (!meta)
+                continue;
+
+            const title = this.panelTitle(panel);
+            if (title !== meta.title) {
+                meta.title = title;
+                changed = true;
+            }
+        }
+
+        if (changed)
+            this.notifyChanged();
     }
 
     /**

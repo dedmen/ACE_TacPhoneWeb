@@ -32,6 +32,7 @@ import {
     unregisterMapTestManager,
     type MapDebugState,
 } from './MapTestHooks';
+import { t } from '../i18n';
 
 const LONG_PRESS_DURATION_MS = 600;
 const LONG_PRESS_MOVE_TOLERANCE_PX = 10;
@@ -356,8 +357,8 @@ export class MarkerModule {
 
         try {
             window.TacPhone.notifications.show({
-                title: 'Marker no longer exists',
-                body: 'Showing its last known position.',
+                title: t('STR_ACE_Tacphone_Map_Marker_GoneTitle'),
+                body: t('STR_ACE_Tacphone_Map_Marker_GoneBody'),
                 app: 'ACE_TacPhone_Map',
             });
         } catch (error) {

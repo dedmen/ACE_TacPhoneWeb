@@ -6,6 +6,7 @@
 
 import type { GameInfo, GameInfoApi } from '@ace-tacphone/api';
 import { networking } from './Networking';
+import { withTimeout } from './Internal';
 
 const GAME_INFO_TIMEOUT_MS = 10_000;
 
@@ -17,41 +18,6 @@ const FALLBACK_GAME_INFO: GameInfo = Object.freeze({
     gameVersion: '',
     debug: false,
 });
-
-function withTimeout<T>(promise: Promise<T>, description: string): Promise<T> {
-    return new Promise<T>((resolve, reject) => {
-        let settled = false;
-        const timer = window.setTimeout(() => {
-            if (settled) {
-                return;
-            }
-
-            settled = true;
-            reject(new Error(`${description} timed out after ${GAME_INFO_TIMEOUT_MS} ms`));
-        }, GAME_INFO_TIMEOUT_MS);
-
-        promise.then(
-            (value) => {
-                if (settled) {
-                    return;
-                }
-
-                settled = true;
-                window.clearTimeout(timer);
-                resolve(value);
-            },
-            (error: unknown) => {
-                if (settled) {
-                    return;
-                }
-
-                settled = true;
-                window.clearTimeout(timer);
-                reject(error);
-            },
-        );
-    });
-}
 
 function parseGameInfo(raw: object): GameInfo {
     const value = raw as Partial<Record<keyof GameInfo, unknown>>;
@@ -96,6 +62,7 @@ class GameInfoStore implements GameInfoApi {
         try {
             const raw = await withTimeout(
                 networking.Request({ a: 'main', c: 'GetGameInfo' }),
+                GAME_INFO_TIMEOUT_MS,
                 'GetGameInfo',
             );
             info = parseGameInfo(raw);

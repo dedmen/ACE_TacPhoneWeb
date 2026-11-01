@@ -7,8 +7,8 @@ using TacPhone.RemoteServer.Configuration;
 namespace TacPhone.RemoteServer.Realtime;
 
 /// <summary>
-/// A process-local cache for the <c>.js</c> files a game host serves for apps and
-/// their runtime module dependencies.
+/// A process-local cache for the script and stringtable files a game host
+/// serves for apps, their runtime module dependencies and localization.
 /// </summary>
 /// <remarks>
 /// <para>

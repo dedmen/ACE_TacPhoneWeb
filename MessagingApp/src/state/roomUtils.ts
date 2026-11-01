@@ -14,6 +14,7 @@ import type {
 } from '../api';
 import type { RoomInviteObjectData } from '../protocol';
 import { CHAT_OBJECT_KIND_ROOM_INVITE } from '../protocol';
+import { t } from '../i18n';
 
 /** One message list per room, oldest first. */
 export type ChatMessagesByRoom = Record<string, ChatMessage[]>;
@@ -67,7 +68,9 @@ export function roomDisplayName(room: ChatRoomSummary | undefined, selfUid: stri
 
     if (others.length > 0) return others.map(participant => participant.name).join(', ');
 
-    return room.kind === 'direct' ? 'Direct message' : 'Group';
+    return room.kind === 'direct'
+        ? t('STR_ACE_Tacphone_Messenger_Room_Direct')
+        : t('STR_ACE_Tacphone_Messenger_Room_Group');
 }
 
 /** Short body used by notifications and the room list. */
@@ -79,10 +82,10 @@ export function messagePreview(message: ChatMessage): string {
     if (preview) return preview.subtitle ? `${preview.title} - ${preview.subtitle}` : preview.title;
 
     const count = message.objects?.length ?? 0;
-    if (count === 1) return '1 shared item';
-    if (count > 1) return `${count} shared items`;
+    if (count === 1) return t('STR_ACE_Tacphone_Messenger_Room_SharedItem_One');
+    if (count > 1) return t('STR_ACE_Tacphone_Messenger_Room_SharedItem_Other', count);
 
-    return 'Empty message';
+    return t('STR_ACE_Tacphone_Messenger_Room_EmptyMessage');
 }
 
 /** Finds the room invite carried by a message, if any. */

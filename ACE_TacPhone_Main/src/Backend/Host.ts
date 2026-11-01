@@ -21,6 +21,7 @@ import { interApp } from "./InterApp";
 import { interestRegistry } from "./InterestRegistry";
 import { notificationCenter } from "./Notifications";
 import { gameInfo } from "./GameInfo";
+import { localization } from "./Localization";
 import { audio } from "./Audio";
 import { appOptions } from "./AppOptions";
 import { CommandRegistry } from "./MessageRouter";
@@ -63,6 +64,7 @@ function createHost(): InternalTacPhoneHost {
         notifications: notificationCenter,
         audio,
         gameInfo,
+        localization,
         options: appOptions,
         modules: sharedModules,
         components: {

@@ -50,6 +50,7 @@ boundary. Neither stops the other apps from loading.
 | `panels` | List, find, focus, activate, open panels. |
 | `interApp` | Register and resolve app services. |
 | `interests` | Acquire/release demand-driven data interests. |
+| `localization` | `t(key, ...args)`, `has`, `load`, `whenReady`, `language`, `onDidChange`. See [`localization.md`](localization.md). |
 | `notifications` | Toast banners. |
 | `options` | Register per-app options shown in the host Options panel, and read/write their values. |
 | `components` | Reusable host UI. `components.SelectMenu` is the portaled listbox select; see [`host.md`](host.md#reusable-host-components-srccomponents). |
@@ -58,8 +59,33 @@ boundary. Neither stops the other apps from loading.
 Panel components receive the live instance as `props.panel`; deeper components
 can use `window.TacPhone.utils.usePanel()` or `PanelContext`.
 
-## App options
+## Localization
 
+Every user-readable string goes through `window.TacPhone.localization.t()`:
+
+```tsx
+const label = window.TacPhone.localization.t('STR_ACE_Tacphone_map_panelTitle');
+const message = window.TacPhone.localization.t('STR_ACE_Tacphone_Map_Polyline_Points', count);
+```
+
+- Keys are literal strings and live in the add-on stringtable; no `t()` at
+  module scope, no fallback argument.
+- Apps in this add-on use the `Host`, `Options`, `RemoteAccess`, `Map`,
+  `Messenger` or `SampleApp` container of `addons/tacphone/stringtable.xml`.
+- An app in another add-on sets `ace_tacphone_stringtable` in its config class
+  and defines its own `STR_<MOD>_` keys.
+- Keys reuse base-game text where it fits (`npx tacphone-build base-strings`).
+  A base-game key is not in any add-on stringtable, so the app keeps the list in
+  its single `src/i18n.ts` (`*_BASE_GAME_STRINGS`) and preloads it in `init()`:
+  `await window.TacPhone.localization.load(APP_BASE_GAME_STRINGS)`, before any
+  panel renders.
+- UI helpers import `t` from that same `src/i18n.ts`, not from each component.
+
+The full rules (containers, naming, plurals, excluded units and game-supplied
+text, the bundled default table and the on-demand fallback) are in
+[`localization.md`](localization.md).
+
+## App options
 Apps can expose a small option schema. The host renders it in the built-in
 Options panel (`ACE_TacPhone_Options`), reached from the app chooser:
 

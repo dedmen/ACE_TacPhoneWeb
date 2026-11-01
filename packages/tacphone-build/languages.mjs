@@ -1,0 +1,22 @@
+/** Stringtable languages in the order they are written to the XML. */
+export const STRINGTABLE_LANGUAGES = [
+    'English',
+    'Czech',
+    'French',
+    'Spanish',
+    'Italian',
+    'Polish',
+    'Portuguese',
+    'Russian',
+    'German',
+    'Korean',
+    'Japanese',
+    'Chinese',
+    'Chinesesimp',
+    'Turkish',
+    'Slovak',
+    'Ukrainian',
+    'Latin',
+    'Bulgarian',
+    'Hungarian',
+]

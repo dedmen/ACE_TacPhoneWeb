@@ -9,6 +9,7 @@ import {
   type LayerSwitcherSection,
 } from './MapMarkers/LayerSwitcherRegistry';
 import LayerSwitcherStyle from './LayerSwitcherStyle.module.scss';
+import { t } from './i18n';
 
 interface LayerSwitcherProps {
   map: Map | null;
@@ -132,7 +133,7 @@ export function LayerSwitcher({
         type="button"
         className={`${LayerSwitcherStyle.layer_switcher_btn}${isOpen ? ` ${LayerSwitcherStyle.active}` : ''}`}
         onClick={onToggle}
-        title="Toggle Layers"
+        title={t('STR_ACE_Tacphone_Map_Layers_Toggle')}
         aria-expanded={isOpen}
       >
         🥞
@@ -141,7 +142,7 @@ export function LayerSwitcher({
       {/* The Dropdown Menu */}
       {isOpen && (
         <div className={LayerSwitcherStyle.layer_switcher_dropdown}>
-          <h4>Layers</h4>
+          <h4>{t('STR_3DEN_Layer_textPlural')}</h4>
           {plainLayers.map(renderRow)}
 
           {sectionList.map((section) => (

@@ -326,7 +326,7 @@ Optional locations:
 
 | Location | Purpose |
 | --- | --- |
-| `addons/tacphone/apps/SampleApp/stringtable.xml` | Localized `$STR_...` strings; only needed if you localize titles/messages. |
+| `stringtable.xml` in the add-on that owns the app | Localized keys for `t()`. This add-on's apps share `addons/tacphone/stringtable.xml`; an app from another add-on sets `ace_tacphone_stringtable` to its own file. See [`AGENTS/localization.md`](../AGENTS/localization.md). |
 | `script_component.hpp` + the matching web constant | A data-interest name (`<AppName>.<feature>`), e.g. `INTEREST_...` in SQF and a constant in the app, used with `window.TacPhone.interests.acquire()`. |
 | `description.ext` | Registration for mission/third-party apps instead of an addon folder. |
 | `dev-apps.local.json` / `TACPHONE_DEV_APPS` | Web folders that are not siblings of `ACE_TacPhone_Main`. |

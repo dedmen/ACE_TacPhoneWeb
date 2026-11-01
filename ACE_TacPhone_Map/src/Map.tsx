@@ -47,6 +47,7 @@ import {
     type MapViewDebugState,
     type MapViewTileStats,
 } from './MapMarkers/MapTestHooks';
+import { t } from './i18n';
 
 // The view's zoom-out limit must not depend on the user's tile size: a 512 px
 // tile would otherwise fit only half of the terrain into the viewport.
@@ -938,7 +939,7 @@ class App extends React.Component<AppProps,MapState> {
                             fontSize: 13,
                         }}
                     >
-                        Failed to load map terrain: {this.state.terrainError}
+                        {t('STR_ACE_Tacphone_Map_TerrainError')}: {this.state.terrainError}
                     </div>
                 )}
             </div>

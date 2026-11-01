@@ -18,6 +18,7 @@ import { mapCommandRegistry } from '../CommandRegistry';
 import type { TacPhoneNotification } from '@ace-tacphone/api';
 import type { MapApi } from '../api';
 import type { MarkerUpdate } from './MarkerLayer';
+import { t } from '../i18n';
 
 /** Marker names the app already knows about; a repeat upsert is only a move. */
 const knownMarkerNames = new Set<string>();
@@ -78,7 +79,7 @@ function markerLabel(type: unknown, text: unknown, shape: unknown): string {
     // Polyline marker text is data-only (it carries the measurement tag) and
     // must never leak into a user-facing notification.
     if (shape === 'POLYLINE') {
-        return 'Polyline';
+        return t('STR_ACE_Tacphone_Map_Marker_Polyline');
     }
 
     if (typeof text === 'string' && text !== '') {
@@ -89,7 +90,7 @@ function markerLabel(type: unknown, text: unknown, shape: unknown): string {
         return type;
     }
 
-    return 'Marker';
+    return t('STR_3DEN_Marker_textSingular');
 }
 
 /**
@@ -127,7 +128,7 @@ export function notifyMarkerUpsert(marker: MarkerUpdate, localPlayerId?: string)
     const label = markerLabel(type, text, shape);
 
     window.TacPhone.notifications.show({
-        title: "New map marker",
+        title: t('STR_ACE_Tacphone_Map_Marker_NewTitle'),
         body: label,
         app: "ACE_TacPhone_Map",
         data: { position: [x, y] },
@@ -146,7 +147,7 @@ export function notifyMarkerUpsert(marker: MarkerUpdate, localPlayerId?: string)
                         openIfMissing: true,
                         policy: "ask",
                     },
-                    "Focus map marker",
+                    t('STR_ACE_Tacphone_Map_Marker_FocusReason'),
                 );
 
                 const api = target?.api as Partial<MapApi> | undefined;

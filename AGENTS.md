@@ -23,6 +23,7 @@ its own file map, rules, and links to the deeper READMEs.
 | Host UI (`ACE_TacPhone_Main`): panels, layout, app loading, networking, inter-app, notifications | [`AGENTS/host.md`](AGENTS/host.md) |
 | Map app (`ACE_TacPhone_Map`), web UI or game-side handlers | [`AGENTS/map.md`](AGENTS/map.md) |
 | Messenger app (`MessagingApp`) and game-side messaging server | [`AGENTS/messaging.md`](AGENTS/messaging.md) |
+| Localization: stringtable layout, keys, `t()` usage, what not to translate | [`AGENTS/localization.md`](AGENTS/localization.md) |
 | App contract, packaging, creating an app, SampleApp | [`AGENTS/apps.md`](AGENTS/apps.md) |
 | Workspace commands, packages, build/release, tooling | [`AGENTS/build.md`](AGENTS/build.md) |
 | Development server, app discovery, VS Code debugging | [`AGENTS/dev.md`](AGENTS/dev.md) |
@@ -41,6 +42,13 @@ section in the same change.
   or `IndexedDB`. Use `window.TacPhone.networking` for everything. Open dev
   pages through `http://localhost:<port>`, never `127.0.0.1`; `IsLocalDev()`
   matches that exact prefix to load apps from the dev server.
+- All user-readable UI text goes through
+  `window.TacPhone.localization.t()`; keys live in
+  `addons/tacphone/stringtable.xml`. Do not hardcode fallback strings, call
+  `t()` at module scope, or translate units and game-supplied names. Keys use
+  UpperCamelCase tokens (`STR_ACE_Tacphone_Map_PanelTitle`); AI-translated
+  languages carry `ai-translated="true"` on their language tag. See
+  [`AGENTS/localization.md`](AGENTS/localization.md).
 - `StrictMode` is enabled in `ACE_TacPhone_Main/src/main.tsx` on purpose: React
   mounts components twice in development. App loading, panel-instance creation,
   layout restore, and every app lifecycle effect must stay idempotent. Never
@@ -59,9 +67,11 @@ section in the same change.
   instance or registered API. Route with `window.TacPhone.interApp.resolveAsync()`
   (it activates the panel and waits); native window popouts (`window.open`) are
   unsupported in the in-game browser.
-- **Builds**: use `npm run build:debug` during development. The root scripts copy
-  the outputs into the game `data/` folders. Only run the release `npm run build`
-  when the user explicitly asks for a release or shipping build.
+- **Builds**: use `npm run build:all` to build and install into the game (web
+  apps, PBO, native DLL). `npm run build:debug` is web-only (host + apps, copied
+  into the game `data/` folders; no PBO install) and is only for quick web
+  iteration. Only run the release `npm run build` when the user explicitly asks
+  for a release or shipping build.
 - `dist/`, `data/index.html`, and `apps/*/data/*.js` are generated, git-ignored
   artifacts. Never edit them by hand. Live runtime suites need the game and web
   host running (`npm run test:host`, `npm run test:messaging`, `npm run test:map`,
@@ -84,6 +94,8 @@ section in the same change.
 - [`AGENTS/map.md`](AGENTS/map.md) — Map app internals and game-side handlers.
 - [`AGENTS/messaging.md`](AGENTS/messaging.md) — Messenger internals and its
   game-side server.
+- [`AGENTS/localization.md`](AGENTS/localization.md) — stringtable layout,
+  key naming, `t()` usage, excluded text, bundled default table.
 - [`ACE_TacPhone_Main/README.md`](ACE_TacPhone_Main/README.md) — host overview,
   development and build.
 - [`ACE_TacPhone_Map/README.md`](ACE_TacPhone_Map/README.md) — Map features and usage.

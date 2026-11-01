@@ -7,6 +7,7 @@ import { chatStore } from '../state/ChatStore';
 import { DialogActions, FloatingDialog } from './FloatingDialog';
 import type { ParticipantSelection } from './ParticipantPicker';
 import { ParticipantPicker } from './ParticipantPicker';
+import { t } from '../i18n';
 import styles from './Dialogs.module.css';
 
 interface CreateRoomDialogProps {
@@ -70,7 +71,7 @@ export function CreateRoomDialog({
                 return;
             }
 
-            setError(result.error ?? 'Could not create the room.');
+            setError(result.error ?? t('STR_ACE_Tacphone_Messenger_CreateRoom_Failed'));
         } catch (caught) {
             setError(caught instanceof Error ? caught.message : String(caught));
         } finally {
@@ -80,13 +81,13 @@ export function CreateRoomDialog({
 
     return (
         <FloatingDialog
-            title="New chat"
-            subtitle={isDirect ? 'Direct message' : 'Group room'}
+            title={t('STR_ACE_Tacphone_Messenger_CreateRoom_Title')}
+            subtitle={isDirect ? t('STR_ACE_Tacphone_Messenger_Room_Direct') : t('STR_ACE_Tacphone_Messenger_CreateRoom_GroupRoom')}
             onClose={onClose}
             footer={(
                 <DialogActions>
                     <button type="button" className={styles.button} onClick={onClose} disabled={busy}>
-                        Cancel
+                        {t('STR_3DEN_Display3DEN_ControlsHint_Cancel')}
                     </button>
                     <button
                         type="button"
@@ -96,20 +97,24 @@ export function CreateRoomDialog({
                         }}
                         disabled={!canCreate}
                     >
-                        {busy ? 'Creating...' : isDirect ? 'Start chat' : 'Create room'}
+                        {busy
+                            ? t('str_network_creating')
+                            : isDirect
+                                ? t('STR_ACE_Tacphone_Messenger_CreateRoom_StartChat')
+                                : t('STR_ACE_Tacphone_Messenger_CreateRoom_CreateRoom')}
                     </button>
                 </DialogActions>
             )}
         >
             <div className={styles.field}>
                 <label className={styles.label} htmlFor="messenger-room-name">
-                    Room name (optional)
+                    {t('STR_ACE_Tacphone_Messenger_CreateRoom_NameLabel')}
                 </label>
                 <input
                     id="messenger-room-name"
                     className={styles.input}
                     value={name}
-                    placeholder="Leave empty for a direct message"
+                    placeholder={t('STR_ACE_Tacphone_Messenger_CreateRoom_NamePlaceholder')}
                     maxLength={64}
                     onChange={event => {
                         setName(event.currentTarget.value);
@@ -117,13 +122,13 @@ export function CreateRoomDialog({
                 />
             </div>
 
-            <div className={styles.sectionTitle}>Participants</div>
+            <div className={styles.sectionTitle}>{t('STR_ACE_Tacphone_Messenger_CreateRoom_Participants')}</div>
             <ParticipantPicker
                 players={candidates}
                 groups={groups}
                 selected={selection}
                 onChange={setSelection}
-                placeholder="Search players and groups"
+                placeholder={t('STR_ACE_Tacphone_Messenger_Picker_SearchPlaceholder')}
             />
 
             {error && <div className={styles.error}>{error}</div>}

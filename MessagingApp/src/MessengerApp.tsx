@@ -2,7 +2,6 @@ import type { JSX, RefObject } from 'react';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { AppProps, PanelInfo } from '@ace-tacphone/api';
 
-import { MESSENGER_DISPLAY_NAME } from './api';
 import { isDebugEnabled } from './debug';
 import { cancelShareRequest, getPendingShare, settleShare, subscribeShareRequests } from './dialogBus';
 import { useServerNow } from './format';
@@ -21,6 +20,7 @@ import { RoomList } from './components/RoomList';
 import { TargetSelectorDialog } from './components/TargetSelectorDialog';
 import { ChatIcon } from './components/icons';
 import { EmptyState } from './components/Ui';
+import { t } from './i18n';
 import theme from './styles/theme.module.css';
 import styles from './MessengerApp.module.css';
 
@@ -246,8 +246,8 @@ export function MessengerApp(props: AppProps): JSX.Element {
                             />
                         ) : (
                             <EmptyState
-                                title={narrow ? 'No conversation selected' : MESSENGER_DISPLAY_NAME}
-                                hint="Pick a room on the left to read and send messages."
+                                title={narrow ? t('STR_ACE_Tacphone_Messenger_App_NoConversation') : t('STR_ACE_Tacphone_Messenger_Title')}
+                                hint={t('STR_ACE_Tacphone_Messenger_App_PickRoom')}
                                 icon={<ChatIcon />}
                             />
                         )}

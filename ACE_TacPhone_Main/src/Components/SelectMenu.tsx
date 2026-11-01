@@ -10,6 +10,7 @@ import { createPortal } from 'react-dom';
 import type { SelectMenuProps, SelectOption } from '@ace-tacphone/api';
 
 import styles from './SelectMenu.module.css';
+import { t } from '../Backend/i18n';
 
 /** Space kept free around the menu inside the viewport. */
 const VIEWPORT_MARGIN = 8;
@@ -67,10 +68,10 @@ export function SelectMenu({
     value,
     options,
     onChange,
-    placeholder = 'Select…',
+    placeholder = t('str_3den_display3den_entitymenu_select_text'),
     disabled = false,
     searchable = false,
-    searchPlaceholder = 'Search…',
+    searchPlaceholder = t('str_3den_display3den_menubar_search_text'),
     size = 'normal',
     className,
     buttonClassName,
@@ -80,7 +81,7 @@ export function SelectMenu({
     renderValue,
     testId,
     ariaLabel,
-    emptyMessage = 'No matches',
+    emptyMessage = t('STR_ACE_Tacphone_Common_NoMatches'),
 }: SelectMenuProps): React.JSX.Element {
     const generatedId = useId();
     const triggerId = id ?? `select-menu-${generatedId.replace(/[^a-zA-Z0-9_-]/g, '')}`;
