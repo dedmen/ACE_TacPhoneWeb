@@ -67,6 +67,16 @@ namespace ArmaServerSide.Remote
                     true,
                     CancellationToken.None).ConfigureAwait(false);
             }
+            catch (WebSocketException)
+            {
+                // The relay connection is already going away; the receive loop
+                // reports the closure.
+                _socket.Abort();
+            }
+            catch (IOException)
+            {
+                _socket.Abort();
+            }
             catch (Exception ex)
             {
                 ExtensionLog.Error("Relay send failed", ex);
@@ -133,6 +143,14 @@ namespace ArmaServerSide.Remote
             catch (OperationCanceledException)
             {
                 // Expected on Stop()/mission restart.
+            }
+            catch (WebSocketException)
+            {
+                // Remote relay closed without a close handshake; normal disconnect.
+            }
+            catch (IOException)
+            {
+                // Socket reset; normal disconnect.
             }
             catch (Exception ex)
             {

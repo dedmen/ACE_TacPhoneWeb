@@ -62,8 +62,6 @@ export const CMD_PLAYER_LIST_STATE = 'PlayerList.State';
 export const CMD_ERROR = 'Error';
 /** Debug-only room snapshot used by the stored test suite. */
 export const CMD_DEBUG_ROOM_INFO = 'Debug.RoomInfo';
-/** Debug-only RemoteAccess bridge result used by the stored test suite. */
-export const CMD_DEBUG_REMOTE_ACCESS = 'Debug.RemoteAccess';
 
 /** Every push the game may send to the page. */
 export const PUSH_COMMANDS = {
@@ -75,7 +73,6 @@ export const PUSH_COMMANDS = {
     playerListState: CMD_PLAYER_LIST_STATE,
     error: CMD_ERROR,
     debugRoomInfo: CMD_DEBUG_ROOM_INFO,
-    debugRemoteAccess: CMD_DEBUG_REMOTE_ACCESS,
 } as const;
 
 export type PushCommand = (typeof PUSH_COMMANDS)[keyof typeof PUSH_COMMANDS];

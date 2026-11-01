@@ -32,7 +32,7 @@ is opened. It stays connected until `Stop` or mission end.
 | Pairing gate | `ACE_TacPhone_Main/src/Panels/RemotePairingScreen.tsx` |
 | In-game panel | `ACE_TacPhone_Main/src/MainApps/RemoteAccessPanel.tsx` |
 | QR shared module | `packages/tacphone-build/shared-modules.js` (specifier `qrcode-generator`; the host serves it through the internal `window.TacPhone.modules` map, not `window.QRCode`) |
-| SQF | `addons/tacphone/initSettings.inc.sqf`, `functions/fnc_remoteAccess.sqf`, `fnc_processBrowserRequest.sqf`, `XEH_postInit.sqf` |
+| SQF | `addons/tacphone/initSettings.inc.sqf`, `functions/fnc_remoteAccess.sqf`, `functions/fnc_debugRemoteAccess.sqf`, `fnc_processBrowserRequest.sqf`, `XEH_postInit.sqf` |
 
 ## Protocol (summary)
 
@@ -81,6 +81,9 @@ same for any new extension call.
 
 - `RemoteAccess.*` is accepted **only** from `_clientId == "local"`; a relay
   client must never mint codes, create shares, or kick peers.
+- The stored live tests use `Debug.RemoteAccess` instead. It is compiled only
+  with `__A3_DEBUG__` and requires the server-controlled `Allow debug mode`
+  setting; it forwards to the same `fnc_remoteAccess` code.
 - The share key/code is a bearer capability for the whole phone. Only render it
   in the panel; no HUD/startup toasts.
 - Relay traffic is plaintext at the server (TLS ends in nginx).
@@ -117,6 +120,10 @@ relay, not from the static host; the relay answers repeat requests from its
 - Dev: `npm run dev` + `wss://localhost:8001/ws` must still work.
 - Relay: open the panel, pair a phone on cellular, then create a share link and
   open it in a second browser; revoke and confirm both drop.
+- Automated: `npm run test:host -- --scenario remote-access` starts the relay,
+  mints a share link, connects real relay clients, verifies they reach the game
+  and checks dead-peer cleanup. It needs an `__A3_DEBUG__` build with the
+  server-controlled **Allow debug mode** setting.
 - Restart Arma: the same `hostId` must come back from `profileNamespace`.
 - Multiplayer clipboard: copy must work through ACE, not `copyToClipboard`.
 - Keepalive: the relay pings every 30 s and drops idle peers after 120 s. Both

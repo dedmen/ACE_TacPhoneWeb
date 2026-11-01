@@ -18,6 +18,7 @@ reference is [`ACE_TacPhone_Main/README.md`](../ACE_TacPhone_Main/README.md).
 | App discovery, loading, icons, failed apps | `src/Backend/AppDirectory.ts` |
 | App runtime dependencies, shim import map, facade adapters | `src/Backend/ModuleRegistry.ts` |
 | Host shared modules (`window.TacPhone.modules`) | `src/Backend/SharedModules.ts` |
+| SHA-256 for the file manifest (JS fallback for non-secure contexts) | `src/Backend/Sha256.ts` |
 | Transport selection and request/response | `src/Backend/Networking.ts` |
 | In-game `window.A3API` shim | `src/Backend/A3API.ts` |
 | Game → app message routing | `src/Backend/AppMessaging.ts`, `src/Backend/MessageRouter.ts` |
@@ -26,9 +27,10 @@ reference is [`ACE_TacPhone_Main/README.md`](../ACE_TacPhone_Main/README.md).
 | Global game info (multiplayer, player id, mission/terrain, version, debug) | `src/Backend/GameInfo.ts` |
 | Notifications | `src/Backend/Notifications.ts`, `src/Panels/NotificationHost.tsx` |
 | Audio (synthesised sounds, output device) | `src/Backend/Audio.ts` |
+| App options registry and Options panel | `src/Backend/AppOptions.ts`, `src/MainApps/OptionsPanel.tsx` |
 | Built-in `main` app | `src/MainApps/main.tsx` |
 | Error UI | `src/Panels/AppErrorBoundary.tsx` |
-| Styles | `src/App.css`, `src/index.css`, `src/Panels/*.module.css` |
+| Styles | `src/App.css`, `src/index.css`, `src/Panels/*.module.css`, `src/MainApps/*.module.css` |
 
 ## Boot
 
@@ -40,11 +42,12 @@ reference is [`ACE_TacPhone_Main/README.md`](../ACE_TacPhone_Main/README.md).
    `window.TacPhone.modules.get(...)`.
 2. Importing `src/Backend/Host.ts` builds `window.TacPhone` from the service
    singletons (lazy and idempotent; also installed on a microtask).
-3. `App.tsx` creates the flexlayout model, attaches it to `panelDirectory`,
-   loads the one-time `window.TacPhone.gameInfo` snapshot in parallel with the
-   layout, then loads apps through `window.TacPhone.apps.LoadAvailableApps()`,
-   and renders the app chooser panels. Game info is available before any app
-   `init()` runs.
+3. `App.tsx` creates the flexlayout model, loads option overrides saved in the
+   same layout envelope, attaches the model to `panelDirectory`, loads the
+   one-time `window.TacPhone.gameInfo` snapshot in parallel with the layout,
+   then loads apps through `window.TacPhone.apps.LoadAvailableApps()`, and
+   renders the app chooser panels. Game info and stored options are available
+   before any app `init()` runs.
 4. The app loader asks the game `{a:"main", c:"GetAvailableApps"}`, which returns
    `{ file, devfile, icon, dependencies }` per app. Every app's metadata is
    parsed first so all dependency declarations are known, then
@@ -66,15 +69,23 @@ first module is fetched and cannot be extended afterwards, but app dependencies
 are only known at runtime. The host page itself stays a native module on the
 native import map; only app and dependency modules go through `importShim`.
 
+When WebAssembly is unavailable (the in-game sandbox), the shim's module lexer
+falls back to an asm.js build, and V8 prints `Invalid asm.js: Unexpected token`
+once when it fails to validate it. The fallback then runs as plain JavaScript;
+the warning is benign and does not affect module loading.
+
 - `AppDirectory` parses every app's metadata (including the ordered
   `dependencies: [{ name, file }]`) before importing anything, then
   `moduleRegistry.registerDependencies()` starts one `LoadGameFileText` per
   declared dependency file in parallel, decodes and imports them in declaration
   order, and only then loads the apps (in parallel).
 - Identical file content is imported once: in-game the dedupe key is the
-  SHA-256 of the raw game file text (`crypto.subtle`), computed while the modules
-  load and awaited before the loader returns so the manifest is complete;
-  outside the game hashing is skipped and the normalized game path is the key.
+  SHA-256 of the raw game file text, computed while the modules load and awaited
+  before the loader returns so the manifest is complete. The in-game page is a
+  `blob:` URL, which is not a secure context, so `crypto.subtle` is unavailable
+  and `src/Backend/Sha256.ts` provides the hash; `crypto.subtle` is still
+  preferred where a secure context exists. Outside the game hashing is skipped
+  and the normalized game path is the key.
 - A dependency file is either plain ESM or `TACPHONE-BUNDLE:1:gzip:<base64>`;
   anything else fails that dependency.
 - The shim is seeded with the host shared-module import map, then gets one import
@@ -127,7 +138,10 @@ Declaration and authoring rules are in
   the plain JSON under `tacphone.layout`. In-game `App.tsx` gzips and
   base64-encodes the model and calls the game's `main` app with `SaveLayout`;
   `GetLayout` returns the string stored in `profileNamespace`. Both paths
-  coalesce changes into at most one save per 5 seconds.
+  coalesce layout changes into at most one save per 5 seconds; option changes
+  use a 300 ms window. The saved JSON is one envelope:
+  `{ ...model.toJson(), options: { <app>: { <key>: value } } }`. Old layouts
+  without `options` still load.
 - `largest()` ranks only the main layout, not floating popups, because areas of
   different layouts are not comparable.
 
@@ -245,6 +259,41 @@ engine logs one warning and becomes a no-op.
 Notification sounds and `setSinkId()` share the same context, so a sink change
 applies to every sound. Mirroring Arma's audio output device is future
 scaffolding: the game cannot report its device today (see `TODO.md`).
+
+## App options (`Backend/AppOptions.ts`, `MainApps/OptionsPanel.tsx`)
+
+`window.TacPhone.options` is the per-app option registry (`AppOptionsApi`).
+Apps register their schema once from `init()`:
+
+```ts
+window.TacPhone.options.register({
+    app: 'MyApp',
+    title: 'My App',
+    options: [
+        { key: 'fast', label: 'Fast mode', type: 'boolean', default: false },
+        {
+            key: 'detail', label: 'Detail', type: 'select', default: 'medium',
+            choices: [{ label: 'Low', value: 'low' }, { label: 'Medium', value: 'medium' }],
+        },
+    ],
+    presets: [
+        { id: 'weak', label: 'Weak device', values: { fast: true, detail: 'low' } },
+    ],
+});
+```
+
+- `register()` replaces an existing schema for the same app, so an app reload
+  is idempotent; stored values are kept.
+- Values are overrides only. `get()` falls back to the definition default;
+  `reset()` deletes overrides. `apply()` validates and writes several values in
+  one change notification and powers preset buttons.
+- `OptionsPanel` (`ACE_TacPhone_Options`, shipped by the built-in `main` app)
+  is the only UI. It is opened from the app chooser; there is no toolbar button.
+- Values are saved with the layout (see the persistence bullet above). Unknown
+  app values are preserved across reloads, so uninstalling an app does not lose
+  its settings.
+- Changes are live: subscribe with `options.onDidChange()` and re-read; panels
+  that are not mounted pick up the current values when they mount.
 
 ## Changing the public API
 

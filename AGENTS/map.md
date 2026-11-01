@@ -10,6 +10,7 @@ The full reference is [`ACE_TacPhone_Map/README.md`](../ACE_TacPhone_Map/README.
 | --- | --- |
 | Entry and panels | `src/main.tsx` (`ACE_TacPhone_Map`, `ACE_TacPhone_Map_Placeholder`) |
 | Map view/OpenLayers, panel lifecycle, `map` service | `src/Map.tsx` |
+| Map options schema and render settings | `src/MapOptions.ts` |
 | Marker map module (layers, interactions, polyline drawing) | `src/MapMarkers/MarkerModule.ts` |
 | Marker UI (dialog, context menu, polyline controls) | `src/MapMarkers/MarkerOverlay.tsx` |
 | Marker channel store shared with the layer switcher | `src/MapMarkers/MarkerChannelStore.ts` |
@@ -241,6 +242,30 @@ types (`MessengerApi`, `ChatObject`, `MessengerObjectRenderer`); it never import
   keeps the card, reports the marker as deleted, and offers a button that flies
   to `data.position`.
 
+
+## Options (`src/MapOptions.ts`)
+
+The Map registers its schema from `init()` and reads it through
+`src/MapOptions.ts`. Defaults reproduce the old hard-coded values.
+
+| Key | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `terrainQuality` | select `low`/`balanced`/`high` | `balanced` | maxZoom/minResolution: 4/0.5, 5/0.2, 6/0.1 |
+| `tileCacheSize` | select 16/48/128 | 48 | per-layer tile cache |
+| `pixelRatio` | select `device`/`1.5`/`1` | `device` | `Map.setPixelRatio()` cap |
+| `tilePreload` | select 0/1/2 | 0 | `TileLayer.preload` |
+| `smoothScaling` | boolean | true | canvas smoothing + `ImageTileSource.interpolate` |
+
+Presets `weak`, `balanced` and `desktop` are stateless shortcuts rendered as
+buttons; they call `options.apply()` and write the individual values.
+
+`Map.tsx` keeps the decoded terrain layers in `terrainSource` and builds tile
+layers in `rebuildTerrainLayers()`. Terrain tiles are fixed at 128 px; a larger
+tile delays the first visible terrain and does not pay for itself. Changing a
+tiling option disposes and rebuilds only the tile sources; the terrain SVG is not
+requested from the game again. `pixelRatio` is applied live with
+`Map.setPixelRatio()`. The view's zoom-out limit uses a fixed 256 px reference,
+so it stays independent of the fixed tile size.
 
 ## Data interest
 

@@ -31,6 +31,15 @@ namespace ArmaServerSide.Transports
                     true,
                     CancellationToken.None).ConfigureAwait(false);
             }
+            catch (WebSocketException)
+            {
+                // Peer disappeared; the receive/handler path reports the disconnect.
+                _socket.Abort();
+            }
+            catch (IOException)
+            {
+                _socket.Abort();
+            }
             catch (Exception ex)
             {
                 ExtensionLog.Error("Error sending message", ex);

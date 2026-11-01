@@ -10,6 +10,7 @@ the game through the TacPhone request protocol.
 | SQF request processor | `addons/tacphone/apps/map/functions/fnc_processBrowserRequest.sqf` |
 | App entry point | `src/main.tsx` |
 | App service types | `src/api.ts` |
+| Map options schema | `src/MapOptions.ts` |
 | Messenger marker sharing | `src/MessagingBridge.ts` |
 | Generated declarations | `dist/ace_tacphone_map.d.ts` |
 | Production bundle | `dist/ace_tacphone_map.js` |
@@ -60,20 +61,25 @@ name; if this folder is not next to `ACE_TacPhone_Main`, list it in the host's
 
 ## Build
 
-Build the app from this folder (or `npm run build -w ace-tacphone-map` at the
-workspace root):
+Build the app from this folder (or at the workspace root):
 
 ```powershell
-npm run build
+npm run build:debug    # default for development
+npm run build          # release, only when explicitly requested
 ```
 
-`npm run build` runs `tsc -b && vite build --mode release`, then
-`tacphone-build check-shared-imports` and `tacphone-build bundle-api-types`,
-which emit:
+The root `npm run build:debug` / `build:apps` scripts build every app and then
+run `scripts/copy-data.mjs`, which copies the outputs into the game `data\`
+folders. Building this package directly does not copy; use `npm run copy:data`
+from the workspace root if needed.
+
+Both modes run `tsc -b`, Vite, `tacphone-build check-shared-imports` and
+`tacphone-build bundle-api-types`, which emit:
 
 ```text
 dist/ace_tacphone_map.js
 dist/ace_tacphone_map.d.ts
+dist/ace_tacphone_ol.js
 ```
 
 `ace_tacphone_map.d.ts` is the public type surface for other apps (see
@@ -81,20 +87,13 @@ dist/ace_tacphone_map.d.ts
 `src/api.ts` by `tacphone-build bundle-api-types` and is self-contained (no
 imports). `package.json` points `types` at it.
 
-`npm run build` is a release build: the JavaScript is minified, no source map is
-embedded, and `console.log` / `console.debug` / `console.info` calls are removed.
-Use `npm run build:debug` for an unminified build with an inline source map;
-`console.warn` and `console.error` calls are kept in both builds.
+`npm run build:debug` is unminified with an inline source map. `npm run build` is
+a release build: minified, no source map, and `console.log` / `console.debug` /
+`console.info` calls are removed. Use release only for an explicit release
+request; `console.warn` and `console.error` stay in both builds.
 
-For local in-game testing, copy it to the path registered by
-`ace_tacphone_file`:
-
-```powershell
-Copy-Item dist\ace_tacphone_map.js ..\..\apps\map\data\ace_tacphone_map.js
-```
-
-Then open TacPhone in Arma. Release/build tooling must do the same copy; the
-generated files are git-ignored.
+`ace_tacphone_map.js` and `ace_tacphone_ol.js` are git-ignored in the game add-on;
+the copy script skips a destination whose target folder does not exist.
 
 ## App contract
 
@@ -107,6 +106,7 @@ import type {
 } from '@ace-tacphone/api';
 
 export const apiVersion: number; // TACPHONE_API_VERSION
+export function init(): void;    // registers the Map option schema
 export function GetTacPhoneApps(): AppPanelInfo[]
 export function OnMessageFromGame(message: object): void | Promise<void>
 ```
@@ -450,6 +450,31 @@ The Map app generates toast-style `window.TacPhone.notifications` for marker upd
 
 No notification-specific SQF code is needed; the game-side markers are handled by
 the request processor and command registry, while the host UI generates banners.
+
+## Options
+
+The Map registers its render options from `init()` through
+`src/MapOptions.ts`; they appear in the host **Options** panel under `Map`.
+Defaults match the previous hard-coded values.
+
+| Option | Default | Effect |
+| --- | --- | --- |
+| Terrain detail | Balanced | Zoom depth/finest resolution: Low 4/0.5, Balanced 5/0.2, High 6/0.1 |
+| Tile cache | 48 tiles | Tiles kept per SVG layer; the main memory knob |
+| Pixel ratio | Device | Caps `Map.setPixelRatio()` (1x is the fastest) |
+| Tile preload | 0 | `TileLayer.preload` levels |
+| Smooth scaling | on | Canvas smoothing and `ImageTileSource.interpolate` |
+
+The presets **Weak phone**, **Balanced** and **Desktop** are shortcuts: they call
+`window.TacPhone.options.apply()` with a set of individual values, so the option
+list remains the single source of truth.
+
+Changing a tiling option rebuilds only the OpenLayers tile sources from the
+already-decoded terrain layers; the terrain is not requested from the game
+again. Terrain tiles are fixed at **128 px**: smaller tiles show the first
+terrain much sooner, and the old 256/512 px choices delayed the first paint
+without a useful memory trade. `pixelRatio` changes apply live. The view's
+zoom-out limit uses a fixed 256 px reference, independent of the tile size.
 
 ## Data interest
 

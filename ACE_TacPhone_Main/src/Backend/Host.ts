@@ -22,6 +22,7 @@ import { interestRegistry } from "./InterestRegistry";
 import { notificationCenter } from "./Notifications";
 import { gameInfo } from "./GameInfo";
 import { audio } from "./Audio";
+import { appOptions } from "./AppOptions";
 import { CommandRegistry } from "./MessageRouter";
 import { PanelContext, usePanel } from "../Panels/PanelContext";
 import { compressAndToBase64, decompressFromBase64 } from "./Compression";
@@ -61,6 +62,7 @@ function createHost(): InternalTacPhoneHost {
         notifications: notificationCenter,
         audio,
         gameInfo,
+        options: appOptions,
         modules: sharedModules,
         utils: {
             CommandRegistry,

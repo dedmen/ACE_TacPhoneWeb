@@ -19,7 +19,6 @@ export const DEBUG_COMMANDS = {
     injectMessage: 'Messaging.Debug.InjectMessage',
     setAllowEnemyChat: 'Messaging.Debug.SetAllowEnemyChat',
     setPresence: 'Messaging.Debug.SetPresence',
-    setLocalDisplayMode: 'Messaging.Debug.SetLocalDisplayMode',
     saveState: 'Messaging.Debug.SaveState',
     loadState: 'Messaging.Debug.LoadState',
     status: 'Messaging.Debug.Status',
@@ -284,19 +283,20 @@ export class FakePlayers {
         return push;
     }
 
-    /** Simulates HUD/DIALOG/CLOSED/HIDDEN on the local machine. */
+    /** Simulates HUD/DIALOG/CLOSED/HIDDEN through the Main debug command. */
     async setLocalDisplayMode(mode) {
         await this.status();
 
+        const command = 'Debug.SetLocalDisplayMode';
         const result = await this.client.request(
-            DEBUG_COMMANDS.setLocalDisplayMode,
+            command,
             { mode },
-            { timeout: this.timeout },
+            { timeout: this.timeout, app: 'main' },
         );
 
         if (!result?.ok) {
             throw new Error(
-                `${DEBUG_COMMANDS.setLocalDisplayMode} failed for "${mode}": ` +
+                `${command} failed for "${mode}": ` +
                     `${result?.error || 'unknown error'}`,
             );
         }

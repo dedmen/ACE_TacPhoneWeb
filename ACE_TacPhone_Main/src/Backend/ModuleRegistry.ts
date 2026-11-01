@@ -22,6 +22,7 @@ import {
 
 import { decompressFromBase64 } from "./Compression";
 import { IsArma, networking } from "./Networking";
+import { sha256Hex as sha256HexJs } from "./Sha256";
 
 /** One dependency as returned by `GetAvailableApps`. */
 export interface DependencyDeclaration {
@@ -171,21 +172,26 @@ function buildAdapterSource(
 /**
  * SHA-256 of the raw game file text, lowercase hex.
  *
- * Only the in-game browser computes hashes; external pages skip them and dedupe
- * by path. There is no pure-JS fallback: when `crypto.subtle` is unavailable the
- * file is simply left out of the manifest and the relay caches it on demand.
+ * `crypto.subtle` is only available in a secure context, and the in-game page is
+ * loaded from a `blob:` URL, so the in-game browser always takes the JavaScript
+ * fallback in `Sha256.ts`. When `crypto.subtle` is available it is preferred.
+ * Returns undefined only if hashing itself fails; the caller leaves that file out
+ * of the manifest and loading continues.
  */
 async function sha256Hex(text: string): Promise<string | undefined> {
     const subtle = globalThis.crypto?.subtle;
 
-    if (!subtle) {
-        console.warn("TacPhone: crypto.subtle is unavailable; a game file will not be hashed.");
-        return undefined;
+    if (subtle) {
+        try {
+            const digest = await subtle.digest("SHA-256", new TextEncoder().encode(text));
+            return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+        } catch (error) {
+            console.warn("TacPhone: crypto.subtle hashing failed; using the JavaScript fallback.", error);
+        }
     }
 
     try {
-        const digest = await subtle.digest("SHA-256", new TextEncoder().encode(text));
-        return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+        return sha256HexJs(text);
     } catch (error) {
         console.warn("TacPhone could not hash a game file:", error);
         return undefined;

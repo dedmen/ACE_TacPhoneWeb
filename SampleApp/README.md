@@ -115,8 +115,8 @@ served by Vite but never appears in the TacPhone app chooser.
 ## Build
 
 ```powershell
-npm run build
-npm run build:debug   # unminified + inline source maps
+npm run build:debug   # default for development: unminified + inline source maps
+npm run build         # release, only when explicitly requested
 ```
 
 Both run `tsc -b`, `vite build`, the shared-import check, and
@@ -129,6 +129,11 @@ tacphone-build check-shared-imports
 tacphone-build bundle-api-types --app . --entry src/api.ts --name SampleApp
 ```
 
+The root `npm run build:debug` / `build:apps` scripts also run
+`scripts/copy-data.mjs`, which copies the bundle into the game `data\` folder.
+Building this package directly does not copy; use `npm run copy:data` from the
+workspace root if needed.
+
 The result is one self-contained ES module plus the generated service
 declarations:
 
@@ -137,25 +142,21 @@ dist/ace_tacphone_sampleapp.js     # the app bundle
 dist/ace_tacphone_sampleapp.d.ts   # generated from src/api.ts, package "types"
 ```
 
-`npm run build` is a release build: minified, no source map, and
-`console.log` / `console.debug` / `console.info` calls are stripped.
-`console.warn` and `console.error` are kept in both builds, so keep warnings
-useful.
+`npm run build:debug` is unminified with an inline source map. `npm run build` is
+a release build: minified, no source map, and `console.log` / `console.debug` /
+`console.info` calls are stripped. Use release only for an explicit release
+request; `console.warn` and `console.error` are kept in both builds, so keep
+warnings useful.
 
 `bundle-api-types` emits declarations for `src/api.ts` only, fails when the
 result is empty or still imports another module, and writes the file named by
 the package `types` field. Never edit `dist/*.d.ts` by hand: change `src/api.ts`
 and rebuild.
 
-Copy the JS output to the path registered by `ace_tacphone_file`:
-
-```powershell
-Copy-Item dist\ace_tacphone_sampleapp.js ..\..\apps\SampleApp\data\ace_tacphone_sampleapp.js
-```
-
-The copy is required for in-game use: `addons/tacphone/addon.toml` excludes
-`websource/**`, so nothing under `websource/` ends up in the PBO. Release and
-build tooling must perform the same copy; the generated file is git-ignored.
+The root build scripts copy the JS output to the path registered by
+`ace_tacphone_file`. The copy is required for in-game use:
+`addons/tacphone/addon.toml` excludes `websource/**`, so nothing under
+`websource/` ends up in the PBO. The generated file is git-ignored.
 
 ## The sample request flow
 

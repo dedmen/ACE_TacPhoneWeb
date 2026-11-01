@@ -104,14 +104,16 @@ test/
 
 - `new FakePlayers(client)` calls `Messaging.Debug.Status` before every debug
   scenario. `addFakePlayers()`, `reset()`, `injectMessage()`,
-  `setAllowEnemyChat()`, `setPresence()`, `setLocalDisplayMode()`,
-  `saveState()` and `loadState()` wrap the SQF commands.
+  `setAllowEnemyChat()`, `setPresence()`, `saveState()` and `loadState()` wrap
+  the SQF commands. `setLocalDisplayMode()` calls the Main app's
+  `Debug.SetLocalDisplayMode`.
 - Fake fixtures match `fnc_debugAddFakePlayers.sqf`: `fake_1` … `fake_8`,
   `fake_grp_1` (WEST), `fake_grp_2` (WEST), `fake_grp_3` (EAST), with their
   deterministic names, colours and presence.
 - `createGroupRoom`, `createDirectRoom`, `sendMessage`, `forwardMessage` and
   `sync` wait for the relevant push, because relayed requests do not return the
-  server result (see below).
+  server result (see below). `setLocalDisplayMode()` calls the Main app's
+  `Debug.SetLocalDisplayMode` command, because display mode belongs to the host.
 
 `lib/assertions.mjs` provides `assert`/`ok`/`equal`/`deepEqual`/`includes`/
 `isString`/`isNumber`/`isBoolean`/`oneOf`, readable `expected`/`actual` output,
@@ -137,16 +139,20 @@ commands and the wire protocol.
 
 ## Protocol notes and known mismatches found while writing the suite
 
+Remote Access / relay share-link coverage lives in the host suite at
+`ACE_TacPhone_Main/test/scenarios/remote-access.test.mjs`; it is not a Messenger
+protocol concern.
+
 - **Relayed commands answer `{ ok: true, pending: true }` immediately.** Only
-  `Hello`, `SetClientPresence`, `Messaging.Debug.Status` and
-  `Messaging.Debug.SetLocalDisplayMode` are handled locally. `GetPlayerList`,
+  `Hello`, `SetClientPresence` and `Messaging.Debug.Status` are handled locally.
+  `GetPlayerList`,
   `CreateRoom`, `SendMessage`, `JoinRoom`, etc. return `pending` and deliver
   their real result through pushes (`PlayerList.State`, `Room.Upsert`,
   `Message.New`, `ChatState.*`, `Error`). The tests therefore assert on pushes,
   not request replies.
-- **Debug commands other than `Status` and `SetLocalDisplayMode` are relayed.**
-  Their server-side `{ ok, ... }` result is not sent back to the page either;
-  the helpers observe the resulting push instead.
+- **The remaining Messaging debug commands are relayed.** Their server-side
+  `{ ok, ... }` result is not sent back to the page either; the helpers observe
+  the resulting push instead.
 - **`SendMessage` does not return `messageId` in the request reply.** It arrives
   in the `Message.New` echo keyed by `clientMessageId`.
 - **The WebSocket host rejects handshakes without an allowed `Origin`.** Node's

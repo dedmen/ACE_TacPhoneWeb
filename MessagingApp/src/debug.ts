@@ -32,11 +32,13 @@ export const DEBUG_COMMANDS = {
     groupUnit: 'Messaging.Debug.GroupUnit',
     setAllowEnemyChat: 'Messaging.Debug.SetAllowEnemyChat',
     setPresence: 'Messaging.Debug.SetPresence',
-    setLocalDisplayMode: 'Messaging.Debug.SetLocalDisplayMode',
     saveState: 'Messaging.Debug.SaveState',
     loadState: 'Messaging.Debug.LoadState',
     status: 'Messaging.Debug.Status',
 } as const;
+
+/** Main-app debug command; display modes belong to the host, not Messaging. */
+export const MAIN_DEBUG_SET_LOCAL_DISPLAY_MODE = 'Debug.SetLocalDisplayMode';
 
 export type DebugCommand = (typeof DEBUG_COMMANDS)[keyof typeof DEBUG_COMMANDS];
 
@@ -61,14 +63,15 @@ export interface MessagingDebugStatus {
  * throws on a failed request; callers are diagnostics, not user flows.
  */
 export async function debugRequest<T = unknown>(
-    command: DebugCommand,
+    command: string,
     payload: Record<string, unknown> = {},
+    app: string = MESSAGING_APP_NAME,
 ): Promise<T | undefined> {
     if (!isDebugEnabled()) return undefined;
 
     try {
         return await window.TacPhone.networking.Request({
-            a: MESSAGING_APP_NAME,
+            a: app,
             c: command,
             ...payload,
         }) as unknown as T;
@@ -104,9 +107,9 @@ export function debugSetPresence(uid: string, presence: ChatPresence): Promise<u
     return debugRequest(DEBUG_COMMANDS.setPresence, { uid, presence });
 }
 
-/** Simulates a local phone display mode (HUD/DIALOG/CLOSED/HIDDEN). */
+/** Simulates a local phone display mode (HUD/DIALOG/CLOSED/HIDDEN) through Main. */
 export function debugSetLocalDisplayMode(mode: DebugDisplayMode): Promise<unknown> {
-    return debugRequest(DEBUG_COMMANDS.setLocalDisplayMode, { mode });
+    return debugRequest(MAIN_DEBUG_SET_LOCAL_DISPLAY_MODE, { mode }, 'main');
 }
 
 /** Exercises the disabled persistence scaffolding. */

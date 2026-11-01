@@ -37,31 +37,30 @@ Discovery uses `package.json`:
 ## Build
 
 ```powershell
-npm run build -w ace-tacphone-messaging
-npm run build:debug -w ace-tacphone-messaging   # unminified + inline source maps
+npm run build:debug -w ace-tacphone-messaging   # default for development
+npm run build -w ace-tacphone-messaging         # release, only when explicitly requested
 ```
 
 Both run `tsc -b`, `vite build`, the shared-import check and
 `tacphone-build bundle-api-types`. The result is one self-contained ESM bundle
-plus the generated service declarations. Copy the JS for in-game use:
+plus the generated service declarations.
 
-```powershell
-Copy-Item MessagingApp\dist\ace_tacphone_messaging.js ..\apps\messaging\data\ace_tacphone_messaging.js
-```
+The root `npm run build:debug` / `build:apps` scripts also run
+`scripts/copy-data.mjs`, which copies the JS into `apps\messaging\data\`.
+Building this package directly does not copy; use `npm run copy:data` from the
+workspace root if needed. The output path is already in the ACE3 root
+`.gitignore`.
 
-The output path is already in the ACE3 root `.gitignore`.
-
-For a full release build run these from `websource`; the Map and host copies are
-included because the Messenger contract depends on the current Map service:
+For a full development build, run this from `websource`; the script builds every
+app and copies all game-side outputs:
 
 ```powershell
 npm run check
-npm run build
+npm run build:debug
 npm run check:importmap
-Copy-Item MessagingApp\dist\ace_tacphone_messaging.js ..\apps\messaging\data\ace_tacphone_messaging.js
-Copy-Item ACE_TacPhone_Map\dist\ace_tacphone_map.js ..\apps\map\data\ace_tacphone_map.js
-Copy-Item ACE_TacPhone_Main\dist\index.html ..\data\index.html
 ```
+
+Use `npm run build` only when the user explicitly asks for a release build.
 
 Then run `hemtt check` and `hemtt build --no-bin` from the ACE3 root. The PBO
 contains `apps\messaging\data\ace_tacphone_messaging.js` and registers the

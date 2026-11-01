@@ -2,6 +2,7 @@ import React from "react";
 import { TACPHONE_API_VERSION } from "@ace-tacphone/api";
 import type { AppPanelInfo, AppProps, PanelInfo, TacPhoneHost } from "@ace-tacphone/api";
 import { RemoteAccessPanel } from "./RemoteAccessPanel";
+import { OptionsPanel } from "./OptionsPanel";
 import { compressAndToBase64 } from "../Backend/Compression";
 
 // These are apps included in TacPhone, even if no other apps are loaded. Core functionality like Notifications and Settings
@@ -13,6 +14,7 @@ export function GetTacPhoneApps(): Array<AppPanelInfo> {
   return [
     ...devApps(),
     remoteAccessPanel,
+    optionsPanel,
   ]
 };
 
@@ -120,6 +122,15 @@ const remoteAccessPanel: AppPanelInfo = {
   id: "ACE_TacPhone_RemoteAccess",
   GetDefaultTitle: () => "Remote Access",
   appComponent: RemoteAccessPanel,
+};
+
+const OPTIONS_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23ffffff' d='M19.14 12.94a7.07 7.07 0 0 0 .06-.94 7.07 7.07 0 0 0-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.61-.22l-2.39.96a7.3 7.3 0 0 0-1.62-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.58.24-1.12.55-1.62.94l-2.39-.96a.5.5 0 0 0-.61.22L2.63 8.84a.5.5 0 0 0 .12.64l2.03 1.58c-.04.31-.06.62-.06.94s.02.63.06.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.14.24.42.34.69.22l2.39-.96c.5.39 1.04.7 1.62.94l.36 2.54c.05.24.25.42.5.42h3.84c.25 0 .45-.18.5-.42l.36-2.54c.58-.24 1.12-.55 1.62-.94l2.39.96c.27.12.55.02.69-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z'/%3E%3C/svg%3E";
+
+const optionsPanel: AppPanelInfo = {
+  id: "ACE_TacPhone_Options",
+  GetDefaultTitle: () => "Options",
+  GetTacPhoneIcon: () => OPTIONS_ICON,
+  appComponent: OptionsPanel,
 };
 
 function devApps(): Array<AppPanelInfo> {

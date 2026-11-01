@@ -1,0 +1,505 @@
+/* Options panel: app list on the left, options on the right.
+   Tuned for the small in-game phone viewport first; desktop only widens the
+   sidebar and spacing. The panel scrolls internally (the host document never
+   scrolls). */
+
+.Panel {
+    box-sizing: border-box;
+    width: 100%;
+    height: 100%;
+
+    display: flex;
+    overflow-x: auto;
+    overflow-y: hidden;
+    container-type: inline-size;
+
+    color: #f2f2f5;
+    background:
+        radial-gradient(120% 70% at 10% 0%, #333950 0%, rgba(51, 57, 80, 0) 60%),
+        linear-gradient(165deg, #1c1e2b 0%, #161722 55%, #111219 100%);
+    font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* --- Sidebar ------------------------------------------------------------ */
+
+.Sidebar {
+    flex: 0 0 128px;
+    min-width: 0;
+    box-sizing: border-box;
+    padding: 10px 6px;
+
+    position: sticky;
+    left: 0;
+    z-index: 1;
+
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    overflow-y: auto;
+
+    background-color: rgba(10, 11, 17, 0.35);
+    border-right: 1px solid rgba(255, 255, 255, 0.07);
+
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
+
+.SidebarTitle {
+    padding: 4px 8px 8px;
+
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: #8d93a6;
+}
+
+.SidebarEmpty {
+    padding: 8px;
+
+    font-size: 11px;
+    line-height: 1.35;
+    color: #8d93a6;
+}
+
+.AppButton {
+    width: 100%;
+    min-width: 0;
+    padding: 7px 7px;
+
+    display: flex;
+    align-items: center;
+    gap: 8px;
+
+    font: inherit;
+    font-size: 12px;
+    color: #d7d9e3;
+    text-align: left;
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.AppButton:hover {
+    background-color: rgba(255, 255, 255, 0.07);
+}
+
+.AppButtonSelected,
+.AppButtonSelected:hover {
+    color: #fff;
+    background-color: rgba(122, 167, 255, 0.2);
+    border-color: rgba(122, 167, 255, 0.42);
+}
+
+.AppIcon {
+    flex: 0 0 auto;
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    object-fit: cover;
+    overflow: hidden;
+}
+
+.Monogram {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    font-size: 12px;
+    font-weight: 600;
+    color: #fff;
+    background: linear-gradient(150deg, #4a5378, #2b3049);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.AppLabel {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* --- Content ------------------------------------------------------------ */
+
+.Content {
+    flex: 1 1 auto;
+    min-width: 200px;
+    box-sizing: border-box;
+    padding: 14px 16px 28px;
+    overflow-y: auto;
+
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+}
+
+.Header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 14px;
+}
+
+.Title {
+    margin: 0;
+
+    font-size: 17px;
+    font-weight: 600;
+    color: #f2f2f5;
+    overflow-wrap: anywhere;
+}
+
+.ResetButton,
+.PresetButton {
+    flex: 0 0 auto;
+    padding: 5px 10px;
+
+    font: inherit;
+    font-size: 12px;
+    color: #e9e9ef;
+    background-color: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    cursor: pointer;
+}
+
+.ResetButton:hover,
+.PresetButton:hover {
+    background-color: rgba(255, 255, 255, 0.15);
+    border-color: rgba(255, 255, 255, 0.26);
+}
+
+.ResetButton:focus-visible,
+.PresetButton:focus-visible,
+.AppButton:focus-visible,
+.Select:focus-visible,
+.SelectOption:focus-visible,
+.NumberInput:focus-visible,
+.TextInput:focus-visible,
+.Range:focus-visible,
+.Checkbox:focus-visible {
+    outline: 2px solid #7aa7ff;
+    outline-offset: 1px;
+}
+
+/* --- Presets ------------------------------------------------------------ */
+
+.Presets {
+    margin-bottom: 16px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.SectionLabel {
+    margin-bottom: 8px;
+
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.9px;
+    text-transform: uppercase;
+    color: #8d93a6;
+}
+
+.PresetRow {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+}
+
+.PresetButtonActive,
+.PresetButtonActive:hover {
+    color: #fff;
+    background-color: rgba(122, 167, 255, 0.26);
+    border-color: rgba(122, 167, 255, 0.55);
+}
+
+/* --- Option rows -------------------------------------------------------- */
+
+.OptionsList {
+    display: flex;
+    flex-direction: column;
+}
+
+.OptionRow {
+    padding: 11px 0;
+
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.OptionRow:last-child {
+    border-bottom: 0;
+}
+
+.OptionText {
+    min-width: 0;
+}
+
+.OptionLabel {
+    display: block;
+    font-size: 13px;
+    font-weight: 500;
+    color: #e9e9ef;
+    overflow-wrap: anywhere;
+}
+
+.OptionDescription {
+    margin-top: 2px;
+
+    font-size: 11px;
+    line-height: 1.35;
+    color: #8d93a6;
+    overflow-wrap: anywhere;
+}
+
+.OptionControl {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+}
+
+/* --- Widgets ------------------------------------------------------------ */
+
+.Checkbox {
+    width: 18px;
+    height: 18px;
+    margin: 0;
+    accent-color: #7aa7ff;
+    cursor: pointer;
+}
+
+.SelectWrap {
+    width: 170px;
+    max-width: 170px;
+    display: flex;
+    flex-direction: column;
+}
+
+.Select {
+    width: 100%;
+    height: 30px;
+    padding: 0 8px;
+    box-sizing: border-box;
+
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+
+    font: inherit;
+    font-size: 12px;
+    color: #f2f2f5;
+    text-align: left;
+    background-color: #232737;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 7px;
+    cursor: pointer;
+}
+
+.Select::after {
+    content: "";
+    flex: 0 0 auto;
+    width: 0;
+    height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid #c7cad6;
+}
+
+.SelectValue {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.SelectMenu {
+    margin-top: 4px;
+    padding: 3px;
+    max-height: 190px;
+    overflow-y: auto;
+
+    display: flex;
+    flex-direction: column;
+
+    background-color: #232737;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 7px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+}
+
+.SelectOption {
+    width: 100%;
+    padding: 6px 8px;
+    box-sizing: border-box;
+
+    font: inherit;
+    font-size: 12px;
+    color: #f2f2f5;
+    text-align: left;
+    background: none;
+    border: 0;
+    border-radius: 5px;
+    cursor: pointer;
+}
+
+.SelectOption:hover {
+    background-color: rgba(255, 255, 255, 0.09);
+}
+
+.SelectOptionSelected,
+.SelectOptionSelected:hover {
+    color: #fff;
+    background-color: rgba(122, 167, 255, 0.3);
+}
+
+.NumberRow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.Range {
+    width: 104px;
+    accent-color: #7aa7ff;
+    cursor: pointer;
+}
+
+.NumberValue {
+    min-width: 44px;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    color: #c7cad6;
+    text-align: right;
+    white-space: nowrap;
+}
+
+.NumberInput,
+.TextInput {
+    height: 30px;
+    padding: 0 8px;
+    box-sizing: border-box;
+
+    font: inherit;
+    font-size: 12px;
+    color: #f2f2f5;
+    background-color: rgba(255, 255, 255, 0.07);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 7px;
+    outline: none;
+}
+
+.NumberInput {
+    width: 74px;
+}
+
+.TextInput {
+    width: 170px;
+}
+
+.NumberInput:focus,
+.TextInput:focus,
+.Select:focus {
+    background-color: rgba(255, 255, 255, 0.11);
+    border-color: #7aa7ff;
+    box-shadow: 0 0 0 3px rgba(122, 167, 255, 0.15);
+}
+
+/* --- Empty state -------------------------------------------------------- */
+
+.Empty {
+    padding: 40px 8px;
+    text-align: center;
+}
+
+.EmptyTitle {
+    font-size: 15px;
+    font-weight: 600;
+    color: #dedfe8;
+}
+
+.EmptyHint {
+    margin-top: 6px;
+    font-size: 12px;
+    line-height: 1.4;
+    color: #8d93a6;
+}
+
+/* --- Larger screens ----------------------------------------------------- */
+
+@media (min-width: 480px) {
+    .Sidebar {
+        flex-basis: 156px;
+        padding: 12px 8px;
+    }
+
+    .Content {
+        padding: 18px 22px 32px;
+    }
+
+    .SelectWrap {
+        width: 210px;
+        max-width: 210px;
+    }
+
+    .TextInput {
+        width: 220px;
+    }
+
+    .Range {
+        width: 140px;
+    }
+}
+
+/* --- Compact panel -------------------------------------------------------
+   Container queries follow the panel width, not the viewport. A narrow split
+   collapses the sidebar to an icon rail and stacks each option vertically so
+   labels cannot be squeezed to one character per line. */
+
+@container (max-width: 520px) {
+    .Sidebar {
+        flex-basis: 48px;
+        padding: 10px 4px;
+    }
+
+    .SidebarTitle,
+    .AppLabel {
+        display: none;
+    }
+
+    .AppButton {
+        justify-content: center;
+        gap: 0;
+        padding: 7px 4px;
+    }
+
+    .Content {
+        padding: 12px 12px 24px;
+    }
+
+    .OptionRow {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 7px;
+    }
+
+    .OptionControl {
+        justify-content: flex-start;
+    }
+
+    .SelectWrap,
+    .TextInput {
+        width: 100%;
+        max-width: none;
+    }
+}

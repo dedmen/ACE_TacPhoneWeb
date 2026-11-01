@@ -134,7 +134,11 @@ resolve only once and would have to buffer every chunk.
 
 Built-in `main` commands include `GetAvailableApps`, `GetGameInfo`, `GetFile`,
 `GetPlayerPos`, `GetTime`, `Interest.Set`, `Interest.Clear`, `GetLayout`,
-`SaveLayout`, and the terrain/texture proxies. `GetGameInfo` is the one-time
+`SaveLayout`, and the terrain/texture proxies. `Debug.Status`,
+`Debug.SetLocalDisplayMode` and `Debug.RemoteAccess` are test-only bridges for
+the live host suite, compiled only in `__A3_DEBUG__` builds and requiring the
+`Allow debug mode` setting; they are not part of the app-facing contract.
+`GetGameInfo` is the one-time
 mission snapshot for the host (`multiplayer`, `playerId`, `missionName`,
 `terrainName` via `worldName`, `gameVersion`, and a debug flag that requires both
 `__A3_DEBUG__` and the `allowDebug` CBA setting). `RequestTexture` checks

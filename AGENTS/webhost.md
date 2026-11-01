@@ -60,7 +60,9 @@ commas and must stay one argument.
   the sender connection id injected as `s`. The game replies with `SendTo` and
   `{k, d}`; game pushes use `{k: "command", d: {...}}`.
 - On disconnect the extension calls the `Disconnect` callback so the game can
-  drop that client's data interests.
+  drop that client's data interests. A peer that disappears without a close
+  frame (killed browser/tab, dropped link) is a normal disconnect; the handler
+  treats `WebSocketException`/`IOException` as such instead of logging an error.
 - The relay client (`Remote/`) is a single outbound `wss://` opened on demand by
   `RemoteAccess.Start`. Relay peers get server-generated ids and share the same
   `SendTo` / `Disconnect` semantics as LAN sockets. When the relay assigns a new

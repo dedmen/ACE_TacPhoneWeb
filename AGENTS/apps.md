@@ -51,10 +51,47 @@ boundary. Neither stops the other apps from loading.
 | `interApp` | Register and resolve app services. |
 | `interests` | Acquire/release demand-driven data interests. |
 | `notifications` | Toast banners. |
+| `options` | Register per-app options shown in the host Options panel, and read/write their values. |
 | `utils` | `CommandRegistry`, `PanelContext`, `usePanel()`, `compressAndToBase64`, `decompressFromBase64`. |
 
 Panel components receive the live instance as `props.panel`; deeper components
 can use `window.TacPhone.utils.usePanel()` or `PanelContext`.
+
+## App options
+
+Apps can expose a small option schema. The host renders it in the built-in
+Options panel (`ACE_TacPhone_Options`), reached from the app chooser:
+
+```ts
+export function init(): void {
+    window.TacPhone.options.register({
+        app: 'MyApp',
+        title: 'My App',
+        options: [
+            { key: 'fast', label: 'Fast mode', type: 'boolean', default: false },
+            {
+                key: 'detail', label: 'Detail', type: 'select', default: 'medium',
+                choices: [{ label: 'Low', value: 'low' }, { label: 'Medium', value: 'medium' }],
+            },
+        ],
+        presets: [
+            { id: 'weak', label: 'Weak device', values: { fast: true, detail: 'low' } },
+        ],
+    });
+}
+```
+
+- Register from `init()`, not from a panel mount; registering twice replaces the
+  previous schema for the same `app` and keeps stored values.
+- Supported widget types: `boolean`, `number`, `select` and `text`. Number
+  options accept `min`, `max`, `step` and `unit`; select options need `choices`
+  with typed values.
+- `get(app, key)` returns the effective value (stored override or default).
+  `set()` validates/clamps one value; `apply()` writes several at once (presets).
+  `reset()` restores defaults.
+- Subscriptions: `onDidChange(change => { ... })`; read the new value again.
+- Values are page-local and persist with the host layout. They are shared by
+  every panel of the app on the page; there is no per-panel option storage.
 
 ## Requests and messages
 

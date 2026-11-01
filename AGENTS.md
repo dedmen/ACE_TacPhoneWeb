@@ -58,9 +58,20 @@ section in the same change.
   instance or registered API. Route with `window.TacPhone.interApp.resolveAsync()`
   (it activates the panel and waits); native window popouts (`window.open`) are
   unsupported in the in-game browser.
+- **Builds**: use `npm run build:debug` during development. The root scripts copy
+  the outputs into the game `data/` folders. Only run the release `npm run build`
+  when the user explicitly asks for a release or shipping build.
 - `dist/`, `data/index.html`, and `apps/*/data/*.js` are generated, git-ignored
-  artifacts. Never edit them by hand. There are no tests; release builds strip
-  `console.log/debug/info` and keep `warn`/`error`. Node 20.19+ or 22.12+.
+  artifacts. Never edit them by hand. Live runtime suites need the game and web
+  host running (`npm run test:host`, `npm run test:messaging`); release builds
+  strip `console.log/debug/info` and keep `warn`/`error`. Node 20.19+ or 22.12+.
+- **Test analysis**: Automated tests must be deterministic and headless-capable.
+  Prefer DOM, attribute, geometry and `getComputedStyle()` assertions over pixel
+  inspection. OCR/image analysis is allowed only when it runs locally on the test
+  machine without a cloud/external AI service. If AI image analysis is needed, a
+  `@LocalAgentHigh` subagent may be used only on the maintainer's machine, and
+  only after asking the user first; tests must not depend on that agent for normal
+  pass/fail or on other developers' machines.
 
 ## Deeper reference
 

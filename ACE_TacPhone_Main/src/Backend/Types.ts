@@ -7,6 +7,13 @@
 export type {
     AudioApi,
     AudioDeviceInfo,
+    AppOptionChange,
+    AppOptionChoice,
+    AppOptionDefinition,
+    AppOptionKind,
+    AppOptionPreset,
+    AppOptionsApi,
+    AppOptionsRegistration,
     InterAppRegistration,
     InterAppRegistry,
     AppCatalog,

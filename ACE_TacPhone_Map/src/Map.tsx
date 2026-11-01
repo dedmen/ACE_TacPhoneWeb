@@ -21,15 +21,20 @@ import { LayerSwitcher } from './LayerSwitcher';
 import { MarkerOverlay, type MarkerOverlayHandle } from './MapMarkers/MarkerOverlay';
 import { LayerSwitcherRegistry } from './MapMarkers/LayerSwitcherRegistry';
 import {
+    onMapRenderSettingsChanged,
+    readMapRenderSettings,
+    type MapRenderSettings,
+} from './MapOptions';
+import {
     MAP_SERVICE,
     MAP_SERVICE_VERSION,
     type MapApi,
     type MapFlyToOptions,
 } from './api';
 
-const TERRAIN_TILE_SIZE = 256;
-const TERRAIN_MIN_RESOLUTION = 0.2;
-const TERRAIN_TILE_CACHE_SIZE = 48;
+// The view's zoom-out limit must not depend on the user's tile size: a 512 px
+// tile would otherwise fit only half of the terrain into the viewport.
+const VIEW_REFERENCE_TILE_SIZE = 256;
 // Placeholder size until the terrain layers report the real one.
 const INITIAL_TERRAIN_EXTENT: [number, number, number, number] = [0, 0, 30720, 30720];
 
@@ -46,6 +51,15 @@ class App extends React.Component<AppProps,MapState> {
     private terrainLayers: TileLayer<ImageTileSource>[] = [];
     private terrainLoadToken = 0;
     private terrainViewReady = false;
+    /** Decoded terrain layers, kept so option changes can rebuild tiles without a game request. */
+    private terrainSource: {
+        extent: [number, number, number, number];
+        layers: Array<{ name: string; image: HTMLImageElement }>;
+    } | null = null;
+
+    /** Current tiling/rendering settings, refreshed when the host options change. */
+    private renderSettings: MapRenderSettings | undefined;
+    private unsubscribeOptions: (() => void) | undefined;
 
     private markerUiRef = createRef<MarkerOverlayHandle>();
     private readonly layerSwitcherSections = new LayerSwitcherRegistry();
@@ -61,6 +75,13 @@ class App extends React.Component<AppProps,MapState> {
         };
     }
 
+    private getRenderSettings(): MapRenderSettings {
+        if (!this.renderSettings)
+            this.renderSettings = readMapRenderSettings();
+
+        return this.renderSettings;
+    }
+
     private getPreservedViewState(
         previousView: View | null,
         extent: [number, number, number, number],
@@ -72,6 +93,7 @@ class App extends React.Component<AppProps,MapState> {
 
         const center = previousView.getCenter();
         const resolution = previousView.getResolution();
+        const minResolution = this.getRenderSettings().minResolution;
 
         if (
             !center ||
@@ -81,7 +103,7 @@ class App extends React.Component<AppProps,MapState> {
             !Number.isFinite(resolution) ||
             center[0] < extent[0] || center[0] > extent[2] ||
             center[1] < extent[1] || center[1] > extent[3] ||
-            resolution < TERRAIN_MIN_RESOLUTION || resolution > maxResolution
+            resolution < minResolution || resolution > maxResolution
         ) {
             return null;
         }
@@ -94,12 +116,14 @@ class App extends React.Component<AppProps,MapState> {
         extent: [number, number, number, number],
         previousView: View | null,
     ): { view: View; preserved: boolean } {
-        // At this resolution a single tile covers the whole terrain, so it is the
-        // farthest the view needs to zoom out. The extent constraint caps it further
-        // when the panel is larger than that tile.
+        const minResolution = this.getRenderSettings().minResolution;
+
+        // At this resolution a single reference-sized tile covers the whole
+        // terrain, so it is the farthest the view needs to zoom out. The extent
+        // constraint caps it further when the panel is larger than that tile.
         const maxResolution = Math.max(
-            Math.max(extent[2] - extent[0], extent[3] - extent[1]) / TERRAIN_TILE_SIZE,
-            TERRAIN_MIN_RESOLUTION,
+            Math.max(extent[2] - extent[0], extent[3] - extent[1]) / VIEW_REFERENCE_TILE_SIZE,
+            minResolution,
         );
 
         const options: ViewOptions = {
@@ -111,7 +135,7 @@ class App extends React.Component<AppProps,MapState> {
             // The map is north-up only: the rotation constraint ignores every
             // rotation, including two-finger rotate and programmatic calls.
             enableRotation: false,
-            minResolution: TERRAIN_MIN_RESOLUTION,
+            minResolution,
             maxResolution,
             center: [
                 (extent[0] + extent[2]) / 2,
@@ -133,6 +157,8 @@ class App extends React.Component<AppProps,MapState> {
 
         if (!this.mapRef.current) return;
 
+        this.renderSettings = readMapRenderSettings();
+
         var projection = new Projection({
             code: 'static-image',
             units: 'pixels',
@@ -142,9 +168,14 @@ class App extends React.Component<AppProps,MapState> {
         const map = new Map({
             target: this.mapRef.current,
             layers: [],
+            pixelRatio: this.renderSettings.pixelRatio,
             view: this.createTerrainView(projection, INITIAL_TERRAIN_EXTENT, null).view,
         });
         this.map = map;
+
+        // Options changed from the host Options panel apply to the live map.
+        this.unsubscribeOptions = onMapRenderSettingsChanged(this.applyRenderSettings);
+
         // The map instance is imperative, so re-render to hand it to the layer
         // switcher and marker overlay. Register the Map API only after that
         // commit, so focusMarker() can reach the mounted marker module.
@@ -295,10 +326,16 @@ class App extends React.Component<AppProps,MapState> {
             this.unregisterMapApi = undefined;
         }
 
+        if (this.unsubscribeOptions) {
+            this.unsubscribeOptions();
+            this.unsubscribeOptions = undefined;
+        }
+
         /** Clear pending fly-to on unmount. */
         this.pendingFlyTo = null;
 
         this.terrainLoadToken += 1;
+        this.terrainSource = null;
 
         const map = this.map;
         this.map = null;
@@ -389,34 +426,7 @@ class App extends React.Component<AppProps,MapState> {
         const loadToken = ++this.terrainLoadToken;
         this.setState({ terrainError: null });
 
-        // Base measurements reported by the terrain producer.
-        const svgBaseWidth = terrain.width;
-        const svgBaseHeight = terrain.height;
-        const tileSize = TERRAIN_TILE_SIZE; // Standard map grid slice dimension
-
-        // 1. Establish the boundary coordinate limits matching the SVG native dimensions
-        const extent: [number, number, number, number] = [0, 0, svgBaseWidth, svgBaseHeight];
-        const projection = map.getView().getProjection();
-        projection.setExtent(extent);
-
-        // 2. Generate custom resolution steps for smooth zooming calculation
-        const maxZoom = 5;
-        const resolutions: Array<number> = [];
-        for (let z = 0; z <= maxZoom; ++z) {
-            resolutions.push(Math.pow(2, maxZoom - z));
-        }
-        // We are converting SVG (which has millimeter-accurate information) to pixels.
-        // This number is how many meters, one pixel is, on the most zoomed-in state. The code above stops at 1-meter
-        resolutions.push(0.2);
-
-        // 3. Set up the logical map tile matrix structure
-        const tileGrid = new TileGrid({
-            origin: getTopLeft(extent),
-            resolutions: resolutions,
-            tileSize: tileSize,
-        });
-
-        // Load every terrain layer image first, so a failure cannot leave
+        // Load every split SVG image first, so a failure cannot leave
         // half-created tile sources behind.
         const loadedLayers = await Promise.all(
             terrain.layers.map((layer) => this.loadTerrainLayerImage(layer))
@@ -433,17 +443,59 @@ class App extends React.Component<AppProps,MapState> {
             return;
         }
 
-        // 4. Create a custom on-the-fly rasterizer source for each layer
+        // Keep the decoded layers so option changes can rebuild the tile sources
+        // without asking the game for the terrain again.
+        this.terrainSource = {
+            extent: [0, 0, terrain.width, terrain.height],
+            layers: loadedLayers,
+        };
+
+        this.rebuildTerrainLayers();
+    }
+
+    /**
+     * Builds the terrain tile layers from the decoded images and the current
+     * render settings. Used for the first load and whenever a tiling option
+     * changes, without touching the game-side terrain data.
+     */
+    private rebuildTerrainLayers(): void {
+        const map = this.map;
+        const terrain = this.terrainSource;
+        if (!map || !terrain) {
+            return;
+        }
+
+        const settings = this.getRenderSettings();
+        const extent = terrain.extent;
+        const tileSize = settings.tileSize;
+        const projection = map.getView().getProjection();
+        projection.setExtent(extent);
+
+        // Zoom levels from the coarsest (2^maxZoom map units per pixel) down to
+        // the profile's finest resolution.
+        const resolutions: number[] = [];
+        for (let z = 0; z <= settings.maxZoom; z++) {
+            resolutions.push(Math.pow(2, settings.maxZoom - z));
+        }
+        resolutions.push(settings.minResolution);
+
+        const tileGrid = new TileGrid({
+            origin: getTopLeft(extent),
+            resolutions,
+            tileSize,
+        });
+
         const newLayers: TileLayer<ImageTileSource>[] = [];
         try {
-            for (const loadedLayer of loadedLayers) {
+            for (const loadedLayer of terrain.layers) {
                 const tileImage = loadedLayer.image;
 
                 const svgTileSource = new ImageTileSource({
-                    tileGrid: tileGrid,
-                    projection: projection,
-                    // The loader function handles slicing on demand
-                    loader: function (z, x, y) {
+                    tileGrid,
+                    projection,
+                    interpolate: settings.smoothScaling,
+                    // The loader function handles slicing on demand.
+                    loader: (z, x, y) => {
                         return new Promise((resolve, reject) => {
                             // Calculate how many raw coordinate map units fit inside this single screen slice
                             const resolution = resolutions[z];
@@ -465,11 +517,13 @@ class App extends React.Component<AppProps,MapState> {
                                 return;
                             }
 
+                            ctx.imageSmoothingEnabled = settings.smoothScaling;
+
                             // Instantaneous Blit/Crop: Sub-sections of the single pre-cached image are drawn directly
                             ctx.drawImage(
                                 tileImage,
                                 svgX, svgY, chunkWidth, chunkHeight, // Bounding source box (Crop area on SVG)
-                                0, 0, tileSize, tileSize             // Target destination box (Fills the 256x256 tile)
+                                0, 0, tileSize, tileSize             // Target destination box
                             );
 
                             resolve(canvas);
@@ -480,9 +534,10 @@ class App extends React.Component<AppProps,MapState> {
                 newLayers.push(new TileLayer({
                     properties: {title: loadedLayer.name},
                     source: svgTileSource,
+                    preload: settings.tilePreload,
                     // A phone-sized viewport only needs a few tiles per layer. The
                     // default (512) keeps hundreds of MiB of canvases per layer alive.
-                    cacheSize: TERRAIN_TILE_CACHE_SIZE,
+                    cacheSize: settings.tileCacheSize,
                 }));
             }
         } catch (error) {
@@ -495,7 +550,7 @@ class App extends React.Component<AppProps,MapState> {
             throw error;
         }
 
-        // 5. Replace any previous terrain layers so repeated loads cannot stack duplicates.
+        // Replace any previous terrain layers so repeated rebuilds cannot stack duplicates.
         this.disposeTerrainLayers();
 
         newLayers.forEach((layer) => {
@@ -503,18 +558,18 @@ class App extends React.Component<AppProps,MapState> {
         });
         this.terrainLayers = newLayers;
 
-        // 6. The view constraints depend on the real terrain size, so they can only
+        // The view constraints depend on the actual terrain size, so they can only
         // be built now. Views have no setExtent(), hence the replacement view.
         const previousView = this.terrainViewReady ? map.getView() : null;
         const { view, preserved } = this.createTerrainView(projection, extent, previousView);
         map.setView(view);
         this.terrainViewReady = true;
 
-        // Keep the user's position on a reload; on the first load (or if the old
-        // position no longer fits) show the whole map.
+        // Keep the user's position on a rebuild; on the first load (or if the old
+        // position no longer fits the current profile) show the whole map.
         if (!preserved) {
             view.fit(extent, {
-                duration: 1000            // Optional: Smoothly animate the zoom/pan over 1 second
+                duration: 1000
             });
         }
 
@@ -524,6 +579,27 @@ class App extends React.Component<AppProps,MapState> {
             this.applyPendingFlyTo();
         }
     }
+
+    /** Applies changed Options values to the live map. */
+    private applyRenderSettings = (settings: MapRenderSettings): void => {
+        const previous = this.renderSettings;
+        this.renderSettings = settings;
+
+        if (!previous)
+            return;
+
+        if (previous.pixelRatio !== settings.pixelRatio)
+            this.map?.setPixelRatio(settings.pixelRatio);
+
+        const tilingChanged = previous.terrainQuality !== settings.terrainQuality
+            || previous.tileSize !== settings.tileSize
+            || previous.tileCacheSize !== settings.tileCacheSize
+            || previous.tilePreload !== settings.tilePreload
+            || previous.smoothScaling !== settings.smoothScaling;
+
+        if (tilingChanged)
+            this.rebuildTerrainLayers();
+    };
 
     private pendingFlyTo: MapFlyToOptions | null = null;
 

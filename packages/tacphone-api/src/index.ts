@@ -68,6 +68,7 @@ export interface TacPhoneHost {
     notifications: NotificationCenterApi;
     audio: AudioApi;
     gameInfo: GameInfoApi;
+    options: AppOptionsApi;
     utils: TacPhoneUtils;
 }
 
@@ -431,6 +432,108 @@ export interface AudioApi {
     setSinkId(deviceId: string): Promise<void>;
     /** The explicitly selected output device id, or undefined for the browser default. */
     getOutputDeviceId(): string | undefined;
+}
+
+// ---------------------------------------------------------------------------
+// App options
+// ---------------------------------------------------------------------------
+
+/** Widget kind the Options panel uses to edit one option. */
+export type AppOptionKind = 'boolean' | 'number' | 'select' | 'text';
+
+/** One choice of a select option. */
+export interface AppOptionChoice {
+    label: string;
+    /** Typed so a select can store numbers and booleans as well as strings. */
+    value: string | number | boolean;
+}
+
+/** One option an app exposes in the host Options panel. */
+export interface AppOptionDefinition {
+    /** Stable key, unique within the app. */
+    key: string;
+    /** Label shown in the Options panel. */
+    label: string;
+    /** Optional help text below the label. */
+    description?: string;
+    /** Widget used to edit the value. */
+    type: AppOptionKind;
+    /** Value used until the user changes the option. */
+    default: string | number | boolean;
+    /** number only: lower bound; the value is clamped to it. */
+    min?: number;
+    /** number only: upper bound; the value is clamped to it. */
+    max?: number;
+    /** number only: input step. */
+    step?: number;
+    /** number only: unit suffix shown next to the value. */
+    unit?: string;
+    /** select only: every accepted value. */
+    choices?: readonly AppOptionChoice[];
+}
+
+/** A one-click shortcut that writes several option values at once. */
+export interface AppOptionPreset {
+    /** Stable id, unique within the app. */
+    id: string;
+    /** Button label shown in the Options panel. */
+    label: string;
+    /** Optional help text. */
+    description?: string;
+    /** Option key/value pairs applied when the preset is chosen. */
+    values: Readonly<Record<string, string | number | boolean>>;
+}
+
+/** The options an app registers with window.TacPhone.options.register(). */
+export interface AppOptionsRegistration {
+    /** App name, e.g. "ACE_TacPhone_Map". */
+    app: string;
+    /** Sidebar title; defaults to the app/panel title. */
+    title?: string;
+    /** Sidebar icon; defaults to the first panel's icon. */
+    icon?: string;
+    /** Options in display order. */
+    options: readonly AppOptionDefinition[];
+    /** Optional one-click presets shown above the option list. */
+    presets?: readonly AppOptionPreset[];
+}
+
+/** One change notification from the options store. */
+export interface AppOptionChange {
+    /** App whose options changed. */
+    app: string;
+    /** Changed key; omitted for reset-all, preset apply or a schema change. */
+    key?: string;
+    /** Effective value after the change, when it concerns one key. */
+    value?: unknown;
+}
+
+/**
+ * Per-app options registry (`window.TacPhone.options`).
+ *
+ * Values are page-local, persist with the host layout, and are readable by any
+ * app. Registration happens once per app from its init().
+ */
+export interface AppOptionsApi {
+    /**
+     * Registers or replaces the option schema of one app.
+     * @returns A disposer that removes the registration; idempotent.
+     */
+    register(registration: AppOptionsRegistration): () => void;
+    /** Effective value of one option, falling back to the registered default. */
+    get<T = unknown>(app: string, key: string): T | undefined;
+    /** Validates, clamps and stores one value. */
+    set(app: string, key: string, value: unknown): void;
+    /** Validates and applies several values in one change notification. */
+    apply(app: string, values: Readonly<Record<string, unknown>>): void;
+    /** Every defined option of one app with its effective value. */
+    getValues(app: string): Readonly<Record<string, unknown>>;
+    /** Every registered app schema, in registration order. */
+    list(): readonly AppOptionsRegistration[];
+    /** Restores one option, or every option of the app, to its default. */
+    reset(app: string, key?: string): void;
+    /** Subscribes to value and schema changes. Returns the unsubscribe function. */
+    onDidChange(listener: (change: AppOptionChange) => void): () => void;
 }
 
 // ---------------------------------------------------------------------------

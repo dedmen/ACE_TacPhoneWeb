@@ -3,6 +3,7 @@ import './App.css'
 // Installs window.TacPhone before the first panel renders.
 import { GetTacPhoneHost } from './Backend/Host'
 import { compressAndToBase64, decompressFromBase64 } from './Backend/Compression'
+import { appOptions } from './Backend/AppOptions'
 
 import { Actions, AddIcon, BorderNode, DockLocation, Layout, Model, TabNode, TabSetNode, type IJsonModel, type ITabRenderValues, type ITabSetRenderValues } from 'flexlayout-react';
 import 'flexlayout-react/style/dark.css';  
@@ -11,6 +12,9 @@ const LAYOUT_STORAGE_KEY = 'tacphone.layout';
 
 /** Layout changes are coalesced into at most one save per window. */
 const LAYOUT_SAVE_INTERVAL_MS = 5000;
+
+/** Option changes may come from a slider drag; save them sooner than a layout. */
+const OPTIONS_SAVE_INTERVAL_MS = 300;
 
 // localStorage is unavailable in the sandboxed in-game browser, so probe it before using it.
 function getLayoutStorage(): Storage | undefined {
@@ -25,7 +29,18 @@ function getLayoutStorage(): Storage | undefined {
     }
 }
 
-function parseLayout(raw: unknown): IJsonModel | undefined {
+interface ParsedLayout {
+    /** flexlayout model, with the options envelope removed. */
+    layout: IJsonModel;
+    /** Host option overrides saved next to the layout. */
+    options: unknown;
+}
+
+/**
+ * Parses one saved layout envelope. The `options` key is host data stored next
+ * to the flexlayout JSON; it is removed before the model sees it.
+ */
+function parsePersistedLayout(raw: unknown): ParsedLayout | undefined {
     let layout = raw;
 
     if (typeof layout === "string") {
@@ -40,11 +55,16 @@ function parseLayout(raw: unknown): IJsonModel | undefined {
     if (typeof layout !== "object" || layout === null || Array.isArray(layout))
         return undefined;
 
-    const candidate = layout as Partial<IJsonModel>;
+    const candidate = layout as Partial<IJsonModel> & { options?: unknown };
     if (typeof candidate.layout !== "object" || candidate.layout === null)
         return undefined;
 
-    return candidate as IJsonModel;
+    const { options, ...model } = candidate;
+
+    return {
+        layout: model as IJsonModel,
+        options,
+    };
 }
 
 function createModelFromLayout(layout: IJsonModel | undefined): Model | undefined {
@@ -99,9 +119,15 @@ function createLayoutModel(): Model {
         try {
             const savedLayout = storage.getItem(LAYOUT_STORAGE_KEY);
             if (savedLayout) {
-                const model = createModelFromLayout(parseLayout(savedLayout));
-                if (model)
-                    return model;
+                const parsed = parsePersistedLayout(savedLayout);
+                if (parsed) {
+                    // Options are available before any app is loaded, so an app's
+                    // init()/first mount can read its stored configuration.
+                    appOptions.load(parsed.options);
+                    const model = createModelFromLayout(parsed.layout);
+                    if (model)
+                        return model;
+                }
             }
         } catch (error) {
             console.warn("Failed to read the TacPhone layout from local storage.", error);
@@ -126,16 +152,25 @@ class App extends React.Component<{}, {loading: boolean, error: string | undefin
     private mounted = false;
     /** In-flight app load; reused so StrictMode cannot load the apps twice. */
     private loadPromise: Promise<void> | undefined;
-    /** JSON of the layout last written, so an unchanged model does not save again. */
-    private savedLayoutJson: string | undefined = JSON.stringify(this.model.toJson());
-    /** Pending coalesced layout save, if any. */
-    private layoutSaveTimer: ReturnType<typeof setTimeout> | undefined;
-    /** A layout change happened that has not been written yet. */
-    private layoutDirty = false;
+    /** JSON of the state last written, so an unchanged model does not save again. */
+    private savedStateJson: string | undefined;
+    /** Pending coalesced save, if any. */
+    private saveTimer: ReturnType<typeof setTimeout> | undefined;
+    /** Time at which the pending save is due; used to shorten a layout save. */
+    private saveDeadline: number | undefined;
+    /** A layout or option change happened that has not been written yet. */
+    private stateDirty = false;
+    /** True while an async save is in flight; new changes wait for it. */
+    private saving = false;
+    /** False until the initial layout/options load finished; blocks accidental overwrites. */
+    private persistenceReady = false;
+    /** Releases the app options subscription. */
+    private unsubscribeOptions: (() => void) | undefined;
 
     constructor(props: {})
     {
         super(props);
+        this.savedStateJson = this.buildStateJson();
         this.state = { loading: true, error: undefined };
     }
 
@@ -246,7 +281,7 @@ class App extends React.Component<{}, {loading: boolean, error: string | undefin
 
             // The game stores the layout gzipped and base64-encoded; an empty string
             // means nothing was saved yet. An older game may answer with the JSON
-            // text or an object, which parseLayout still accepts.
+            // text or an object, which parsePersistedLayout still accepts.
             if (typeof stored === "string" && stored.length === 0)
                 return undefined;
 
@@ -254,70 +289,116 @@ class App extends React.Component<{}, {loading: boolean, error: string | undefin
                 ? await decompressFromBase64(stored)
                 : stored;
 
-            return createModelFromLayout(parseLayout(json));
+            const parsed = parsePersistedLayout(json);
+            if (!parsed)
+                return undefined;
+
+            appOptions.load(parsed.options);
+            return createModelFromLayout(parsed.layout);
         } catch (error) {
             console.warn("Failed to request the TacPhone layout from the game.", error);
             return undefined;
         }
     }
 
-    private onLayoutChanged = () => {
-        this.layoutDirty = true;
+    /** Current saved state: the flexlayout model plus every option override. */
+    private buildStateJson(): string {
+        const layout = this.model.toJson() as IJsonModel & Record<string, unknown>;
 
-        // Coalesce a burst of changes (splitter drags, resizes) into one save.
-        if (this.layoutSaveTimer !== undefined)
-            return;
-
-        this.layoutSaveTimer = setTimeout(() => {
-            this.layoutSaveTimer = undefined;
-            void this.saveLayout();
-        }, LAYOUT_SAVE_INTERVAL_MS);
+        return JSON.stringify({
+            ...layout,
+            options: appOptions.toJson(),
+        });
     }
 
     /**
-     * Writes the current layout once: plain JSON to localStorage when the browser
-     * has it, otherwise gzipped + base64 through the game's `main` app.
+     * Marks the saved state dirty and schedules one write. A shorter request
+     * (an option change) replaces a longer pending layout save.
      */
-    private saveLayout = async (): Promise<void> => {
-        if (!this.layoutDirty)
+    private scheduleSave(delay: number): void {
+        this.stateDirty = true;
+
+        if (!this.persistenceReady)
             return;
 
-        this.layoutDirty = false;
-
-        const json = JSON.stringify(this.model.toJson());
-        if (json === this.savedLayoutJson)
-            return;
-
-        this.savedLayoutJson = json;
-
-        const storage = getLayoutStorage();
-        if (storage) {
-            try {
-                storage.setItem(LAYOUT_STORAGE_KEY, json);
+        const deadline = Date.now() + delay;
+        if (this.saveTimer !== undefined) {
+            if (this.saveDeadline !== undefined && this.saveDeadline <= deadline)
                 return;
-            } catch (error) {
-                console.warn("Failed to save the TacPhone layout to local storage.", error);
-            }
+
+            clearTimeout(this.saveTimer);
         }
 
+        this.saveDeadline = deadline;
+        this.saveTimer = setTimeout(() => {
+            this.saveTimer = undefined;
+            this.saveDeadline = undefined;
+            void this.saveState();
+        }, delay);
+    }
+
+    private onLayoutChanged = () => {
+        this.scheduleSave(LAYOUT_SAVE_INTERVAL_MS);
+    }
+
+    /**
+     * Writes the current state once: plain JSON to localStorage when the browser
+     * has it, otherwise gzipped + base64 through the game's `main` app.
+     */
+    private saveState = async (): Promise<void> => {
+        if (!this.persistenceReady || !this.stateDirty || this.saving)
+            return;
+
+        this.saving = true;
+        this.stateDirty = false;
+
         try {
-            const layout = await compressAndToBase64(json);
-            await window.TacPhone.networking.Request({a: "main", c: "SaveLayout", layout});
-        } catch (error) {
-            // Retry on the next change instead of silently dropping the layout.
-            this.savedLayoutJson = undefined;
-            console.warn("Failed to send the TacPhone layout to the game.", error);
+            const json = this.buildStateJson();
+            if (json === this.savedStateJson)
+                return;
+
+            this.savedStateJson = json;
+
+            const storage = getLayoutStorage();
+            if (storage) {
+                try {
+                    storage.setItem(LAYOUT_STORAGE_KEY, json);
+                    return;
+                } catch (error) {
+                    console.warn("Failed to save the TacPhone layout to local storage.", error);
+                }
+            }
+
+            try {
+                const layout = await compressAndToBase64(json);
+                await window.TacPhone.networking.Request({a: "main", c: "SaveLayout", layout});
+            } catch (error) {
+                // Retry on the next change instead of silently dropping the state.
+                this.savedStateJson = undefined;
+                console.warn("Failed to send the TacPhone layout to the game.", error);
+            }
+        } finally {
+            this.saving = false;
+
+            // A change made while the save was in flight gets its own write.
+            if (this.stateDirty)
+                this.scheduleSave(OPTIONS_SAVE_INTERVAL_MS);
         }
     }
 
     /** Flushes a change that is still waiting for the save window. */
-    private flushPendingLayout = (): void => {
-        if (this.layoutSaveTimer === undefined)
+    private flushPendingSave = (): void => {
+        if (this.saveTimer === undefined)
             return;
 
-        clearTimeout(this.layoutSaveTimer);
-        this.layoutSaveTimer = undefined;
-        void this.saveLayout();
+        clearTimeout(this.saveTimer);
+        this.saveTimer = undefined;
+        this.saveDeadline = undefined;
+        void this.saveState();
+    }
+
+    private handlePageHide = (): void => {
+        this.flushPendingSave();
     }
 
     onRenderTabSet = (node: TabSetNode | BorderNode, renderValues: ITabSetRenderValues) => {
@@ -386,17 +467,28 @@ class App extends React.Component<{}, {loading: boolean, error: string | undefin
                 host.gameInfo.whenReady()
             ]);
 
-            // Load apps only after the global game info is available, so every
-            // app's init() can rely on window.TacPhone.gameInfo.get().
-            await host.apps.LoadAvailableApps();
-
             // The layout from the game replaces the model built in the
             // constructor; the directory must follow it or it reports stale rects.
             if (layout) {
                 this.model = layout;
-                this.savedLayoutJson = JSON.stringify(this.model.toJson());
                 panelDirectory.attach(this.model);
             }
+
+            // Remember the state that was actually loaded, before apps run their
+            // init(). An init() that changes an option then becomes a real change
+            // to save instead of being mistaken for already persisted data.
+            this.savedStateJson = this.buildStateJson();
+
+            // Load apps only after the global game info is available, so every
+            // app's init() can rely on window.TacPhone.gameInfo.get().
+            await host.apps.LoadAvailableApps();
+
+            this.persistenceReady = true;
+
+            // Changes made while loading (an app init() migration, for example)
+            // are now safe to persist.
+            if (this.stateDirty)
+                this.scheduleSave(OPTIONS_SAVE_INTERVAL_MS);
 
             if (this.mounted)
                 this.setState({ loading: false, error: undefined });
@@ -417,13 +509,28 @@ class App extends React.Component<{}, {loading: boolean, error: string | undefin
         // as soon as the loading screen disappears. attach() is idempotent, so a
         // StrictMode remount does not add a second listener.
         panelDirectory.attach(this.model);
+
+        // Option values are part of the saved layout envelope. The subscription is
+        // page-scoped; StrictMode removes and re-adds it with the host lifecycle.
+        this.unsubscribeOptions = appOptions.onDidChange(() => {
+            this.scheduleSave(OPTIONS_SAVE_INTERVAL_MS);
+        });
+        window.addEventListener('pagehide', this.handlePageHide);
+
         void this.loadApps();
     }
 
     componentWillUnmount(): void {
         this.mounted = false;
         panelDirectory.detach();
-        this.flushPendingLayout();
+        window.removeEventListener('pagehide', this.handlePageHide);
+
+        if (this.unsubscribeOptions) {
+            this.unsubscribeOptions();
+            this.unsubscribeOptions = undefined;
+        }
+
+        this.flushPendingSave();
     }
 
     render() {

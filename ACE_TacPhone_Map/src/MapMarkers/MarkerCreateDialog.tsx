@@ -362,8 +362,15 @@ export function MarkerCreateDialog({
         const containerWidth = Math.max(containerSize.width, width + 24);
         const containerHeight = Math.max(containerSize.height, height + 24);
         const margin = 12;
-        const sideGap = 18;
-        const labelGap = 220;
+        // Clear the marker icon at its current scale.
+        const sideGap = 24 + 16 * scale;
+        // The marker label is drawn to the right of the icon. Keep the dialog
+        // close when the label is empty, and move it just past the label when
+        // one is being typed.
+        const labelWidth = label.trim().length === 0
+            ? 0
+            : Math.min(300, label.trim().length * 10 + 20);
+        const rightGap = sideGap + labelWidth;
 
         if (!anchor) {
             setPlacement({
@@ -376,14 +383,14 @@ export function MarkerCreateDialog({
         const spaceLeft = anchor.x - margin;
         const spaceRight = containerWidth - anchor.x - margin;
         const fitsLeft = spaceLeft >= width + sideGap;
-        const fitsRight = spaceRight >= width + labelGap;
+        const fitsRight = spaceRight >= width + rightGap;
         let left: number;
         let top: number | null = null;
 
         if (fitsLeft && (!fitsRight || spaceLeft >= spaceRight)) {
             left = anchor.x - sideGap - width;
         } else if (fitsRight) {
-            left = anchor.x + labelGap;
+            left = anchor.x + rightGap;
         } else {
             left = clamp(anchor.x - width / 2, margin, Math.max(margin, containerWidth - width - margin));
             const below = anchor.y + sideGap;

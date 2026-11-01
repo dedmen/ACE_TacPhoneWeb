@@ -703,7 +703,7 @@ export class WsClient {
         const frame = {
             k: key,
             d: {
-                a: MESSAGING_APP,
+                a: options.app || MESSAGING_APP,
                 c: command,
                 ...payload,
             },

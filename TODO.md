@@ -20,8 +20,10 @@ needs a product decision before coding, **[wontfix]** deliberately left as is.
 - [x] Remove the temporary placeholder comments in
   `ACE_TacPhone_Main/src/App.tsx` and avoid sending `SaveLayout` on every layout
   change once the SQF persistence is implemented. Changes are coalesced into at
-  most one save per 5 seconds (trailing throttle); a pending change is flushed on
-  unmount.
+  most one save per 5 seconds (trailing throttle); option changes use a 300 ms
+  window. A pending change is flushed on `pagehide`/unmount. The stored value is
+  the whole envelope `{ ...layout, options }`; SQF treats it as opaque text, so
+  it already round-trips unknown top-level keys such as `options`.
 
 ## Native extension (`WebServerExtension`)
 
@@ -249,8 +251,9 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
 - [ ] **[cleanup]** No way to move an existing vertex after it is placed; only
   `Undo` of the last vertex is available.
 - [ ] **[cleanup]** Freehand sampling distance (5 m) and Ramer–Douglas–Peucker
-  simplification tolerance (2 m) are hardcoded in the Map app; evaluate exposing
-  them as settings or extract them as named constants.
+  simplification tolerance (2 m) are hardcoded in the Map app; expose them
+  through `window.TacPhone.options` (the Options panel infrastructure now exists)
+  or extract them as named constants.
 - [ ] **[decision]** Switching between freehand and click-per-point input
   mid-drawing keeps the existing vertices, so points drawn under both input
   rules can end up in one line. Decide whether a mode switch should reset or
@@ -295,6 +298,20 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
   marker; obtaining the ID without a MarkerLayerManager is deferred.
 
 ## Host (`ACE_TacPhone_Main`)
+
+- [ ] **[feature]** Extract the custom select menu from
+  `src/MainApps/OptionsPanel.tsx` into a reusable host component library that
+  other apps can use through the host API. The current select is inline in
+  `OptionControl`, so every app would reimplement it.
+  - Expose the component without apps importing host code (for example through
+    `window.TacPhone` or the shared-module/import-map mechanism).
+  - Put `SelectMenu` in that library first.
+  - Support a leading icon per option (the Map marker-create menu needs marker
+    type/icon rows), disabled options, and custom class names or theme tokens so
+    the Marker Create and Options panel UIs can keep their different designs.
+  - Keep the keyboard, touch, outside-click and ARIA behavior of the current
+    in-page listbox.
+  - Migrate `OptionsPanel` and the Map `MarkerCreateDialog` dropdowns to it.
 
 - [ ] **[bug]** `NetworkingA3.Request` has no timeout (`Networking.ts:306-346`),
   so a promise the game never resolves hangs the in-game UI forever. Add the same

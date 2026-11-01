@@ -495,6 +495,20 @@ namespace ArmaServerSide
                 webSocket.Abort();
                 await connectionManager.RemoveConnectionAsync(connectionId, notifyGame: true, closeTransport: false);
             }
+            catch (WebSocketException)
+            {
+                // A browser/tab killed without a close frame or a dropped network
+                // link is a normal disconnect, not a web-host error.
+                webSocket.Abort();
+                await connectionManager.RemoveConnectionAsync(connectionId, notifyGame: true, closeTransport: false);
+            }
+            catch (IOException)
+            {
+                // Some platform socket resets surface as IOException instead of
+                // WebSocketException. Treat them the same way.
+                webSocket.Abort();
+                await connectionManager.RemoveConnectionAsync(connectionId, notifyGame: true, closeTransport: false);
+            }
             catch (Exception ex)
             {
                 ExtensionLog.Error($"Error handling WebSocket connection {connectionId}", ex);

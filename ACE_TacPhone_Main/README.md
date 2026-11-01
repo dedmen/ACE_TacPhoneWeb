@@ -66,18 +66,22 @@ not bind source-map breakpoints.
 ### Building the in-game UI
 
 ```powershell
-npm run build
-Copy-Item dist\index.html ..\..\data\index.html
+npm run build:debug    # default for development
+npm run build          # release, only when explicitly requested
 ```
+
+The root `build:debug`/`build:host` scripts also copy the generated page into
+`..\data\index.html`; no manual `Copy-Item` is needed.
 
 The build produces a single self-contained `dist/index.html` (inline script and
 import map); that is the file loaded by `CT_WEBBROWSER`. `dist/` and the copied
 `data/index.html` are ignored by git.
 
-`npm run build` is a release build: the JavaScript is minified, no source map is
-embedded, and `console.log` / `console.debug` / `console.info` calls are removed.
-Use `npm run build:debug` for an unminified build with an inline source map;
-`console.warn` and `console.error` calls are kept in both builds.
+`npm run build:debug` is unminified with an inline source map, so the in-game
+developer console can map the bundle back to the `.tsx` sources. `npm run build`
+is a release build: minified, no source map, and `console.log` /
+`console.debug` / `console.info` calls are removed. Use it only for an explicit
+release request; `console.warn` and `console.error` stay in both builds.
 
 ## Shell and viewport
 
@@ -107,6 +111,9 @@ panel title, app name and panel id; Escape or the clear button empties it. Touch
 clients render the grid alone, matching a phone home screen. The grid follows
 `appDirectory.onDidChange`, so icons that resolve after the first paint appear
 without a reload.
+
+The built-in Options panel (`ACE_TacPhone_Options`, see [App options](#app-options))
+is listed in the same grid; it is the only entry point for app settings.
 
 ## Layout persistence
 
@@ -328,6 +335,7 @@ window.TacPhone: TacPhoneHost
 | `notifications` | Toast banners. See [Notifications](#notifications). |
 | `gameInfo` | One-time mission snapshot: `whenReady()`, `get()`, `isDebug()` with `multiplayer`, `playerId`, `missionName`, `terrainName`, `gameVersion` and `debug`. |
 | `audio` | Synthesised notification sounds and output-device selection. See [Audio](#audio). |
+| `options` | Register per-app options shown in the host Options panel; read, set and subscribe to values. See [App options](#app-options). |
 | `utils.CommandRegistry` | Message router helper shown above. |
 | `utils.PanelContext` | React context with the live `PanelInstance` of the panel an app is rendered in. |
 | `utils.usePanel()` | Hook form of `PanelContext` for function components. |
@@ -1048,6 +1056,79 @@ Notification sounds and `setSinkId()` share the same `AudioContext`, so a sink
 change applies to every host sound. Selecting the device is scaffolding for a
 future feature that mirrors Arma's audio output device: the game cannot currently
 report its device, so nothing discovers it today (see `TODO.md`).
+
+## App options
+
+Apps expose user-editable settings through `window.TacPhone.options`. The host
+ships an Options panel (`ACE_TacPhone_Options`) that lists every app with a
+registered schema in a left sidebar and renders its options on the right. Open it
+from the normal app chooser; there is no toolbar button.
+
+When the panel is narrow, the sidebar collapses to an icon rail (names are
+tooltips) and option rows stack vertically. The content pane keeps a 200 px
+minimum width and scrolls, so labels never collapse to one character per line.
+
+```ts
+export function init(): void {
+    window.TacPhone.options.register({
+        app: 'MyApp',
+        title: 'My App',
+        options: [
+            { key: 'fast', label: 'Fast mode', type: 'boolean', default: false },
+            {
+                key: 'detail', label: 'Detail', type: 'select', default: 'medium',
+                choices: [{ label: 'Low', value: 'low' }, { label: 'Medium', value: 'medium' }],
+            },
+        ],
+        presets: [
+            { id: 'weak', label: 'Weak device', values: { fast: true, detail: 'low' } },
+        ],
+    });
+}
+
+const fast = window.TacPhone.options.get<boolean>('MyApp', 'fast') ?? false;
+```
+
+| Member | Purpose |
+| --- | --- |
+| `register(registration)` | Registers or replaces one app's schema. Call it from `init()`; the returned function removes it. |
+| `get(app, key)` | Effective value: stored override or the schema default. |
+| `set(app, key, value)` | Validates and clamps one value; notifies subscribers. |
+| `apply(app, values)` | Validates and writes several values in one notification (used by presets). |
+| `getValues(app)` | Every defined option with its effective value. |
+| `list()` | Every registered app schema, in registration order. |
+| `reset(app, key?)` | Restores one option, or the whole app, to defaults. |
+| `onDidChange(listener)` | Called after any value/schema change; returns the unsubscribe function. |
+
+Supported widget types are `boolean`, `number`, `select` and `text`. Number
+options accept `min`, `max`, `step` and `unit`; select options need `choices`
+with typed values. Presets are stateless buttons that call `apply()`.
+
+Values are page-local overrides and are saved in the same JSON envelope as the
+flexlayout model, under the top-level `options` key. The envelope is stored in
+`localStorage` outside the game and gzipped through `SaveLayout` in-game. Stored
+values for apps that are not loaded are kept; new defaults apply to options the
+user never changed. Option changes are saved after a short 300 ms window, layout
+changes after 5 seconds, and both are flushed on `pagehide`.
+
+## Runtime tests
+
+`test/` contains live host tests that need Arma and the TacPhone web host running:
+
+```powershell
+npm run test:host
+node ACE_TacPhone_Main/test/run-tests.mjs --list
+```
+
+The Node suite checks the app catalog, the `SaveLayout`/`GetLayout` envelope
+that carries option values, the Remote Access relay (start, share link,
+remote clients and dead-peer cleanup), and the `Debug.SetLocalDisplayMode`
+CLOSED/HUD/DIALOG/HIDDEN helper. The Options panel and live Map settings are
+covered by [`test/browser/options-checklist.md`](test/browser/options-checklist.md).
+The debug scenarios need an `__A3_DEBUG__` build with the server-controlled
+**Allow debug mode** setting; they are skipped otherwise. See
+[`test/README.md`](test/README.md) for prerequisites and the layout-restore
+caveat.
 
 ## Related documentation
 

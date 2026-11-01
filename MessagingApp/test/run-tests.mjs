@@ -30,7 +30,6 @@ import * as invites from './scenarios/invites.test.mjs';
 import * as groups from './scenarios/groups.test.mjs';
 import * as groupEvents from './scenarios/group-events.test.mjs';
 import * as aiGroups from './scenarios/ai-groups.test.mjs';
-import * as remoteShare from './scenarios/remote-share.test.mjs';
 import * as leave from './scenarios/leave.test.mjs';
 import * as presence from './scenarios/presence.test.mjs';
 import * as sideFiltering from './scenarios/side-filtering.test.mjs';
@@ -47,7 +46,6 @@ const ALL_SCENARIOS = [
     groups,
     groupEvents,
     aiGroups,
-    remoteShare,
     leave,
     presence,
     sideFiltering,

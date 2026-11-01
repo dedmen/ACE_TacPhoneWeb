@@ -6,12 +6,18 @@ import {
     type AppProps,
 } from '@ace-tacphone/api';
 import { mapCommandRegistry } from './CommandRegistry.ts';
+import { registerMapOptions } from './MapOptions.ts';
 // Registers the module-scope marker notification backup handler, so a marker
 // still notifies while no Map panel (and therefore no marker layer) is mounted.
 import './MapMarkers/MarkerNotifications.ts';
 
 /** Contract version this app was built against; checked by the host. */
 export const apiVersion = TACPHONE_API_VERSION;
+
+/** Registers the Map options shown in the host Options panel. */
+export function init(): void {
+    registerMapOptions();
+}
 
 class AppPlaceholder extends React.Component<AppProps, {loading: boolean}> {
     render() {

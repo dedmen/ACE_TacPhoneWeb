@@ -14,6 +14,7 @@ export * from "@ace-tacphone/api";
 export { GetTacPhoneHost } from "./Backend/Host";
 export { GameInfoStore, gameInfo } from "./Backend/GameInfo";
 export { AppDirectory, appDirectory } from "./Backend/AppDirectory";
+export { AppOptionsStore, appOptions } from "./Backend/AppOptions";
 export { InterAppRegistry, interApp } from "./Backend/InterApp";
 export { InterestRegistry, interestRegistry } from "./Backend/InterestRegistry";
 export { CommandRegistry } from "./Backend/MessageRouter";
