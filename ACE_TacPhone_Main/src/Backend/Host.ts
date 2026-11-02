@@ -98,8 +98,30 @@ export function GetTacPhoneHost(): InternalTacPhoneHost {
 // Install the host once the module graph finished evaluating: the host services
 // import each other, so a synchronous call here could still see a service that
 // is in its temporal dead zone.
+declare global {
+    interface Window {
+        /**
+         * Debug-only escape hatch for inspecting a live page:
+         * `await window.__TACPHONE_DEBUG_EVAL__('window.__TACPHONE_MAP_TEST__...')`.
+         * Throws unless the game reports `gameInfo.isDebug()`.
+         */
+        __TACPHONE_DEBUG_EVAL__?: (code: string) => unknown;
+    }
+}
+
+function installDebugEval(): void {
+    window.__TACPHONE_DEBUG_EVAL__ = (code: string): unknown => {
+        if (!gameInfo.isDebug()) {
+            throw new Error("TacPhone debug eval is disabled: gameInfo.isDebug() is false.");
+        }
+        // Indirect eval runs in global scope, so page globals are reachable.
+        return (0, eval)(code);
+    };
+}
+
 queueMicrotask(() => {
     GetTacPhoneHost();
     // Debug-only `window.__TACPHONE_AUDIO_TEST__`; see Backend/AudioTestHooks.ts.
     installAudioTestHooks();
+    installDebugEval();
 });

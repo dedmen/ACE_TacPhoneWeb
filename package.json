@@ -28,6 +28,8 @@
     "test:host": "node ACE_TacPhone_Main/test/run-tests.mjs",
     "test:host-ui": "node ACE_TacPhone_Main/test/run-browser-tests.mjs",
     "test:map": "node ACE_TacPhone_Map/test/run-tests.mjs",
+    "test:gps-interactive": "node ACE_TacPhone_Map/test/run-interactive-tests.mjs",
+    "test:unit": "node scripts/test-unit.mjs",
     "test:all": "node scripts/test-all.mjs",
     "sync:api-types": "tacphone-build sync-api-types"
   },

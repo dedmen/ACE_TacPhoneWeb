@@ -30,6 +30,12 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const SUITES = [
     {
+        name: 'unit',
+        script: 'scripts/test-unit.mjs',
+        description: 'Game-free unit tests (no Arma)',
+        accepts: ['verbose'],
+    },
+    {
         name: 'host',
         script: 'ACE_TacPhone_Main/test/run-tests.mjs',
         description: 'Host page protocol, layout/options, display mode, remote access',

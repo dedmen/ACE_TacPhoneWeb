@@ -32,6 +32,23 @@ export const OBJECT_ENVELOPE_VERSION = 1;
 /** Below this JSON length a payload stays plain; gzip would not pay off. */
 export const MIN_COMPRESS_JSON_CHARS = 512;
 
+/**
+ * Upper bound for the encoded objects of one message, measured in JSON
+ * characters. The game stores messages in memory and the bridge passes text,
+ * so an oversized payload is rejected instead of silently truncated.
+ */
+export const MAX_ENCODED_MESSAGE_CHARS = 96 * 1024;
+
+/** Result of {@link checkEncodedObjects}. */
+export interface EncodedObjectSize {
+    /** True when the objects fit into {@link MAX_ENCODED_MESSAGE_CHARS}. */
+    ok: boolean;
+    /** Measured JSON size of the stored objects, in characters. */
+    chars: number;
+    /** The limit `chars` was compared against. */
+    limit: number;
+}
+
 /** Decoded payloads kept in memory before the oldest one is dropped. */
 const DECODE_CACHE_LIMIT = 100;
 
@@ -134,6 +151,22 @@ export function measureEncodedObjects(objects: ChatObject[]): number {
     }
 
     return total;
+}
+
+/**
+ * Checks the stored form of `objects` against {@link MAX_ENCODED_MESSAGE_CHARS}.
+ *
+ * Call this after {@link encodeChatObjectsForStorage}: an envelope counts with
+ * its base64 payload, which is the form the game keeps.
+ */
+export function checkEncodedObjects(objects: ChatObject[]): EncodedObjectSize {
+    const chars = measureEncodedObjects(objects);
+
+    return {
+        ok: chars <= MAX_ENCODED_MESSAGE_CHARS,
+        chars,
+        limit: MAX_ENCODED_MESSAGE_CHARS,
+    };
 }
 
 async function encodeObject(object: ChatObject): Promise<ChatObject> {

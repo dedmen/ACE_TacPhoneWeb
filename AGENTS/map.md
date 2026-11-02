@@ -27,6 +27,12 @@ The full reference is [`ACE_TacPhone_Map/README.md`](../ACE_TacPhone_Map/README.
 | Polyline drawing and measurement styles | `src/MapMarkers/PolylineDrawing.ts`, `src/MapMarkers/PolylineMeasurements.ts`, `src/MapMarkers/PolylineDrawControls.tsx` |
 | Persisted polyline measurement overlay | `src/MapMarkers/PolylineMeasurementLayer.ts` |
 | Terrain heights | `src/MapMarkers/TerrainHeightApi.ts` |
+| GPS module (layers, tracking, navigation, shared-route flow) | `src/MapGps/GpsModule.ts` |
+| GPS React boundary, HUD and floating route editor | `src/MapGps/GpsOverlay.tsx`, `src/MapGps/GpsHud.tsx`, `src/MapGps/GpsStyles.module.scss` |
+| GPS types and debug overlay painters | `src/MapGps/GpsTypes.ts`, `src/MapGps/GpsDebugOverlay.ts` |
+| GPS route orchestration and geometry | `src/MapGps/RoutePlanner.ts`, `src/MapGps/RouteSplice.ts`, `src/MapGps/SharedRoute.ts` |
+| GPS pure routing modules | `src/routing/*.ts` |
+| GPS terrain masks and road graph | `src/terrain/TerrainMasks.ts`, `src/roads/RoadSvgParser.ts`, `src/roads/RoadNetwork.ts` |
 | Marker notifications | `src/MapMarkers/MarkerNotifications.ts` |
 | Layer switcher | `src/LayerSwitcher.tsx` |
 | Game → app command routing | `src/CommandRegistry.ts` |
@@ -167,24 +173,130 @@ two-finger touch cannot rotate it.
   marker/channel/polyline/preview state (`getMapState()`) are exposed as
   `window.__TACPHONE_MAP_TEST__` in dev/debug builds only.
 
+## GPS routing architecture
+
+| Path | Purpose |
+| --- | --- |
+| `src/routing/RouteTypes.ts` | Pure travel-mode, vehicle-performance, route-leg, plan-request and debug-grid types. |
+| `src/routing/AStar.ts` | Dependency-free weighted A* and binary min-heap shared by the road graph and grid search. |
+| `src/routing/SpeedModel.ts` | Every speed/ETA formula: maxSpeed cap, force-balance climb, slope, surface, forest width/turning, boat water coefficients. |
+| `src/routing/TerrainGrid.ts` | 8-neighbor grid A*, line-of-sight simplification and the debug planning grid. |
+| `src/routing/RouteMetrics.ts` | Projection, remaining distance/ETA, bearing and the correct leg index for a flattened segment. |
+| `src/routing/TurnInstructions.ts` | Turn classification, next maneuver, point-at-distance, next waypoint. |
+| `src/routing/DeviationTracker.ts` | Off-route timer, deviation zoom target, waypoint progress, arrival and auto-repath trigger. |
+| `src/routing/VehicleChange.ts` | `GPS.VehicleChanged` parsing and the 350 ms debouncer. |
+| `src/terrain/TerrainMasks.ts` | Lazy SVG parsing, raster masks, passability, water queries and planning bbox. |
+| `src/roads/RoadSvgParser.ts` | Parses the `roads` SVG layer into stroked polylines, skips `*Fill` paths and computes `width = strokeWidth - 2`. |
+| `src/roads/RoadNetwork.ts` | Width-aware graph: 0.5 m node merge, endpoint/endpoint and endpoint/segment snapping (capped at 30 m), crossing splits, nearby-node bridges, nearest-node queries and A*. |
+| `src/MapGps/RoutePlanner.ts` | Orchestration only: air/boat/foot/ground strategy, road route + off-road connectors, grid fallback, leg splitting and cancellation. |
+
+Ground routing first tries the road graph (snapped within 500 m, off-road
+connectors to/from the road) and falls back to the terrain grid. Forest and
+water masks are rasterized from the terrain layers; the roads mask uses the
+`lines` variant, not the filled surface. Road edges still use the vehicle
+force-balance model; they only skip `terrainCoef` and the forest penalty.
+`TerrainHeights` builds a bounded 32x32 coarse height grid per plan (10 m
+minimum spacing, chunked requests, LRU + long-lived peak/ring cache) and both
+the road graph and the grid A* price the slope. Foot paths are validated at
+1 m after the path exists and re-planned with a 25 m penalty around a failed
+section; fine samples are not cached. The debug overlay is only shown when
+`window.TacPhone.gameInfo.isDebug()`; it uses OpenLayers image layers at about
+35% alpha and can scan the current viewport even without a route. It is not
+part of the normal HUD.
+
 ## Map tests
 
-`test/` has a Node marker-protocol scenario (game WebSocket) and Playwright
-`marker-channels`, `marker-ui` and `polyline-draw` scenarios. Browser scenarios
-create a new flexlayout tab, open the Map through the app chooser and wait for a
-quiet terrain-tile period before asserting. `marker-channels`
+`test/` has game-free unit modules (`test/unit/`) and live scenarios. The unit
+runner needs no game: `gps-speed` pins the `legSpeed` speed model (maxSpeed caps,
+climb, slope/crawl, water and surface costs), `gps-splice` the route
+geometry/splice helpers and the shared-route codec, `gps-advisor` the
+transport-mode advisor state machine (injected clock, no timers), `gps-routing`
+the route metrics, turn instructions, deviation tracker, vehicle-change parsing
+and the road graph's 0.5 m node merge, and `gps-payload` the `map.gps_route`
+contract plus the "do not import browser-only modules" guard. Run them with
+`npm run test:unit -- --verbose`.
+
+The live Node scenario is `marker-protocol` plus the GPS parts of `gps-protocol`;
+Playwright runs `marker-channels`, `marker-ui`, `polyline-draw`, `polyline-edit`,
+`map-view`, `gps-panel`, `gps-route`, `gps-shared` and `gps-shared-messenger`.
+Browser scenarios create a new flexlayout tab, open the Map or GPS through the app
+chooser and wait for a quiet terrain-tile period before asserting. `marker-channels`
 checks the singleplayer Group layer and custom colors in any session, and logs
 that the multiplayer-only checks (second channel, active-channel radio and
 inactive-channel dimming) were skipped when Arma reports singleplayer. In
 multiplayer it also covers layer visibility, active-channel dimming and custom
 RGBA colors. `polyline-draw` covers mouse clicks, touch taps and freehand
-strokes. All are deterministic and headless-capable and use DOM, attribute,
+strokes. `polyline-edit` opens the context menu on a created polyline, drags one
+vertex, saves, checks `GetAllMarkers`, then drags again and cancels; it uses
+`getMarkerPixels(name)` and `polyline.points` from the debug hook and compares
+menu/button text through `t('STR_...')` values, not English literals. All are
+deterministic and headless-capable and use DOM, attribute,
 geometry and `getComputedStyle()` assertions; canvas state is checked through
 `window.__TACPHONE_MAP_TEST__` (`getMapState()` plus the pure color helpers),
 not pixels. Local OCR/image analysis is allowed on the machine without a cloud
 service; AI image analysis only through `@LocalAgentHigh` on the maintainer's
 machine after asking the user.
 See [`../ACE_TacPhone_Map/test/README.md`](../ACE_TacPhone_Map/test/README.md).
+
+### GPS debug hooks and scenarios
+
+`window.__TACPHONE_MAP_TEST__` (dev builds or `gameInfo.debug`) exposes the GPS
+module as well:
+
+- `getGpsDebugState()` returns a plain snapshot of the module fields (not the
+  throttled `state`): fix/heading/position/speed, mode and `detectedMode`,
+  `waterCapable`, planning/navigating/calculating/rotating/mapRotation,
+  offRoute/stale/arrived, the waypoint list, the active route (source, distance,
+  ETA, remaining, per-leg mode/kind/distance/ETA/pointCount/source), the shared
+  preview, the advisor prompt, the status, the debug counters (`fixCount`,
+  `vehicleChangesApplied`, `repathCount`) and per-layer feature/dash/colour
+  state plus the player icon. `repathCount` only counts auto-repairs that
+  actually replaced the route.
+- `getRouteDebugSnapshot()` returns the full planner result for live
+  inspection: every leg point, the flattened geometry and leg starts, turn and
+  deviation state, and the debug-grid metadata. Use it through the host's
+  debug-only `window.__TACPHONE_DEBUG_EVAL__` when a route looks wrong.
+- The debug dialog's cost/height overlays have an alpha slider and a hover
+  readout. The readout samples the same grid (`Height`, `Cost`, `Surface`,
+  `Passable`, `Slope`) under the pointer.
+- `gps.*` forwards `setWaypoints`, `addWaypoint`, `clearWaypoints`,
+  `calculateRoute()` (resolves after planning), `startNavigation`,
+  `stopNavigation`, `setMode`, `setPlanning`, `openSharedRoute`,
+  `startSharedRoute`, `discardSharedRoute`, `acceptAdvisor`, `dismissAdvisor`,
+  `setLiveUpdates`, `applyFix`, `applyVehicle`, `getTerrainBounds`, `getPixel`
+  and `queryWater`. Every forwarder no-ops while no GPS panel is mounted.
+
+The browser helpers live in `test/lib/gps-page.mjs` (`openGpsPage`,
+`getGpsDebug`, `waitForGpsDebug`, `gpsCall`, `gpsT`, `gpsPixel`, `pointAt`,
+`distance`). `gps-panel` covers the HUD, the travel-mode reply, the options and
+the interest; `gps-route` covers waypoint clicks, per-mode planning, start/stop
+and follow; `gps-shared` drives the shared-route preview/discard/bad
+payload/start-join/replace-confirmation path through the `map` service;
+`gps-shared-messenger` walks the real `Share route` → Messenger card → preview →
+Start path (needs a `__A3_DEBUG__` game and skips otherwise). `gps-protocol`
+(Node) checks `GetPlayerTravelMode`, `Interest.Set` starting and stopping the
+10 Hz `GPS.Update` push, and a pre-encoded `map.gps_route` envelope stored
+byte-identically by the Messenger server.
+
+**Testing rule for GPS:** assert terrain-relative invariants, never a specific
+terrain feature. Coordinates come from `pointAt(state.position, …)` and are
+clamped by `getTerrainBounds()`, so a route assertion must not depend on where
+the map designer put roads or water. Pause live pushes
+(`setLiveUpdates(false)`) and feed synthetic fixes when the test needs a
+deterministic position/speed. Every scenario clears waypoints, stops
+navigation and restores option values in `finally`.
+
+The route summary's ETA always shows the route's own expected estimate
+(`remainingEta`), so it stays meaningful while the player is standing still; it
+only falls back to `--` when there is no route or no remaining ETA.
+
+`npm run test:gps-interactive` is the opt-in interactive tier (a human in a
+vehicle). It is not in `test:map`, `test:all` or any default listing, and refuses
+to run without `$env:TACPHONE_GPS_INTERACTIVE = '1'` or `--opt-in`.
+`gps-water-interactive` uses the debug-only `Debug.PrepareBoat` and
+`Debug.PrepareWaterVehicle` helpers to spawn the boat/vehicle and teleport the
+player beside it, then plans the Web UI's road/water/road waypoints.
+
 
 ## Marker channels
 
@@ -252,10 +364,24 @@ for mouse, touch, and pen.
   Height requests are skipped while zoomed out.
 - The preview layer sits above markers and is not in the layer switcher; the
   persisted measurement overlay is also untitled and excluded from hit-testing.
-- Polyline markers are display-only in the web UI for editing: the drag/edit
-  paths handle point markers only. They can be **shared**; the context menu for a
-  polyline only offers Share to Messenger and `focusMarker` fits its whole
-  geometry bounding box.
+- Polyline markers are editable in the web UI: the context menu offers
+  **Edit polyline** (`STR_ACE_Tacphone_Map_ContextMenu_EditPolyline`) for
+  `_USER_DEFINED` polylines, which calls `MarkerModule.beginPolylineEdit(name)`.
+  The panel then shows `Editing polyline` / `Drag a point to move it` with `Save`
+  and `Cancel` only; the color picker and click-per-point toggle are hidden.
+  Only existing vertices can be moved (no adding/removing), a press within
+  12 px of a vertex (capture-phase listener) drags that one point and keeps the
+  map drag-pan from starting, and `Escape` cancels. `Save` sends
+  `CreateMarker` with `{ name, polyline }` and keeps the marker's measurement tag;
+  `Cancel` clears the preview. `MarkerLayerManager.editingPolylineName` bars
+  incoming `Marker.Upsert` geometry from overwriting the local points until the
+  save or cancel, and a failed save restores the original points and notifies
+  with `STR_ACE_Tacphone_Map_PolylineEdit_SaveFailed`.
+- They can be **shared**; the context menu also offers Share to Messenger and
+  `focusMarker` fits their whole geometry bounding box.
+- A read-only presentation (`MarkerOverlay interactive={false}`, used by the GPS
+  view) draws markers but renders no polyline controls, dialog or menu and runs
+  no marker interaction.
 
 ## Notifications
 
@@ -279,11 +405,26 @@ Each mounted Map panel registers service `map`, version `1`, from `src/Map.tsx`:
 | `hasMarker(name)` | True while a marker with that internal name is on the marker layer. |
 | `focusMarker(name, options?)` | Flies to the marker and fits a default 800 m box for icon markers (or `options.bbox`); `options.highlight` shows a 48 px glow around an icon, or the geometry box for a polyline. If the marker is gone and `options.fallbackPosition` is set, it opens that position, shows the same highlight and a "Marker no longer exists" notification. Resolves `false` when there is neither a marker nor a fallback; it waits for the initial marker snapshot before deciding. |
 
+A **GPS panel** additionally registers service `gps`, version `1`. Its API
+inherits every `MapApi` method and adds:
+
+| Method | Meaning |
+| --- | --- |
+| `openSharedRoute(route)` | Opens a validated `map.gps_route` payload as a preview in that GPS panel. |
+| `startRouteTo(position, options?)` | Plans a route to `[x, y]` for the player's current detected mode and, by default, starts following it. `options.replace` defaults true; `options.start` defaults true. This is the "Show me how to get there" entry point for other apps. |
+
+A regular Map panel **never** registers `gps`, so a GPS command can never be
+routed to a plain Map panel. `gps` is the GPS-as-a-superset-of-Map relation:
+resolve `gps` for route commands (and map commands on the same panel), or
+`map` for map-only commands.
+
 Coordinates are world/map units, not latitude/longitude. Consumers should
-`resolveAsync({ service: 'map', ... })` because a background Map has no live
-registration. The generated `dist/ace_tacphone_map.d.ts` exports `MapApi`,
-`MapViewState`, `MapFlyToOptions`, `MapBoundingBox`, `MapFocusMarkerOptions`,
-`MAP_SERVICE`, and `MAP_SERVICE_VERSION`.
+`resolveAsync({ service: 'map', ... })` or `resolveAsync({ service: 'gps', ... })`
+because a background panel has no live registration. The generated
+`dist/ace_tacphone_map.d.ts` exports `MapApi`, `GpsApi`, `MapViewState`,
+`MapFlyToOptions`, `MapBoundingBox`, `MapFocusMarkerOptions`,
+`GpsStartRouteOptions`, `MAP_SERVICE`, `MAP_SERVICE_VERSION`, `GPS_SERVICE`, and
+`GPS_SERVICE_VERSION`.
 
 `MarkerLayerManager` backs those methods: `hasMarker()`, `whenMarkersLoaded()`
 (resolves after the initial snapshot, also on failure or destroy),
@@ -340,7 +481,9 @@ buttons; they call `options.apply()` and write the individual values.
 
 `Map.tsx` keeps the decoded terrain layers in `terrainSource` and builds tile
 layers in `rebuildTerrainLayers()`. Terrain tiles are fixed at 128 px; a larger
-tile delays the first visible terrain and does not pay for itself. Changing a
+tile delays the first visible terrain and does not pay for itself. GPS mode
+forces `preload >= 2` even when the user option is 0, because rotating in place
+otherwise exposes unloaded corner tiles as black squares. Changing a
 tiling option disposes and rebuilds only the tile sources; the terrain SVG is not
 requested from the game again. `pixelRatio` is applied live with
 `Map.setPixelRatio()`. The view's zoom-out limit uses a fixed 256 px reference,
@@ -359,16 +502,32 @@ The interest is `ACE_TacPhone_Map.markers` (`MAP_MARKERS_INTEREST` in
 - The host reference-counts it per page; several Map panels share one interest,
   and reconnect re-announces it.
 
+The GPS panel uses a second interest, `ACE_TacPhone_Map.gps`
+(`INTEREST_GPS` in `../../apps/map/script_component.hpp`). While it is held, the
+game runs a `GPS_UPDATE_INTERVAL` (0.1 s) per-frame handler that pushes
+`GPS.Update` with the player position, camera view direction, heading, speed and
+velocity, and installs `GetInMan`/`GetOutMan` on the player to push
+`GPS.VehicleChanged`. Per-frame data is never pushed without the interest. The
+per-frame handler and the vehicle handlers have separate idempotency guards, so
+a `player` that is still null at activation does not stop the handlers from
+being installed later. Starting a shared-route preview joins the nearest point
+and confirms in the card before it replaces a running route; the in-game browser
+does not reliably show a native `confirm()` dialog, so the Map never uses one.
+
 ## Game-side handlers (`../../apps/map/functions`)
 
 | File | Role |
 | --- | --- |
-| `fnc_processBrowserRequest.sqf` | Handles the `GetAllMarkers`, `GetMarkerChannels`, `getTerrainHeight`, `CreateMarker`, `DeleteMarker`, and `GetMarkerTypes` requests. |
+| `fnc_processBrowserRequest.sqf` | Handles the `GetAllMarkers`, `GetMarkerChannels`, `getTerrainHeight`, `GetPlayerTravelMode`, `CreateMarker`, `DeleteMarker`, and `GetMarkerTypes` requests. |
 | `fnc_createMarker.sqf` | Creates or updates a marker from request data. |
 | `fnc_assembleMarkerInfo.sqf` | Builds the marker array sent as `Marker.Upsert` / snapshot entries. |
 | `fnc_onMarkerCreated.sqf`, `fnc_onMarkerPosChanged.sqf`, `fnc_onMarkerDeleted.sqf` | Mission/CBA marker event handlers; push to interested clients. |
 | `fnc_onMarkerPlaced.sqf` | ACE marker-placed handler; forwards new markers to `onMarkerCreated`. |
-| `fnc_onInterestActivated.sqf`, `fnc_onInterestDeactivated.sqf` | Install/remove exactly the marker event handlers on interest transitions (idempotent). |
+| `fnc_onInterestChanged.sqf` | Single interest transition handler (`[interest, active]`), one branch per interest: installs/removes exactly the marker event handlers or the GPS per-frame updater (idempotent). |
+| `fnc_onGpsUpdate.sqf` | Per-frame `GPS.Update` push (position, view, direction, speed, velocity) while a client holds `INTEREST_GPS`. |
+| `fnc_onGpsVehicleChanged.sqf` | Player `GetInMan`/`GetOutMan` handler; pushes `GPS.VehicleChanged` on the next frame. |
+| `fnc_getPlayerTravelMode.sqf` | Detects the local player's travel mode (`foot`/`ground`/`boat`/`air`), vehicle class, water capability and performance; also returned by the `GetPlayerTravelMode` request. |
+| `fnc_getVehiclePerformance.sqf` | Builds the vehicle config/PhysX snapshot (`maxSpeedKmh`, `enginePowerKw`, `massKg`, turning, water, bounding box) for the web speed model. |
 
 `XEH_postInit.sqf` registers the two CBA interest events. The app is registered
 in `../../apps/map/ace_tacphone_apps.hpp`; see [`sqf.md`](sqf.md#app-registration)

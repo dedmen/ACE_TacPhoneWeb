@@ -9,6 +9,72 @@ import { t } from "./i18n";
 const MAX_TERRAIN_CHUNK_CHARS = 6 * 1024 * 1024;
 
 /**
+ * How long a completed terrain result is reused for the same config.
+ *
+ * StrictMode mounts the Map twice in development, so two identical requests
+ * start back to back. Coalescing in-flight requests handles that; the short
+ * completed TTL also catches the second request arriving just after the first
+ * resolves. It is intentionally short so a mission/world change cannot serve
+ * stale terrain for long.
+ */
+const TERRAIN_CACHE_TTL_MS = 5000;
+/**
+ * A pending request older than this is considered stuck and is not reused.
+ * A3API has no cancellation, so a hung game reply would otherwise poison every
+ * later terrain request for the rest of the page session.
+ */
+const TERRAIN_PENDING_STALE_MS = 3000;
+
+interface TerrainCacheEntry {
+    promise: Promise<TerrainData>;
+    settled: boolean;
+    startedAt: number;
+    expiresAt: number;
+}
+
+/** Coalesces identical terrain requests and briefly caches the result. */
+function coalescedTerrainRequest(
+    cache: Map<string, TerrainCacheEntry>,
+    config: object,
+    load: () => Promise<TerrainData>,
+): Promise<TerrainData> {
+    const key = JSON.stringify(config);
+    const now = Date.now();
+    const existing = cache.get(key);
+    const reusable = existing && (existing.settled
+        ? now < existing.expiresAt
+        : now - existing.startedAt < TERRAIN_PENDING_STALE_MS);
+    if (reusable) {
+        return existing.promise;
+    }
+    if (existing) {
+        cache.delete(key);
+    }
+
+    const entry: TerrainCacheEntry = {
+        promise: load(),
+        settled: false,
+        startedAt: now,
+        expiresAt: 0,
+    };
+    cache.set(key, entry);
+
+    entry.promise.then(
+        () => {
+            entry.settled = true;
+            entry.expiresAt = Date.now() + TERRAIN_CACHE_TTL_MS;
+        },
+        () => {
+            if (cache.get(key) === entry) {
+                cache.delete(key);
+            }
+        },
+    );
+
+    return entry.promise;
+}
+
+/**
  * Splits a whole terrain SVG into standalone per-layer SVG documents.
  *
  * Host-internal producer helper: the game response is the only place that has
@@ -78,6 +144,7 @@ function splitBase64(data: string, maxChars: number): string[] {
 
 class NetworkingA3 implements Networking {
     requestCounter: number = 0;
+    private readonly terrainCache = new Map<string, TerrainCacheEntry>();
     constructor() {
         console.log("NetworkStartup A3");
     };
@@ -136,6 +203,14 @@ class NetworkingA3 implements Networking {
     }
 
     LoadGameTerrain(config: object): Promise<TerrainData> {
+        return coalescedTerrainRequest(
+            this.terrainCache,
+            config,
+            () => this.loadGameTerrainUncached(config),
+        );
+    }
+
+    private loadGameTerrainUncached(config: object): Promise<TerrainData> {
         // The SVG is text (including location names), so it needs the UTF-8 repair.
         return window.A3API.RequestTerrainSVG(config)
             .then(decodeGameText)
@@ -266,6 +341,7 @@ const DEVICE_STORAGE_PREFIX = "tacphone.device.";
 
 class NetworkingWebsocket implements Networking {
     requestCounter: number = 0;
+    private readonly terrainCache = new Map<string, TerrainCacheEntry>();
     socket!: WebSocket;
     readonly remoteApi: RemoteSessionApi | null = null;
 
@@ -707,6 +783,7 @@ class NetworkingWebsocket implements Networking {
 
             socket.onclose = () => {
                 this.isReady = false;
+                this.terrainCache.clear();
                 // Keep queued requests: they flush again after the next attach.
                 this.notifyConnectionChange(false);
 
@@ -752,6 +829,7 @@ class NetworkingWebsocket implements Networking {
         };
 
         this.socket.onclose = (event) => {
+            this.terrainCache.clear();
             if (event.wasClean) {
                 console.log(`[close] Connection closed cleanly, code=${event.code} reason=${event.reason}`);
             } else {
@@ -925,7 +1003,15 @@ class NetworkingWebsocket implements Networking {
             });
     }
 
-    async LoadGameTerrain(config: object): Promise<TerrainData> {
+    LoadGameTerrain(config: object): Promise<TerrainData> {
+        return coalescedTerrainRequest(
+            this.terrainCache,
+            config,
+            () => this.loadGameTerrainUncached(config),
+        );
+    }
+
+    private async loadGameTerrainUncached(config: object): Promise<TerrainData> {
         // Terrain is the only request that may need more than the default timeout:
         // the game splits and compresses every layer before replying.
         const result: unknown = await this.RequestWithTimeout(

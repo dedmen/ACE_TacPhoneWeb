@@ -14,8 +14,9 @@
  *   marker through `MapApi.focusMarker()`.
  */
 
-import type { MapFocusMarkerOptions } from './api';
+import { GPS_SERVICE, type GpsApi, type MapFocusMarkerOptions } from './api';
 import { t } from './i18n';
+import { formatSharedSummary } from './MapGps/GpsFormat';
 
 /** App name in `ace_tacphone_apps`; key of `window.TacPhone.apps.knownApps`. */
 export const MESSENGER_APP_NAME = 'Messaging';
@@ -397,5 +398,204 @@ export function registerMarkerObjectRenderer(): () => void {
         stopWatching?.();
         stopWatching = undefined;
         detachRenderer();
+    };
+}
+
+// ---------------------------------------------------------------------------
+// map.gps_route
+// ---------------------------------------------------------------------------
+
+export const GPS_ROUTE_OBJECT_KIND = 'map.gps_route';
+export const GPS_ROUTE_OBJECT_VERSION = 1;
+
+interface GpsRouteObjectLeg {
+    mode: string;
+    kind: string;
+    points: number[];
+    eta: number;
+}
+
+export interface GpsRouteObjectData {
+    v: number;
+    origin: [number, number];
+    waypoints: number[];
+    legs: GpsRouteObjectLeg[];
+    distance: number;
+    eta: number | null;
+    author: string;
+    createdAt: number;
+    label?: string;
+    vehicle?: unknown;
+}
+
+function modeLabel(mode: string): string {
+    if (mode === 'foot') return t('STR_ACE_Tacphone_Map_Gps_Mode_Foot');
+    if (mode === 'boat') return t('STR_ACE_Tacphone_Map_Gps_Mode_Boat');
+    if (mode === 'air') return t('str_dn_aircraft');
+    return t('STR_ACE_Tacphone_Map_Gps_Mode_Ground');
+}
+
+function readGpsRouteObjectData(value: unknown): GpsRouteObjectData | null {
+    if (!value || typeof value !== 'object') return null;
+    const data = value as Partial<GpsRouteObjectData>;
+    if (data.v !== 1) return null;
+    if (!Array.isArray(data.origin) || data.origin.length < 2) return null;
+    if (!Number.isFinite(data.origin[0]) || !Number.isFinite(data.origin[1])) return null;
+    if (!Array.isArray(data.waypoints) || data.waypoints.length < 2) return null;
+    if (!data.waypoints.every((v) => typeof v === 'number' && Number.isFinite(v))) return null;
+    if (!Array.isArray(data.legs) || data.legs.length === 0) return null;
+    for (const leg of data.legs) {
+        if (!leg || typeof leg !== 'object') return null;
+        if (!Array.isArray(leg.points) || leg.points.length < 4) return null;
+        if (!leg.points.every((v) => typeof v === 'number' && Number.isFinite(v))) return null;
+    }
+    if (typeof data.distance !== 'number' || !Number.isFinite(data.distance)) return null;
+    if (typeof data.author !== 'string') return null;
+    if (typeof data.createdAt !== 'number' || !Number.isFinite(data.createdAt)) return null;
+    return data as GpsRouteObjectData;
+}
+
+function buildGpsRoutePreview(data: GpsRouteObjectData): ChatObjectPreview {
+    const waypointCount = Math.floor(data.waypoints.length / 2);
+    const waypoints = waypointCount === 1
+        ? t('STR_ACE_Tacphone_Map_Gps_Shared_Waypoints_One', waypointCount)
+        : t('STR_ACE_Tacphone_Map_Gps_Shared_Waypoints_Other', waypointCount);
+    const mode = modeLabel(data.legs[0]?.mode ?? 'ground');
+    return {
+        title: data.label || t('STR_ACE_Tacphone_Map_Gps_Shared_Title'),
+        subtitle: formatSharedSummary(mode, data.distance, waypoints),
+        color: '#22d3ee',
+    };
+}
+
+export function buildGpsRouteChatObject(data: unknown, author: string): ChatObject {
+    const route = readGpsRouteObjectData(data);
+    const payload: GpsRouteObjectData = route ?? {
+        v: 1,
+        origin: [0, 0],
+        waypoints: [],
+        legs: [],
+        distance: 0,
+        eta: null,
+        author,
+        createdAt: 0,
+    };
+    const preview = route ? buildGpsRoutePreview(route) : {
+        title: t('STR_ACE_Tacphone_Map_Gps_Shared_Unavailable'),
+    };
+
+    return {
+        kind: GPS_ROUTE_OBJECT_KIND,
+        version: GPS_ROUTE_OBJECT_VERSION,
+        data: payload,
+        preview,
+        action: {
+            service: GPS_SERVICE,
+            panelId: 'ACE_TacPhone_Map_GPS',
+            method: 'openSharedRoute',
+            args: [payload],
+            policy: 'ask',
+        },
+    };
+}
+
+export async function shareGpsRouteToMessenger(data: unknown, author: string): Promise<ShareResult> {
+    // A route that does not validate here would be stored as an empty card, so
+    // the share fails instead of sending a broken object.
+    if (!readGpsRouteObjectData(data)) {
+        throw new Error('This route cannot be shared.');
+    }
+
+    const api = await resolveMessengerForShare();
+    if (!api || typeof api.shareObject !== 'function') {
+        throw new Error('Messenger is not available.');
+    }
+
+    return api.shareObject(buildGpsRouteChatObject(data, author));
+}
+
+const gpsRouteObjectRenderer: MessengerObjectRenderer = {
+    kind: GPS_ROUTE_OBJECT_KIND,
+    describe(data, storedPreview): ChatObjectPreview | undefined {
+        const route = readGpsRouteObjectData(data);
+        return route ? buildGpsRoutePreview(route) : storedPreview;
+    },
+    async activate(data): Promise<void> {
+        const route = readGpsRouteObjectData(data);
+        if (!route) throw new Error('This GPS route object has no usable data.');
+
+        const info = await window.TacPhone.interApp.resolveAsync({
+            service: GPS_SERVICE,
+            panelId: 'ACE_TacPhone_Map_GPS',
+            openIfMissing: true,
+        });
+
+        const api = info?.api as GpsApi | undefined;
+        if (!api || typeof api.openSharedRoute !== 'function') {
+            throw new Error('The GPS panel is not available.');
+        }
+
+        if ((await api.openSharedRoute(route)) === false) {
+            throw new Error('The GPS panel could not open this route.');
+        }
+    },
+};
+
+let gpsRegisteredApi: MessengerApi | undefined;
+let gpsUnregisterRenderer: (() => void) | undefined;
+
+function attachGpsRenderer(): void {
+    const api = getMessengerApi();
+    if (gpsRegisteredApi === api && gpsUnregisterRenderer) return;
+
+    detachGpsRenderer();
+    if (!api || typeof api.registerObjectRenderer !== 'function') return;
+
+    gpsRegisteredApi = api;
+    gpsUnregisterRenderer = api.registerObjectRenderer(gpsRouteObjectRenderer);
+}
+
+function detachGpsRenderer(): void {
+    const unregister = gpsUnregisterRenderer;
+    gpsUnregisterRenderer = undefined;
+    gpsRegisteredApi = undefined;
+    if (!unregister) return;
+
+    try {
+        unregister();
+    } catch (error) {
+        console.warn('Could not unregister the GPS route object renderer', error);
+    }
+}
+
+let gpsRendererUsers = 0;
+let gpsStopWatching: (() => void) | undefined;
+
+export function registerGpsRouteObjectRenderer(): () => void {
+    gpsRendererUsers += 1;
+
+    if (gpsRendererUsers === 1) {
+        try {
+            gpsStopWatching = window.TacPhone.interApp.onDidChange(() => {
+                attachGpsRenderer();
+            });
+        } catch (error) {
+            console.warn('Could not watch the inter-app registry', error);
+        }
+
+        attachGpsRenderer();
+    }
+
+    let active = true;
+    return () => {
+        if (!active) return;
+        active = false;
+        gpsRendererUsers -= 1;
+        if (gpsRendererUsers > 0) return;
+
+        gpsRendererUsers = 0;
+        gpsStopWatching?.();
+        gpsStopWatching = undefined;
+        detachGpsRenderer();
     };
 }

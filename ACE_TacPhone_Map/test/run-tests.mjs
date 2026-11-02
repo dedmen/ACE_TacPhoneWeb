@@ -27,8 +27,25 @@ import * as markerUi from './scenarios/marker-ui.test.mjs';
 import * as polylineDraw from './scenarios/polyline-draw.test.mjs';
 import * as polylineEdit from './scenarios/polyline-edit.test.mjs';
 import * as mapView from './scenarios/map-view.test.mjs';
+import * as gpsPanel from './scenarios/gps-panel.test.mjs';
+import * as gpsRoute from './scenarios/gps-route.test.mjs';
+import * as gpsShared from './scenarios/gps-shared.test.mjs';
+import * as gpsSharedMessenger from './scenarios/gps-shared-messenger.test.mjs';
+import * as gpsProtocol from './scenarios/gps-protocol.test.mjs';
 
-const ALL_SCENARIOS = [markerProtocol, markerChannels, markerUi, polylineDraw, polylineEdit, mapView];
+const ALL_SCENARIOS = [
+    markerProtocol,
+    markerChannels,
+    markerUi,
+    polylineDraw,
+    polylineEdit,
+    mapView,
+    gpsPanel,
+    gpsRoute,
+    gpsShared,
+    gpsSharedMessenger,
+    gpsProtocol,
+];
 
 function printHelp() {
     console.log(`TacPhone Map runtime tests
@@ -57,7 +74,10 @@ Prerequisites:
   - The Node client needs Node to trust the local HTTPS certificate; set
     NODE_EXTRA_CA_CERTS instead of disabling verification.
   - The 256-character clamp assertion needs a PBO built after the SQF clamp was
-    added.`);
+    added.
+  - gps-shared-messenger and the Messenger half of gps-protocol need a game built
+    with __A3_DEBUG__; they skip cleanly without it.
+  - The opt-in interactive GPS suite is separate: npm run test:gps-interactive.`);
 }
 
 function parseArgs(argv) {

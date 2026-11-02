@@ -9,6 +9,16 @@ export const t = (key: string, ...args: Array<string | number>): string =>
  * the game in bulk during `init()`, before any panel renders.
  */
 export const MAP_BASE_GAME_STRINGS: readonly string[] = [
+    'STR_3DEN_Display3DEN_ControlsHint_Cancel',
+    'STR_WI_ARTI_TIME_NA',
+    'str_3den_display3den_menubar_missionsave_text',
+    'str_a3_gps1',
+    'str_a3_rscdisplaylogin_bx_discard',
+    'str_a3_stop',
+    'str_disp_arcmap_clear',
+    'str_mprole_start',
+    'str_disp_switch',
+    'str_dn_aircraft',
     'STR_3DEN_Group_Mode_Custom',
     'STR_3DEN_Layer_textPlural',
     'STR_3DEN_Marker_textPlural',

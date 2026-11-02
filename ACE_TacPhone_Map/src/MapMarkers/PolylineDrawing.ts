@@ -17,6 +17,8 @@ const HALO_WIDTH = 6;
 const LINE_WIDTH = 3;
 const VERTEX_RADIUS = 4;
 const VERTEX_BORDER_WIDTH = 1.5;
+// Edit mode shows bigger, easier to grab handles on the existing vertices.
+const EDIT_VERTEX_RADIUS = 7;
 
 /**
  * Squared distance from a point to a line segment. Used by the simplifier, so
@@ -165,6 +167,8 @@ export class PolylineDrawing {
     private haloColor: string;
     private baseStyles: Style[] = [];
     private measurementsEnabled = false;
+    /** True while the existing vertices are shown as draggable edit handles. */
+    private editing = false;
     /** Bumped whenever the points change, to invalidate the label cache. */
     private pointsRevision = 0;
     private measurementStyles: Style[] = [];
@@ -193,6 +197,25 @@ export class PolylineDrawing {
 
     public isMeasurementsEnabled(): boolean {
         return this.measurementsEnabled;
+    }
+
+    /**
+     * Switches the preview between drawing and editing an existing polyline.
+     * Edit mode renders larger vertex handles and disables drawing-only input
+     * in the owner; the geometry itself is unchanged.
+     */
+    public setEditing(editing: boolean): void {
+        if (this.editing === editing) {
+            return;
+        }
+
+        this.editing = editing;
+        this.baseStyles = this.createStyles();
+        this.layer.changed();
+    }
+
+    public isEditing(): boolean {
+        return this.editing;
     }
 
     public setColor(cssColor: string): void {
@@ -238,6 +261,61 @@ export class PolylineDrawing {
         this.heights.pop();
         this.pointsRevision++;
         this.syncFeature();
+    }
+
+    /**
+     * Replaces every point, for example with the vertices of a polyline that is
+     * being edited. Heights are dropped: they belong to the old coordinates.
+     */
+    public setPoints(points: readonly [number, number][]): void {
+        this.points.length = 0;
+        this.heights.length = 0;
+
+        for (const [x, y] of points) {
+            if (!Number.isFinite(x) || !Number.isFinite(y)) {
+                continue;
+            }
+
+            this.points.push([x, y]);
+            this.heights.push(null);
+        }
+
+        this.pointsRevision++;
+        this.measurementStyles = [];
+        this.measurementStylesKey = '';
+        this.syncFeature();
+    }
+
+    /**
+     * Moves the vertex at `index` without touching any other point. Returns
+     * false when the index or the coordinate is invalid.
+     */
+    public movePoint(index: number, coordinate: [number, number]): boolean {
+        if (!Number.isInteger(index) || index < 0 || index >= this.points.length) {
+            return false;
+        }
+
+        const [x, y] = coordinate;
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            return false;
+        }
+
+        const point = this.points[index];
+        if (point[0] === x && point[1] === y) {
+            return true;
+        }
+
+        this.points[index] = [x, y];
+        // The stored height described the old spot; the owner refetches it.
+        this.heights[index] = null;
+        this.pointsRevision++;
+        this.syncFeature();
+        return true;
+    }
+
+    /** Returns a copy of every point, or `[]` while nothing is loaded. */
+    public getPoints(): [number, number][] {
+        return this.points.map(([x, y]): [number, number] => [x, y]);
     }
 
     public clear(): void {
@@ -393,7 +471,7 @@ export class PolylineDrawing {
                 // and no second feature.
                 geometry: this.getVertexGeometry,
                 image: new Circle({
-                    radius: VERTEX_RADIUS,
+                    radius: this.editing ? EDIT_VERTEX_RADIUS : VERTEX_RADIUS,
                     fill: new Fill({ color }),
                     stroke: new Stroke({ color: haloColor, width: VERTEX_BORDER_WIDTH }),
                 }),

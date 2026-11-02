@@ -1,0 +1,534 @@
+/* GPS overlay: HUD on top of the map plus the route/preview cards. */
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 900;
+  pointer-events: none;
+  font-family: sans-serif;
+  user-select: none;
+}
+
+/* ------------------------------------------------------------------ HUD */
+
+.hud {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.topBar {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  max-width: calc(100% - 16px);
+  flex-wrap: wrap;
+  pointer-events: none;
+}
+
+.headingBar {
+  padding: 4px 14px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.72);
+  color: #e0f2fe;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+
+.routeArrowInline {
+  width: 26px;
+  height: 26px;
+  transform-origin: 50% 50%;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.4));
+  transition: transform 0.15s linear;
+  flex: 0 0 auto;
+}
+
+.compassInline {
+  position: relative;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: rgba(15, 23, 42, 0.66);
+  border: 1px solid rgba(148, 163, 184, 0.55);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  flex: 0 0 auto;
+}
+
+.compassEast,
+.compassSouth,
+.compassWest {
+  position: absolute;
+  color: #cbd5e1;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.compassEast {
+  top: 50%;
+  right: 3px;
+  transform: translateY(-50%);
+}
+
+.compassSouth {
+  bottom: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.compassWest {
+  top: 50%;
+  left: 3px;
+  transform: translateY(-50%);
+}
+
+.turnIndicator {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.72);
+  color: #fbbf24;
+  font-size: 11px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+
+.routeInfo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.72);
+  color: #e0f2fe;
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+
+.routeWarning {
+  color: #fbbf24;
+}
+
+.compass {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(148, 163, 184, 0.5);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+
+.compassRose {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  transform-origin: 50% 50%;
+  transition: transform 0.15s linear;
+}
+
+.compassNorth {
+  position: absolute;
+  top: 3px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: #f87171;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.playerMarker {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  line-height: 0;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.45));
+  will-change: transform;
+}
+
+.routeArrow {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 34px;
+  height: 34px;
+  margin-top: -108px;
+  margin-left: -17px;
+  transform-origin: 50% 50%;
+  opacity: 0.95;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.4));
+  transition: transform 0.15s linear;
+}
+
+.arrivedBadge {
+  position: absolute;
+  top: 48px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: #16a34a;
+  color: #f0fdf4;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------- Route panel */
+
+.debugLauncher {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  min-width: 42px;
+  height: 32px;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.8);
+  background: rgba(15, 23, 42, 0.82);
+  color: #fbbf24;
+  font-family: monospace;
+  font-size: 11px;
+  font-weight: 800;
+  pointer-events: auto;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.debugPanel {
+  position: absolute;
+  left: 10px;
+  bottom: 50px;
+  width: min(230px, calc(100% - 80px));
+  padding: 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.97);
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
+  color: #0f172a;
+  pointer-events: auto;
+  font-size: 12px;
+}
+
+.debugTitle {
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #64748b;
+}
+
+.debugRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0;
+  cursor: pointer;
+
+  input[type='range'] {
+    flex: 1;
+    min-width: 0;
+  }
+}
+
+.debugAction {
+  width: 100%;
+  margin-top: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.debugReadout {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-family: monospace;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.panelToggle {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  border: 1px solid rgba(148, 163, 184, 0.7);
+  background: rgba(255, 255, 255, 0.96);
+  color: #0f172a;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  pointer-events: auto;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  touch-action: manipulation;
+}
+
+.panelToggle[aria-pressed='true'] {
+  background: #0284c7;
+  color: #ffffff;
+  border-color: #0284c7;
+}
+
+.panel {
+  position: absolute;
+  right: 10px;
+  bottom: 64px;
+  width: min(300px, calc(100% - 96px));
+  /* Grow with the shared-route card instead of showing a scrollbar at 62%. */
+  max-height: calc(100% - 76px);
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: 10px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.97);
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+  color: #0f172a;
+  pointer-events: auto;
+  touch-action: manipulation;
+}
+
+.panelHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.panelTitle {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.modeState {
+  font-size: 12px;
+  font-weight: 600;
+  color: #0369a1;
+  white-space: nowrap;
+}
+
+.modeToggle {
+  min-height: 30px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  background: #f1f5f9;
+  color: #0f172a;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.modeRow,
+.actionRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0;
+}
+
+.modeButton,
+.modeButtonActive {
+  flex: 1 1 auto;
+  min-height: 34px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  color: #334155;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.modeButtonActive {
+  border-color: #0284c7;
+  background: #0284c7;
+  color: #ffffff;
+}
+
+.button {
+  flex: 1 1 auto;
+  min-height: 36px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  background: #f1f5f9;
+  color: #0f172a;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.button:hover:not(:disabled) {
+  background: #e2e8f0;
+}
+
+.button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.modeButton:focus-visible,
+.modeButtonActive:focus-visible,
+.button:focus-visible,
+.removeButton:focus-visible {
+  outline: 2px solid #0284c7;
+  outline-offset: -2px;
+}
+
+.status,
+.notice {
+  margin: 6px 0;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: #e0f2fe;
+  color: #075985;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.notice {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.hint {
+  margin: 4px 0;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.sectionTitle {
+  margin: 8px 0 4px;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #64748b;
+}
+
+.waypointList {
+  margin: 6px 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.waypointItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: #f1f5f9;
+}
+
+.waypointIndex {
+  font-size: 12px;
+  font-weight: 700;
+  color: #0f172a;
+  font-variant-numeric: tabular-nums;
+}
+
+.removeButton {
+  min-width: 28px;
+  min-height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #b91c1c;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.removeButton:hover {
+  background: #fee2e2;
+}
+
+.summary {
+  margin: 6px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #1e293b;
+  font-variant-numeric: tabular-nums;
+}
+
+.warning {
+  color: #b45309;
+  font-weight: 700;
+}
+
+.muted {
+  margin: 6px 0;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.card {
+  margin-top: 10px;
+  padding: 8px;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+
+.cardTitle {
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.cardText {
+  margin: 2px 0;
+  font-size: 12px;
+  color: #334155;
+}

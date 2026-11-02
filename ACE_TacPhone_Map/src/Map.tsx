@@ -26,6 +26,7 @@ import ImageTileSource from 'ol/source/ImageTile';
 
 import { LayerSwitcher } from './LayerSwitcher';
 import { MarkerOverlay, type MarkerOverlayHandle } from './MapMarkers/MarkerOverlay';
+import { GpsOverlay, type GpsOverlayHandle } from './MapGps/GpsOverlay';
 import { LayerSwitcherRegistry } from './MapMarkers/LayerSwitcherRegistry';
 import {
     onMapRenderSettingsChanged,
@@ -33,8 +34,12 @@ import {
     type MapRenderSettings,
 } from './MapOptions';
 import {
+    GPS_SERVICE,
+    GPS_SERVICE_VERSION,
     MAP_SERVICE,
     MAP_SERVICE_VERSION,
+    type GpsApi,
+    type GpsStartRouteOptions,
     type MapApi,
     type MapBoundingBox,
     type MapFlyToOptions,
@@ -72,9 +77,10 @@ const FLY_TO_FIT_MARGIN_PX = 48;
 interface MapState {
   layerSwitcherIsOpen: boolean;
   terrainError: string | null;
+  terrainData: TerrainData | null;
 }
 
-class App extends React.Component<AppProps,MapState> {
+class App extends React.Component<AppProps & { mode?: 'map' | 'gps' }, MapState> {
     // Setup the ref for the map canvas container element
     private mapRef: RefObject<HTMLDivElement | null> = createRef();
     // Keep the map instance directly on the class instance
@@ -101,16 +107,24 @@ class App extends React.Component<AppProps,MapState> {
     private unsubscribeOptions: (() => void) | undefined;
 
     private markerUiRef = createRef<MarkerOverlayHandle>();
+    private gpsUiRef = createRef<GpsOverlayHandle>();
     private readonly layerSwitcherSections = new LayerSwitcherRegistry();
+
+    private get isGps(): boolean {
+        return this.props.mode === 'gps';
+    }
 
     /** Unregister function for the Map API. */
     private unregisterMapApi: (() => void) | undefined;
+    /** Unregister function for the GPS-only API (GPS panels only). */
+    private unregisterGpsApi: (() => void) | undefined;
 
     constructor(props: AppProps) {
         super(props);
         this.state = {
             layerSwitcherIsOpen: false,
             terrainError: null,
+            terrainData: null,
         };
     }
 
@@ -171,9 +185,10 @@ class App extends React.Component<AppProps,MapState> {
             // Let fit() show the whole terrain on panels whose aspect ratio differs
             // from the terrain instead of clipping one axis.
             showFullExtent: true,
-            // The map is north-up only: the rotation constraint ignores every
-            // rotation, including two-finger rotate and programmatic calls.
-            enableRotation: false,
+            // The regular Map is north-up only. GPS mode allows programmatic
+            // rotation to follow the view direction.
+            enableRotation: this.isGps,
+            constrainRotation: this.isGps ? false : true,
             minResolution,
             maxResolution,
             center: [
@@ -268,6 +283,7 @@ class App extends React.Component<AppProps,MapState> {
      * the implementation of `MapApi.flyTo()` and of marker focusing.
      */
     private flyToCoordinate(options: MapFlyToOptions): void {
+        this.gpsUiRef.current?.suspendFollow();
         const bbox = this.readBoundingBox(options.bbox);
         if (options.bbox !== undefined && bbox === null) {
             console.warn('MapApi.flyTo: invalid bounding box, expected [minX, minY, maxX, maxY]');
@@ -420,6 +436,11 @@ class App extends React.Component<AppProps,MapState> {
             return;
         }
 
+        this.unregisterMapApi?.();
+        this.unregisterMapApi = undefined;
+        this.unregisterGpsApi?.();
+        this.unregisterGpsApi = undefined;
+
         /**
          * The MapApi public interface for other apps:
          * - flyTo(options): move the map view
@@ -464,13 +485,33 @@ class App extends React.Component<AppProps,MapState> {
             },
         };
 
-        const registration = window.TacPhone.interApp.register(this.props.panel, {
+        this.unregisterMapApi = window.TacPhone.interApp.register(this.props.panel, {
             service: MAP_SERVICE,
             version: MAP_SERVICE_VERSION,
             api,
         });
 
-        this.unregisterMapApi = registration;
+        // GPS commands target only GPS panels. A regular Map panel never
+        // registers this service, so routing cannot select the wrong panel.
+        if (this.isGps) {
+            const gpsApi: GpsApi = {
+                // A GPS is a Map: inherit the map methods and add route control.
+                ...api,
+                openSharedRoute: (route: unknown) => {
+                    return this.gpsUiRef.current?.openSharedRoute(route) ?? Promise.resolve(false);
+                },
+                startRouteTo: (position: [number, number], options?: GpsStartRouteOptions) => {
+                    return this.gpsUiRef.current?.startRouteTo(position, options)
+                        ?? Promise.resolve(false);
+                },
+            };
+
+            this.unregisterGpsApi = window.TacPhone.interApp.register(this.props.panel, {
+                service: GPS_SERVICE,
+                version: GPS_SERVICE_VERSION,
+                api: gpsApi,
+            });
+        }
     }
 
     /**
@@ -524,6 +565,10 @@ class App extends React.Component<AppProps,MapState> {
         if (this.unregisterMapApi) {
             this.unregisterMapApi();
             this.unregisterMapApi = undefined;
+        }
+        if (this.unregisterGpsApi) {
+            this.unregisterGpsApi();
+            this.unregisterGpsApi = undefined;
         }
 
         if (this.unsubscribeOptions) {
@@ -627,7 +672,7 @@ class App extends React.Component<AppProps,MapState> {
         }
 
         const loadToken = ++this.terrainLoadToken;
-        this.setState({ terrainError: null });
+        this.setState({ terrainError: null, terrainData: terrain });
 
         // Load every split SVG image first, so a failure cannot leave
         // half-created tile sources behind.
@@ -737,7 +782,9 @@ class App extends React.Component<AppProps,MapState> {
                 newLayers.push(new TileLayer({
                     properties: {title: loadedLayer.name},
                     source: svgTileSource,
-                    preload: settings.tilePreload,
+                    // GPS rotates in place; preload a ring beyond the viewport so
+                    // the corners do not appear as black tiles while turning.
+                    preload: this.isGps ? Math.max(2, settings.tilePreload) : settings.tilePreload,
                     // A phone-sized viewport only needs a few tiles per layer. The
                     // default (512) keeps hundreds of MiB of canvases per layer alive.
                     cacheSize: settings.tileCacheSize,
@@ -905,13 +952,15 @@ class App extends React.Component<AppProps,MapState> {
 
                 <div ref={this.mapRef} className={`${styles.map}`} style={{width: "100%", height: "100%"}}/>
 
-                <LayerSwitcher
-                    map={this.map}
-                    isOpen={this.state.layerSwitcherIsOpen}
-                    onToggle={this.toggleLayerSwitcherMenu}
-                    onClose={this.closeLayerSwitcherMenu}
-                    sections={this.layerSwitcherSections}
-                />
+                {!this.isGps && (
+                    <LayerSwitcher
+                        map={this.map}
+                        isOpen={this.state.layerSwitcherIsOpen}
+                        onToggle={this.toggleLayerSwitcherMenu}
+                        onClose={this.closeLayerSwitcherMenu}
+                        sections={this.layerSwitcherSections}
+                    />
+                )}
 
                 <MarkerOverlay
                     ref={this.markerUiRef}
@@ -920,7 +969,18 @@ class App extends React.Component<AppProps,MapState> {
                     layerSwitcher={this.layerSwitcherSections}
                     flyTo={(options) => this.flyToCoordinate(options)}
                     onRequestCloseLayers={this.closeLayerSwitcherMenu}
+                    interactive={!this.isGps}
                 />
+
+                {this.isGps && (
+                    <GpsOverlay
+                        ref={this.gpsUiRef}
+                        map={this.map}
+                        terrain={this.state.terrainData}
+                        flyTo={(options) => this.flyToCoordinate(options)}
+                        onRequestCloseLayers={this.closeLayerSwitcherMenu}
+                    />
+                )}
 
                 {this.state.terrainError && (
                     <div

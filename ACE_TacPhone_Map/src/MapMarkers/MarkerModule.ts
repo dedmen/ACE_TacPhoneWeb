@@ -39,6 +39,8 @@ const LONG_PRESS_MOVE_TOLERANCE_PX = 10;
 const MARKER_MOVE_HOLD_MS = 100;
 const POLYLINE_FREEHAND_MIN_DISTANCE_M = 5;
 const POLYLINE_SIMPLIFY_TOLERANCE_M = 2;
+/** Pointer distance in pixels that grabs an existing polyline vertex. */
+const POLYLINE_VERTEX_HIT_RADIUS_PX = 12;
 /** World-space box used when focusing a marker without an explicit bbox. */
 const MARKER_FOCUS_SIZE_METERS = 800;
 /** Screen-space glow size around a focused icon marker. */
@@ -53,11 +55,20 @@ export interface PolylineUiState {
     color: string;
     vertexCount: number;
     clickPerPoint: boolean;
+    /** True while the vertices of an existing polyline are being edited. */
+    isEditing: boolean;
+    /** Name of the polyline being edited, or '' when not editing. */
+    editingName: string;
 }
 
 export interface MarkerModuleCallbacks {
     /** True while the React marker dialog is open. */
     isDialogOpen(): boolean;
+    /**
+     * False for a read-only map (GPS): markers are drawn, but no create/edit/
+     * drag interactions run. Missing means interactive.
+     */
+    isInteractive?(): boolean;
     onOpenCreateDialog(coordinate: [number, number]): void;
     onOpenEditDialog(name: string): void;
     onOpenMarkerMenu(name: string, clientX: number, clientY: number): void;
@@ -84,6 +95,19 @@ interface MarkerMoveState {
     lastY: number;
     moved: boolean;
     pointerType: string;
+}
+
+/** Local state of a polyline edit session (existing vertices only). */
+interface PolylineEditState {
+    name: string;
+    /** Points before the edit, restored when the save fails. */
+    original: [number, number][];
+    /** True when the polyline carries the measurements tag. */
+    clickPerPoint: boolean;
+    /** Vertex currently dragged, if any. */
+    drag: { pointerId: number; index: number } | null;
+    /** True while the save request is in flight. */
+    saving: boolean;
 }
 
 function hasMovedBeyondTolerance(x: number, y: number, event: PointerEvent): boolean {
@@ -117,7 +141,12 @@ export class MarkerModule {
         color: '',
         vertexCount: 0,
         clickPerPoint: polylineClickPerPointMode,
+        isEditing: false,
+        editingName: '',
     };
+
+    /** Set while the vertices of an existing polyline are being moved. */
+    private polylineEdit: PolylineEditState | null = null;
 
     private longPressTimer: number | null = null;
     private longPressStart: { x: number; y: number; pointerId: number; coordinate: [number, number] } | null = null;
@@ -149,6 +178,9 @@ export class MarkerModule {
         this.map.on('dblclick', this.handleMapDoubleClick);
 
         const viewport = this.map.getViewport();
+        // Capture phase: a vertex press must not start a map drag-pan, so it is
+        // swallowed before OpenLayers sees the pointerdown.
+        viewport.addEventListener('pointerdown', this.handleVertexPointerDownCapture, true);
         viewport.addEventListener('pointerdown', this.handleMapPointerDown);
         viewport.addEventListener('pointermove', this.handleMapPointerMove);
         viewport.addEventListener('pointerup', this.handleMapPointerUp);
@@ -177,6 +209,7 @@ export class MarkerModule {
         this.clearMarkerMenuTimer();
         this.polylineTapStart = null;
         this.polylineStrokePointerId = null;
+        this.cancelPolylineEdit();
 
         if (this.markerMoveState) {
             this.manager.endMarkerMove(this.markerMoveState.name);
@@ -193,6 +226,7 @@ export class MarkerModule {
         this.map.un('dblclick', this.handleMapDoubleClick);
 
         const viewport = this.map.getViewport();
+        viewport.removeEventListener('pointerdown', this.handleVertexPointerDownCapture, true);
         viewport.removeEventListener('pointerdown', this.handleMapPointerDown);
         viewport.removeEventListener('pointermove', this.handleMapPointerMove);
         viewport.removeEventListener('pointerup', this.handleMapPointerUp);
@@ -424,6 +458,40 @@ export class MarkerModule {
         return { ...this.polylineState };
     }
 
+    /**
+     * What the context menu should offer for a marker: the point dialog, the
+     * polyline vertex editor, or nothing for read-only markers.
+     */
+    public getMarkerEditTarget(name: string): 'point' | 'polyline' | null {
+        if (!isEditableMarkerName(name)) {
+            return null;
+        }
+
+        if (this.manager.getMarkerData(name)) {
+            return 'point';
+        }
+
+        return this.manager.getPolylineData(name) ? 'polyline' : null;
+    }
+
+    /** Debug-only: a marker's vertices in viewport pixels. */
+    public getMarkerPixels(name: string): [number, number][] | null {
+        const coordinates = this.manager.getMarkerCoordinates(name);
+        if (!coordinates) {
+            return null;
+        }
+
+        const pixels: [number, number][] = [];
+        for (const coordinate of coordinates) {
+            const pixel = this.map.getPixelFromCoordinate(coordinate);
+            if (pixel) {
+                pixels.push([pixel[0], pixel[1]]);
+            }
+        }
+
+        return pixels.length > 0 ? pixels : null;
+    }
+
     /** Debug-only live state for the browser tests. */
     public getMapDebugState(): MapDebugState {
         const previewColors = this.polylineDrawing.getDebugColors();
@@ -434,11 +502,18 @@ export class MarkerModule {
                 ...this.getPolylineState(),
                 previewLineColor: previewColors.line,
                 previewHaloColor: previewColors.halo,
+                points: this.polylineEdit ? this.polylineDrawing.getFlatPolyline() : [],
             },
         };
     }
 
     public togglePolyline(): void {
+        // The pencil button leaves edit mode instead of starting a new line.
+        if (this.polylineEdit) {
+            this.cancelPolylineEdit();
+            return;
+        }
+
         if (this.polylineState.isActive) {
             this.stopPolyline();
             return;
@@ -484,10 +559,167 @@ export class MarkerModule {
         this.polylineStrokePointerId = null;
         this.polylineDrawing.setMeasurementsEnabled(false);
         this.polylineDrawing.clear();
-        this.setPolylineState({ isActive: false, vertexCount: 0 });
+        this.setPolylineState({
+            isActive: false,
+            vertexCount: 0,
+            isEditing: false,
+            editingName: '',
+        });
         this.setDragPanActive(true);
         this.setFreehandTouchCapture(false);
         this.resetMapCursor();
+    }
+
+    // ---------------------------------------------------------------------
+    // Polyline edit mode
+    // ---------------------------------------------------------------------
+
+    /**
+     * Loads an existing player polyline into the drawing preview and lets the
+     * user drag its vertices. Only `_USER_DEFINED` polylines can be edited.
+     */
+    public beginPolylineEdit(name: string): boolean {
+        if (this.destroyed || !isEditableMarkerName(name)) {
+            return false;
+        }
+
+        const data = this.manager.getPolylineData(name);
+        if (!data || data.points.length < 2) {
+            return false;
+        }
+
+        if (this.polylineState.isActive) {
+            this.stopPolyline();
+        }
+
+        this.cancelMarkerHold();
+        this.cancelLongPress();
+        this.clearMarkerMenuTimer();
+        this.hoveredMarkerName = null;
+
+        if (this.markerMoveState) {
+            this.manager.endMarkerMove(this.markerMoveState.name);
+            this.markerMoveState = null;
+            this.releaseMarkerPointerCapture();
+        }
+
+        this.polylineEdit = {
+            name,
+            original: data.points.map(([x, y]): [number, number] => [x, y]),
+            clickPerPoint: data.measurements,
+            drag: null,
+            saving: false,
+        };
+
+        this.manager.setEditingPolyline(name);
+
+        this.polylineTapStart = null;
+        this.polylineStrokePointerId = null;
+        this.polylineDrawing.clear();
+        this.polylineDrawing.setColor(this.getDrawingColorCss(data.color));
+        this.polylineDrawing.setMeasurementsEnabled(data.measurements);
+        this.polylineDrawing.setPoints(data.points);
+        this.polylineDrawing.setEditing(true);
+
+        // Touch drags must not scroll the page while a vertex is moved.
+        this.setFreehandTouchCapture(true);
+        this.setDragPanActive(true);
+        this.setMapCursor('');
+
+        this.setPolylineState({
+            isActive: true,
+            isEditing: true,
+            editingName: name,
+            color: data.color,
+            vertexCount: data.points.length,
+            clickPerPoint: data.measurements,
+        });
+
+        return true;
+    }
+
+    /**
+     * Sends the moved vertices to the game. On failure the original points are
+     * restored locally and the user is notified.
+     */
+    public savePolylineEdit(): void {
+        const edit = this.polylineEdit;
+        if (!edit || this.destroyed || edit.saving || edit.drag) {
+            return;
+        }
+
+        const points = this.polylineDrawing.getPoints();
+        if (points.length < 2) {
+            return;
+        }
+
+        const original = edit.original.map(([x, y]): [number, number] => [x, y]);
+        const name = edit.name;
+
+        // Keep the upsert guard (and the panel) until the game confirmed the
+        // new geometry, so a late update with the old points cannot snap the
+        // polyline back while the request is in flight.
+        edit.saving = true;
+
+        const finish = (): void => {
+            if (this.polylineEdit === edit) {
+                this.finishPolylineEdit();
+            }
+        };
+
+        void this.manager.updatePolylineData(name, points).then(finish, (error: unknown) => {
+            console.error('Failed to save the edited polyline', error);
+            this.manager.applyPolylineGeometry(name, original);
+            finish();
+            this.showPolylineSaveFailed();
+        });
+    }
+
+    /** Drops the edit session; the polyline keeps its stored geometry. */
+    public cancelPolylineEdit(): void {
+        if (!this.polylineEdit) {
+            return;
+        }
+
+        this.finishPolylineEdit();
+    }
+
+    /** Shared teardown of an edit session, without touching the game. */
+    private finishPolylineEdit(): void {
+        const edit = this.polylineEdit;
+        if (!edit) {
+            return;
+        }
+
+        this.releaseMarkerPointerCapture();
+        this.polylineEdit = null;
+        this.manager.setEditingPolyline(null);
+
+        this.polylineDrawing.setEditing(false);
+        this.polylineDrawing.setMeasurementsEnabled(false);
+        this.polylineDrawing.clear();
+
+        this.setPolylineState({
+            isActive: false,
+            isEditing: false,
+            editingName: '',
+            vertexCount: 0,
+        });
+        this.setDragPanActive(true);
+        this.setFreehandTouchCapture(false);
+        this.resetMapCursor();
+    }
+
+    private showPolylineSaveFailed(): void {
+        try {
+            window.TacPhone.notifications.show({
+                title: t('str_3den_display3den_menubar_missionsave_textFailed'),
+                app: 'ACE_TacPhone_Map',
+                sound: 'alert',
+            });
+        } catch (error) {
+            console.warn('Could not show the polyline save-failure notification', error);
+        }
     }
 
     public setPolylineColor(colorClassName: string): void {
@@ -747,7 +979,7 @@ export class MarkerModule {
     // ---------------------------------------------------------------------
 
     private handleMapDoubleClick = (event: MapBrowserEvent): void => {
-        if (this.callbacks.isDialogOpen() || this.polylineState.isActive) {
+        if (!this.isInteractive() || this.callbacks.isDialogOpen() || this.polylineState.isActive || this.polylineEdit) {
             return;
         }
 
@@ -794,6 +1026,11 @@ export class MarkerModule {
     private getContextMarkerNameAtEvent(event: PointerEvent | MouseEvent): string | null {
         const name = this.getMarkerNameAtEvent(event);
         return isEditableMarkerName(name) ? name : null;
+    }
+
+    /** Read-only maps (GPS) draw markers but accept no marker interaction. */
+    private isInteractive(): boolean {
+        return this.callbacks.isInteractive?.() !== false;
     }
 
     private setDragPanActive(active: boolean): void {
@@ -872,7 +1109,16 @@ export class MarkerModule {
     };
 
     private handleViewportContextMenu = (event: MouseEvent): void => {
+        if (!this.isInteractive()) {
+            return;
+        }
+
         if (this.polylineState.isActive) {
+            event.preventDefault();
+            return;
+        }
+
+        if (this.polylineEdit) {
             event.preventDefault();
             return;
         }
@@ -890,7 +1136,17 @@ export class MarkerModule {
     };
 
     private handleWindowKeyDown = (event: KeyboardEvent): void => {
-        if (this.callbacks.isDialogOpen()) {
+        if (!this.isInteractive() || this.callbacks.isDialogOpen()) {
+            return;
+        }
+
+        if (event.key === 'Escape' && this.polylineEdit) {
+            if (isEditableElement(event.target) || isEditableElement(document.activeElement)) {
+                return;
+            }
+
+            event.preventDefault();
+            this.cancelPolylineEdit();
             return;
         }
 
@@ -904,7 +1160,7 @@ export class MarkerModule {
             return;
         }
 
-        if (event.key !== 'Delete' || this.polylineState.isActive) {
+        if (event.key !== 'Delete' || this.polylineState.isActive || this.polylineEdit) {
             return;
         }
 
@@ -1029,7 +1285,13 @@ export class MarkerModule {
     }
 
     private handleMapPointerDown = (event: PointerEvent): void => {
-        if (!event.isPrimary || this.callbacks.isDialogOpen()) {
+        if (!this.isInteractive() || !event.isPrimary || this.callbacks.isDialogOpen()) {
+            return;
+        }
+
+        if (this.polylineEdit) {
+            // Vertex drags are started in the capture listener, which keeps the
+            // press away from the map interactions.
             return;
         }
 
@@ -1109,7 +1371,105 @@ export class MarkerModule {
         }, LONG_PRESS_DURATION_MS);
     };
 
+    /**
+     * Hit-tests the vertices of the polyline being edited and starts a drag on
+     * one of them. Runs in the capture phase so OpenLayers never starts a
+     * drag-pan for the same press.
+     */
+    private handleVertexPointerDownCapture = (event: PointerEvent): void => {
+        const edit = this.polylineEdit;
+        if (!edit || edit.saving || !event.isPrimary || this.callbacks.isDialogOpen() || !this.isInteractive()) {
+            return;
+        }
+
+        if (event.pointerType === 'mouse' && event.button !== 0) {
+            return;
+        }
+
+        if (isEditableElement(event.target)) {
+            return;
+        }
+
+        const index = this.findPolylineVertexAt(event);
+        if (index === null) {
+            return;
+        }
+
+        event.stopPropagation();
+        event.preventDefault();
+
+        edit.drag = { pointerId: event.pointerId, index };
+        this.setMapCursor('grabbing');
+
+        const viewport = this.map.getViewport();
+        try {
+            viewport.setPointerCapture(event.pointerId);
+            this.markerPointerCapture = { viewport, pointerId: event.pointerId };
+        } catch {
+            this.markerPointerCapture = null;
+        }
+    };
+
+    /** Index of the polyline vertex within the hit radius, or null. */
+    private findPolylineVertexAt(event: PointerEvent | MouseEvent): number | null {
+        if (!this.polylineEdit) {
+            return null;
+        }
+
+        const pixel = this.map.getEventPixel(event);
+        const points = this.polylineDrawing.getPoints();
+        const maxDistanceSquared = POLYLINE_VERTEX_HIT_RADIUS_PX * POLYLINE_VERTEX_HIT_RADIUS_PX;
+        let bestIndex: number | null = null;
+        let bestDistanceSquared = maxDistanceSquared;
+
+        for (let index = 0; index < points.length; index++) {
+            const vertexPixel = this.map.getPixelFromCoordinate(points[index]);
+            if (!vertexPixel) {
+                continue;
+            }
+
+            const dx = vertexPixel[0] - pixel[0];
+            const dy = vertexPixel[1] - pixel[1];
+            const distanceSquared = dx * dx + dy * dy;
+            if (distanceSquared <= bestDistanceSquared) {
+                bestDistanceSquared = distanceSquared;
+                bestIndex = index;
+            }
+        }
+
+        return bestIndex;
+    }
+
     private handleMapPointerMove = (event: PointerEvent): void => {
+        if (!this.isInteractive()) {
+            return;
+        }
+
+        const edit = this.polylineEdit;
+        if (edit) {
+            if (edit.drag) {
+                if (event.pointerId !== edit.drag.pointerId) {
+                    return;
+                }
+
+                event.preventDefault();
+                const coordinate = this.map.getEventCoordinate(event);
+                if (coordinate) {
+                    // Only the grabbed vertex moves; the other points stay.
+                    this.polylineDrawing.movePoint(edit.drag.index, [coordinate[0], coordinate[1]]);
+                }
+
+                this.setMapCursor('grabbing');
+                return;
+            }
+
+            if (event.pointerType === 'mouse' && event.buttons === 0) {
+                this.setMapCursor(this.findPolylineVertexAt(event) !== null ? 'grab' : '');
+            }
+
+            return;
+        }
+
         if (this.polylineState.isActive) {
             if (event.pointerType === 'mouse' && event.buttons !== 0) {
                 this.setMapCursor(event.buttons === 2 ? 'grabbing' : 'crosshair');
@@ -1168,6 +1528,29 @@ export class MarkerModule {
     }
 
     private handleMapPointerUp = (event: PointerEvent): void => {
+        if (!this.isInteractive()) {
+            return;
+        }
+
+        const edit = this.polylineEdit;
+        if (edit) {
+            const drag = edit.drag;
+            if (!drag || event.pointerId !== drag.pointerId) {
+                return;
+            }
+
+            edit.drag = null;
+            this.releaseMarkerPointerCapture();
+            this.setMapCursor('');
+
+            if (edit.clickPerPoint) {
+                // Measurements need the terrain height of the moved vertex.
+                this.requestPolylineHeights([drag.index]);
+            }
+
+            return;
+        }
+
         if (this.polylineState.isActive) {
             if (event.pointerType === 'mouse' && event.button === 2) {
                 this.setMapCursor('crosshair');

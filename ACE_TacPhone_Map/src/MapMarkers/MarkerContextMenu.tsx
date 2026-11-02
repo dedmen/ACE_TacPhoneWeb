@@ -21,7 +21,9 @@ interface MarkerContextMenuProps {
     onShare?: () => void;
     /** True for a shareable marker while the Messenger app is installed. */
     canShare?: boolean;
-    /** Point markers can be edited; polylines only offer sharing. */
+    /** Target kind; polylines get their own heading and edit label. */
+    kind?: 'marker' | 'polyline';
+    /** Point markers and polylines can be edited; read-only ones cannot. */
     canEdit?: boolean;
     canDelete?: boolean;
     onClose: () => void;
@@ -42,6 +44,7 @@ export function MarkerContextMenu({
     onDelete,
     onShare,
     canShare = false,
+    kind = 'marker',
     canEdit = true,
     canDelete = true,
     onClose,
@@ -49,6 +52,13 @@ export function MarkerContextMenu({
     const menuRef = useRef<HTMLDivElement>(null);
     const openedAtRef = useRef(0);
     const pressedRef = useRef<string | null>(null);
+    const isPolyline = kind === 'polyline';
+    const heading = isPolyline
+        ? t('STR_ACE_Tacphone_Map_ContextMenu_Polyline')
+        : t('STR_3DEN_Marker_textSingular');
+    const editLabel = isPolyline
+        ? t('STR_ACE_Tacphone_Map_ContextMenu_EditPolyline')
+        : t('str_arcmark_title2');
 
     useEffect(() => {
         openedAtRef.current = Date.now();
@@ -128,9 +138,9 @@ export function MarkerContextMenu({
             className={MenuStyle.menu}
             style={{ left: x, top: y }}
             role="menu"
-            aria-label={t('STR_3DEN_Marker_textSingular')}
+            aria-label={heading}
         >
-            <div className={MenuStyle.heading}>{t('STR_3DEN_Marker_textSingular')}</div>
+            <div className={MenuStyle.heading}>{heading}</div>
             {canShare && onShare !== undefined && (
                 <button
                     type="button"
@@ -158,7 +168,7 @@ export function MarkerContextMenu({
                 onPointerLeave={() => { pressedRef.current = null; }}
                 onClick={handleItemClick}
             >
-                {t('str_arcmark_title2')}
+                {editLabel}
             </button>
             <button
                 type="button"

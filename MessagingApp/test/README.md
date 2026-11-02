@@ -11,6 +11,11 @@ framework; only Node built-ins.
 
 ## Prerequisites
 
+Unit tier: **none**. `npm run test:unit` needs only Node (20.19+/22.12+) and the
+workspace `vite` devDependency; it does not need Arma, the web host or a browser.
+
+Live tier:
+
 - **Arma 3 is running** a mission with the TacPhone add-on loaded, on the machine
   that owns the player and the TacPhone page (single player or a listen server).
   The WebSocket host, local display mode and `local` page client are per machine.
@@ -45,6 +50,10 @@ From `websource`:
 ```powershell
 node MessagingApp/test/run-tests.mjs
 npm run test:messaging
+
+# game-free codec unit tests (no game)
+npm run test:unit
+node MessagingApp/test/run-unit-tests.mjs --only object-codec --verbose
 ```
 
 `npm run test:all` runs the host, Messenger and Map suites sequentially and
@@ -70,8 +79,11 @@ connection or reconnects).
 test/
 ├── run-tests.mjs                  # CLI, opens the connection, runs scenarios
 ├── run-browser-tests.mjs          # Playwright Messenger UI suite
+├── run-unit-tests.mjs             # game-free codec unit runner (Vite loader)
 ├── lib/
 │   └── fake-players.mjs           # Messaging.Debug.* helpers and fake fixtures
+├── unit/
+│   └── object-codec.unit.mjs      # gzip envelope, size helper, cache (node:zlib stub)
 ├── scenarios/
 │   ├── connection.test.mjs        # Hello identity, RequestChatState -> Done
 │   ├── rooms.test.mjs             # roster, group room, direct room
@@ -91,6 +103,27 @@ test/
 └── browser/
     └── ui-checklist.md            # manual browser checks with the game running
 ```
+
+## Unit tier (game-free)
+
+`run-unit-tests.mjs` loads `unit/object-codec.unit.mjs` with
+`ACE_TacPhone_Main/test/lib/ts-module.mjs`, which bundles the real
+`src/objectCodec.ts` in memory with Vite and imports it from a `data:` URL. No
+game, browser or build output is involved, and a missing `vite` is a `SKIP`.
+
+The module stubs `globalThis.window.TacPhone.utils.compressAndToBase64` /
+`decompressFromBase64` with `node:zlib` inside `run()` and deletes the stub in
+`finally`. It pins:
+
+- a small payload stays the same object reference (no envelope),
+- a large payload becomes `__tacphoneObject { v: 1, codec: 'gzip', enc: 'base64', d }`
+  with `kind`, `version` and `preview` unchanged and `data`/`action` removed,
+- decoding restores `data` and `action`, a corrupted payload keeps the preview
+  and warns exactly once, forwarding an already-encoded object is a no-op,
+- the bounded decode cache (hit, `resetObjectDecodeCache()`, 100-entry limit),
+- `checkEncodedObjects()` / `MAX_ENCODED_MESSAGE_CHARS`: an oversized object is
+  rejected, a normal route is accepted. That is the helper
+  `ChatStore.sendMessage()` uses instead of its old inline comparison.
 
 ## How the helpers work
 

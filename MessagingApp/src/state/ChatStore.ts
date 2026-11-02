@@ -75,9 +75,9 @@ import {
     sortRoomSummaries,
 } from './roomUtils';
 import {
+    checkEncodedObjects,
     decodeChatObjectsFromStorage,
     encodeChatObjectsForStorage,
-    measureEncodedObjects,
     resetObjectDecodeCache,
 } from '../objectCodec';
 import { t } from '../i18n';
@@ -128,11 +128,10 @@ export interface ChatStoreState {
 export type ChatStoreListener = (state: ChatStoreState) => void;
 
 /**
- * Upper bound for the encoded objects of one message, measured in JSON
- * characters. The game stores messages in memory and the bridge passes text,
- * so an oversized payload is rejected instead of silently truncated.
+ * Re-exported from `objectCodec` (which owns the limit) so existing imports
+ * from the store keep working.
  */
-export const MAX_ENCODED_MESSAGE_CHARS = 96 * 1024;
+export { MAX_ENCODED_MESSAGE_CHARS } from '../objectCodec';
 
 /** Side-channel events for code that must not re-render on every state change. */
 export type ChatStoreEvent =
@@ -926,11 +925,11 @@ class ChatStoreImpl implements ChatStoreApi {
         if (objectList) {
             wireObjects = await encodeChatObjectsForStorage(objectList);
 
-            const encodedChars = measureEncodedObjects(wireObjects);
-            if (encodedChars > MAX_ENCODED_MESSAGE_CHARS) {
+            const size = checkEncodedObjects(wireObjects);
+            if (!size.ok) {
                 console.warn(
                     `Messaging: message objects are too large for the game ` +
-                    `(${encodedChars} > ${MAX_ENCODED_MESSAGE_CHARS} characters).`,
+                    `(${size.chars} > ${size.limit} characters).`,
                 );
 
                 return {

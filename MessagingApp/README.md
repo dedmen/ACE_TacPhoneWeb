@@ -70,6 +70,7 @@ Each mounted Messenger panel registers the `messenger` service (version `1`):
 | Method | Meaning |
 | --- | --- |
 | `getRooms()` / `getRoom(id)` | Room summaries, newest message first. |
+| `getMessages(roomId)` | Loaded messages, oldest first, with stored chat objects decoded. |
 | `openRoom(id)` | Select a room in the panel, opening Messenger if needed. |
 | `sendMessage(roomId, content, objects?)` | Send text with optional chat objects. |
 | `shareObject(object, options?)` | Open the target selector and resolve on send/cancel; pass `roomId` to send directly. |

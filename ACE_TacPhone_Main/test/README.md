@@ -89,6 +89,8 @@ test/
 │   ├── host-page.mjs                # launchHostPage, openAppThroughChooser, activatePanelTab, requestApp
 │   ├── skip.mjs                     # SkipError / skip()
 │   ├── ws-client.mjs                # raw RFC 6455 client with Origin header
+│   ├── ts-module.mjs                # in-memory Vite bundle loader for unit tests
+│   ├── unit-runner.mjs              # --list/--only/--verbose unit CLI
 │   └── assertions.mjs               # assertion helpers + runSuite
 ├── scenarios/
 │   ├── apps.test.mjs                # GetAvailableApps includes main/Map/Messaging
@@ -102,7 +104,27 @@ test/
 
 App-specific helpers stay in the app's own `test/lib/` (the Map keeps
 `map-page.mjs` with `openMapPage`, `getMapState`, `getMapView` and the
-marker/polyline protocol helpers).
+marker/polyline protocol helpers, plus `gps-page.mjs` with `openGpsPage`,
+`getGpsDebug`, `waitForGpsDebug`, `gpsCall`, `gpsT`, `gpsPixel`, `pointAt` and
+`distance`; the Messenger keeps `fake-players.mjs`).
+
+### Game-free unit tests
+
+`ts-module.mjs` is the documented exception to "tests never import app source":
+it bundles one entry file in memory with Vite (`configFile: false`,
+`write: false`, `lib` + ES format), imports the chunk from a `data:` URL and
+caches it by `root|entry`. Code that uses the app's own TypeScript pipeline
+therefore runs in plain Node, with no artifacts and no extra dependency. A
+missing `vite` becomes a `SkipError`.
+
+`unit-runner.mjs` runs the unit modules of one app (`--list`, `--only`,
+`--verbose`). `scripts/test-unit.mjs` drives the Messenger and Map runners from
+the root `npm run test:unit`. A unit module lives in the app's `test/unit/`,
+does not assert at import time, and exports `name`, an optional `description` and
+`async run()`. Import only modules that are Node-safe: anything touching
+`window`, DOM or OpenLayers at module scope must stay out (the Map's
+`gps-payload` case fails loudly if such a module creeps in). `globalThis.window`
+may be stubbed inside `run()` and must be deleted in `finally`.
 
 ## Adding a scenario
 

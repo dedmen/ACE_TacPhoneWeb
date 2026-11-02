@@ -16,7 +16,32 @@ export const MAP_OPTION_KEYS = {
     pixelRatio: "pixelRatio",
     tilePreload: "tilePreload",
     smoothScaling: "smoothScaling",
+    gpsRotateWithPlayer: "gpsRotateWithPlayer",
+    gpsAutoRepath: "gpsAutoRepath",
 } as const;
+
+/** GPS settings read from the shared Map option schema. */
+export interface GpsSettings {
+    rotateWithPlayer: boolean;
+    autoRepath: boolean;
+}
+
+export function readGpsSettings(): GpsSettings {
+    const rotate = window.TacPhone.options.get<unknown>(MAP_APP, MAP_OPTION_KEYS.gpsRotateWithPlayer);
+    const auto = window.TacPhone.options.get<unknown>(MAP_APP, MAP_OPTION_KEYS.gpsAutoRepath);
+
+    return {
+        rotateWithPlayer: typeof rotate === "boolean" ? rotate : true,
+        autoRepath: typeof auto === "boolean" ? auto : false,
+    };
+}
+
+export function onGpsSettingsChanged(listener: (settings: GpsSettings) => void): () => void {
+    return window.TacPhone.options.onDidChange(change => {
+        if (change.app === MAP_APP)
+            listener(readGpsSettings());
+    });
+}
 
 /** Fixed tile size: smaller tiles display the first terrain tile much faster. */
 const TERRAIN_TILE_SIZE = 128;
@@ -105,6 +130,20 @@ const MAP_OPTIONS = (): readonly AppOptionDefinition[] => [
         description: t('STR_ACE_Tacphone_Map_Options_SmoothScaling_Desc'),
         type: "boolean",
         default: true,
+    },
+    {
+        key: MAP_OPTION_KEYS.gpsRotateWithPlayer,
+        label: t('STR_ACE_Tacphone_Map_Gps_Options_RotateWithPlayer_Label'),
+        description: t('STR_ACE_Tacphone_Map_Gps_Options_RotateWithPlayer_Desc'),
+        type: "boolean",
+        default: true,
+    },
+    {
+        key: MAP_OPTION_KEYS.gpsAutoRepath,
+        label: t('STR_ACE_Tacphone_Map_Gps_Options_AutoRepath_Label'),
+        description: t('STR_ACE_Tacphone_Map_Gps_Options_AutoRepath_Desc'),
+        type: "boolean",
+        default: false,
     },
 ];
 

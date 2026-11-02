@@ -146,12 +146,9 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
   (`XEH_postInit.sqf:41, 43, 52`), and `:48` passes an array to `systemChat`,
   which expects a string, so 404s raise a script error instead of logging. Gate
   behind a debug flag and use `diag_log`/`str`.
-- [ ] **[cleanup]** Remove the temporary interest debug logging:
-  `fnc_interestSet.sqf` prints one `systemChat` line when an information interest
-  appears and one when it disappears (added for bring-up visibility of the
-  data-interest system). Delete those lines, or downgrade them to `diag_log`
-  behind a debug flag, once the feature is verified. The source lines are marked
-  `//#TODO remove debug logging`.
+- [x] **[cleanup]** Removed the temporary interest `systemChat` logging from
+  `fnc_interestSet.sqf`; both transitions now log to `diag_log` only in
+  `__A3_DEBUG__`. `Debug.GetInterests` exposes the live interest snapshot.
 - [ ] **[bug]** The dev console opens on every mission start:
   `fnc_loadPhoneBackground.sqf:76-80` (`//#TODO development, remove this`).
 - [ ] **[decision]** Only `/` is remapped to the addon data folder
@@ -405,9 +402,11 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
   singleplayer subset and logs the skipped multiplayer-only checks, and
   `polyline-draw` runs in a touch-capable context. The Messenger has a separate
   Playwright UI suite (`test:messaging-ui`) for rooms, messages, marker sharing
-  and Map focus. `npm run test:all` runs the host, Messenger WebSocket, Messenger
-  UI and Map suites in one pass and prints one summary.
-  `test:host` and `test:messaging` stay Node-only.
+  and Map focus. `npm run test:all` runs the host, host UI, Messenger WebSocket,
+  Messenger UI and Map suites in one pass and prints one summary.
+  `test:host` and `test:messaging` stay Node-only; `test:host-ui` is the host's
+  Playwright suite (audio unlock). The shared browser/Node helpers live in
+  `ACE_TacPhone_Main/test/lib/` and every suite imports them from there.
 - [ ] **[cleanup]** rerun `npm audit`, both builds, and `check:importmap`.
 - [ ] **[enhancement]** Brotli app bundles. The container header already carries
   the codec (`TACPHONE-BUNDLE:<version>:<codec>:<base64>`), so the build only has
@@ -425,6 +424,14 @@ in-game registration. Behaviour references: `MessagingApp/README.md` and
 
 Remaining work:
 
+- [ ] **[feature]** Messenger position messages. The Map API is ready
+  (`map.startRouteTo([x, y])`, with a default Replace/Start behaviour), but the
+  Messenger side is not implemented: add a position message composer, a
+  `map.position` chat object, a preview, and a **Show me how to get there**
+  action that calls `resolveAsync({ service: 'gps', method: 'startRouteTo',
+  args: [position] })`. The `gps` service is registered only by GPS panels;
+  reuse the `map.gps_route` confirmation/activation path and do not grant the
+  action when no GPS panel is mounted.
 - [ ] **[decision]** Enable `missionProfileNamespace` persistence and choose the
   save triggers (round end, mission end, periodic), schema migration, size
   limits, and whether state survives mission switches.
@@ -574,3 +581,112 @@ UI bundle.
   against a deliberately broken stringtable path; do a manual failure drill when
   changing the file loader.
 
+
+## GPS / route planning
+
+- [ ] **[cleanup]** `GpsOverlay.tsx` now contains the HUD/route-editor UI plus
+  the whole debug dialog, hover sampling, overlay-alpha state and debug effects.
+  Move the debug-only JSX, state and listeners into a separate
+  `MapGps/GpsDebugOverlay.tsx` component (the canvas painters stay in the
+  existing `GpsDebugOverlay.ts`). The production build should not carry debug
+  dialog code beyond the feature-flag check.
+- [ ] **[feature]** GPS update frequency option. `GPS.Update` currently runs at
+  `GPS_UPDATE_INTERVAL = 0.1` (10 Hz) while the GPS interest is held
+  (`fnc_onInterestChanged.sqf` starts the CBA PFH). Add a Map/GPS option for
+  **10 / 20 / 30 Hz**; when it changes, send a small `GPS.SetUpdateRate` (or
+  equivalent) command and restart the PFH with `1 / Hz` (clamp to a sane
+  minimum, e.g. 30 Hz). The HUD/follow code already tolerates faster fixes;
+  verify CPU cost and that a released interest still stops the PFH.
+- [x] **[cleanup]** The planned router split is complete: `routing/AStar.ts`,
+  `routing/TerrainGrid.ts`, `routing/SpeedModel.ts`, `routing/RouteMetrics.ts`,
+  `routing/TurnInstructions.ts`, `routing/DeviationTracker.ts`,
+  `routing/VehicleChange.ts`, `routing/RouteTypes.ts`,
+  `terrain/TerrainMasks.ts`, `roads/RoadSvgParser.ts` and
+  `roads/RoadNetwork.ts`. `MapGps/RoutePlanner.ts` only orchestrates the modes,
+  road/grid connectors, leg splitting and cancellation.
+- [x] **[robustness]** Slope is wired into the live A* edge cost:
+  `TerrainHeights` builds a bounded 32x32 coarse height grid (10 m minimum
+  spacing, chunked requests, bounded LRU), `slopeAt` feeds both the road graph
+  and the grid, and foot routes get a 1 m fine validation pass after the path
+  exists. A failed section is re-planned with a 25 m penalty around the
+  problem points. Peaks found in the coarse grid are kept in a long-lived
+  peak + ring cache so later routes do not re-query them.
+- [ ] **[robustness]** Verify the slope model against real vehicles/maps: a
+  heavy, low-power vehicle should be slower on a steep asphalt pass than a
+  light, high-power one, and a longer flatter road should win over a short
+  steep one. The 32x32 search grid, 1 m validation spacing and peak
+  prominence are tuning constants.
+- [ ] **[robustness]** Tune the route planner's grid size, water/road/forest costs and line-of-sight simplification against real maps; the first implementation is deliberately coarse. The road graph now uses a 0.5 m node grid, width-aware snapping capped at 30 m, crossing splits and nearby-node bridges; validate those constants on several maps.
+- [ ] **[robustness]** Tune waterResistanceCoef / waterSpeedCoef water speed for amphibious vehicles and the transport-mode advisor's follow delay, cooldown and 60 s / 20% saving threshold.
+- [ ] **[decision]** The transport-mode advisor runs only for shared routes. Explore enabling it for locally planned routes too.
+- [ ] **[cleanup]** Polyline edit currently moves existing vertices only; adding/removing points and sharing the full polyline geometry are follow-ups.
+- [x] **[cleanup]** GPS unit/separator strings are no longer stringtable keys:
+  `STR_ACE_Tacphone_Map_Gps_Route_DistanceKm` and
+  `STR_ACE_Tacphone_Map_Gps_Shared_Summary` were removed and replaced by
+  `MapGps/GpsFormat.ts` (`850 m`, `12.4 km`, `mode · distance · waypoints`).
+  `Gps_Route_Clear`/`Gps_Route_Start` were replaced by the base-game
+  `str_disp_arcmap_clear`/`str_mprole_start`, preloaded through
+  `MAP_BASE_GAME_STRINGS`.
+- [ ] **[cleanup]** The shared-route stored preview uses the sender's language when the GPS/Map app is not mounted; the renderer rebuilds it when mounted.
+- [ ] **[cleanup]** Messenger object compression has no codec-version migration path beyond reading the `v` field; document/implement the next version when needed.
+- [ ] **[robustness]** Message retention is still unbounded in the game-side Messenger server; compression reduces but does not cap memory.
+- [x] **[tests]** Deterministic GPS coverage landed:
+  - `npm run test:unit` (no game, no browser): `objectCodec` (small stays plain,
+    large becomes an envelope, decode restores `data`/`action`, a corrupted
+    payload keeps the preview, forwarding is idempotent, the decode cache is
+    bounded, the size helper rejects oversized objects), `legSpeed` (maxSpeed
+    cap, heavy-vs-light climb, slope and crawl/impassable cases, missing-config
+    fallback, water and surface costs), `gps-routing` (route metrics, leg index,
+    turn instructions, deviation delay/cooldown/zoom/arrival, vehicle-change
+    parsing and the road graph's 0.5 m node merge), the transport-mode advisor
+    (follow delay, saving threshold, dismissal per authored mode, accept
+    splices only up to the next waypoint) and the `map.gps_route` encode/decode
+    contract.
+  - `npm run test:map`: `gps-panel`, `gps-route`, `gps-shared`,
+    `gps-shared-messenger` (debug build only) and `gps-protocol` (the
+    `GetPlayerTravelMode` contract, `Interest.Set` starting/stopping the 10 Hz
+    `GPS.Update` push and its shape, release -> silence -> re-acquire, and a
+    pre-encoded `map.gps_route` envelope plus a plain small object stored
+    byte-identically by the Messenger server).
+  - `npm run test:gps-interactive` (opt-in, human in a vehicle): a <= 5 km route
+    with a mid waypoint relative to the live position and a dry destination for non-amphibious ground vehicles, progress on the real feed,
+    a deliberate deviation that triggers `gpsAutoRepath` (asserted through the new
+    `repathCount` debug counter), and a full cleanup. Its follow window scales
+    with the route (`max(120 s, distance / expectedSpeed * 4)`).
+- [ ] **[tests]** Residual GPS test gaps:
+  1. `gps-route` now searches for water within 4 km and asserts both the boat
+     route and an amphibious ground vehicle's water leg. The opt-in
+     `gps-water-interactive` scenario uses `Debug.PrepareBoat` /
+     `Debug.PrepareWaterVehicle` to spawn the actual boat/vehicle and teleports
+     the player beside it. A map with no water within 4 km still logs and skips
+     the geometry (the boat speed maths stay covered by the unit tier).
+  2. Road preference is asserted as "roads are faster per metre than offroad",
+     "no water leg for a non-amphibious vehicle" and "the road graph finds a
+     connected path between the two waypoints", not as one exact path; exact
+     paths depend on the terrain art.
+  3. Engine damage is now modelled (`engineHealth` from `getHitPointDamage
+     "hitEngine"`) and tested in `gps-speed`; cargo weight is already reflected
+     by `getMass`, which the force balance uses. Rain/fog are intentionally not
+     modelled (they do not change route choice or ground speed in the GPS), so
+     no test is planned for them.
+  4. `GetInMan`/`GetOutMan` respawn re-arming is still a decision: first test
+     whether the engine transfers unit handlers to the new player automatically
+     on respawn; only add a re-arm path if it does not.
+  5. `gps-route` now has a synthetic off-route auto-repath case: it enables
+     `gpsAutoRepath`, waits the 4 s delay, reapplies an off-route fix and waits
+     for `repathCount > 0`. The opt-in interactive tier remains the real-drive
+     check.
+  6. `gps-protocol` now calls `Debug.GetInterests` around `Interest.Set` when
+     the PBO provides it, and asserts the GPS interest appears and then returns
+     to its pre-acquire state. The check is defensive so an older PBO logs and
+     skips instead of failing.
+  7. `gps-route` now asserts the debug viewport scan produces a grid and a
+     cost layer. The 1 m fine-validation reroute still has no synthetic
+     steep-corridor browser test; it is covered by the implementation and the
+     height/cache unit tests.
+  8. `gps-route` plans the same foot route twice and asserts the second plan
+     adds no new coarse height requests (`heights.coarseRequests`), proving the
+     LRU/peak cache reuse. The peak/ring storage itself is also unit-tested.
+- [x] **[robustness]** `TerrainMasks.findLayer` prefers exact role names (`terrain`/`land`, `roads`/`road`, `forests`/`forest`, `objects`/`object`) and only then falls back to a substring match. `filterByPaint` now resolves inherited `fill`/`stroke` through parent `<g>` elements (an explicit `fill="none"` still wins). Verify the real terrain SVGs on several maps when adding new terrain data.
+- [ ] **[decision]** `GetInMan`/`GetOutMan` are installed on the player object when the GPS interest activates. Before adding a `EntityRespawned`/player-change re-arm path, test whether the engine transfers unit event handlers to the new player automatically on respawn. Only add re-arming if that test shows the handlers are lost; otherwise the extra path is unnecessary.
+- [ ] **[robustness]** Verify the GPS with Arma running: travel-mode detection, vehicle changes, route calculation with slope/fine validation, the debug viewport scan, shared-route start/join, auto-repath, polyline edit save/cancel and the first-click audio unlock. (`gps-panel`, `gps-route`, `gps-shared`, `gps-protocol` and the opt-in `gps-interactive` now cover most of this automatically; the audio unlock, the viewport scan and a real drive still need a manual pass.)

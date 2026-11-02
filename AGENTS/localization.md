@@ -171,6 +171,15 @@ refill the remaining languages, or edit the manifest/list to keep the rest.
 
 1. Check `base-strings` first; if no base-game entry fits, add `<Key ID="...">`
    with `<English>` (first) to the right container.
+   - Reuse generic base-game actions where the meaning matches, for example
+     `str_disp_arcmap_clear` for **Clear** and `str_mprole_start` for **Start**;
+     add them to the app's `*_BASE_GAME_STRINGS` list.
+   - **Do not add a key when there is nothing to translate.** If the whole text
+     is a unit, symbol, separator or placeholder pattern (`%1 km`,
+     `%1 · %2 · %3`, `--`), build it as a literal in code. A stringtable key
+     whose only content is `km` or dots forces translators to "translate" a
+     unit and adds noise to every language. Use the base-game unit key only
+     when the base game itself owns that unit string.
 2. Use it from code with `t('STR_ACE_Tacphone_...')` — the literal key, never a
    template-built key.
 3. Run `npm run check` (runs `tacphone-build check-strings`); a key that is used
@@ -202,8 +211,11 @@ const label = t('STR_ACE_Tacphone_Map_Channel_Number', 3);
 
 ## What must NOT be localized
 
-- Units and symbols: `m`, `km`, `mil`, `°`, `px`, `×`, `----`, and any numeric
-  formatting. Only the words around them are translated.
+- Units and symbols: `m`, `km`, `mil`, `°`, `px`, `×`, `·`, `----`, and any
+  numeric formatting. Only the words around them are translated.
+- A stringtable key whose entire text is a unit, symbol or separator. Build it
+  literally in code instead; units and punctuation never belong in
+  `stringtable.xml`.
 - Text supplied by the game or the relay: player, group and room names, marker
   type and colour names, host-log bodies, relay/server error text. Display it
   as sent.
@@ -279,4 +291,5 @@ stringtable.
 - Building a key from a variable; `check-strings` and grep stop working.
 - Adding keys outside the first `<Package>` (the validator ignores them).
 - Translating units, or translating game-supplied names.
+- Adding a key whose whole text is a unit or separator (`%1 km`, `%1 · %2 · %3`); build it literally instead.
 - Forgetting to restart the game after a stringtable edit.

@@ -368,6 +368,12 @@ export class MarkerLayerManager {
     // not fight the pointer.
     private movingMarkers = new Map<string, MarkerMoveState>();
 
+    /**
+     * Name of the polyline whose geometry the user is editing. Incoming
+     * `Marker.Upsert` updates keep the local geometry for that marker.
+     */
+    private editingPolylineName: string | null = null;
+
     private unregisterHooks: Array<() => void> = [];
 
     // Keeps the module-scope marker notification backup handler quiet while this
@@ -774,6 +780,7 @@ export class MarkerLayerManager {
             }
         });
         this.movingMarkers.clear();
+        this.editingPolylineName = null;
 
         this.pendingMarkerOperations = [];
         this.markerTextures.clear();
@@ -1345,6 +1352,129 @@ export class MarkerLayerManager {
     }
 
     /**
+     * Everything the polyline editor needs to pre-fill itself. Returns null for
+     * point markers and for anything the player may not edit.
+     */
+    public getPolylineData(name: string): {
+        points: Array<[number, number]>;
+        color: string;
+        channel: number;
+        /** True when the marker carries the measurement tag in its text. */
+        measurements: boolean;
+    } | null {
+        if (this.destroyed || !isEditableMarkerName(name)) {
+            return null;
+        }
+
+        const feature = this.getRegisteredFeature(name);
+        const geometry = feature?.getGeometry();
+        if (!feature || !(geometry instanceof LineString)) {
+            return null;
+        }
+
+        const points: Array<[number, number]> = [];
+        for (const coordinate of geometry.getCoordinates()) {
+            points.push([coordinate[0], coordinate[1]]);
+        }
+
+        return {
+            points,
+            color: (feature.get('color') as string | undefined) ?? '',
+            channel: this.resolveChannel(feature.get('channel')),
+            measurements: isPolylineMeasurementsText(
+                (feature.get('label') as string | undefined) ?? '',
+            ),
+        };
+    }
+
+    /**
+     * Marks one polyline as being edited, so incoming upserts do not overwrite
+     * its local geometry. Pass null when editing ends.
+     */
+    public setEditingPolyline(name: string | null): void {
+        this.editingPolylineName = name;
+    }
+
+    /** Local geometry of a marker: every vertex for a line, its point otherwise. */
+    public getMarkerCoordinates(name: string): Array<[number, number]> | null {
+        const feature = this.getRegisteredFeature(name);
+        const geometry = feature?.getGeometry();
+        if (!geometry) {
+            return null;
+        }
+
+        if (geometry instanceof Point) {
+            const position = geometry.getCoordinates();
+            return [[position[0], position[1]]];
+        }
+
+        if (geometry instanceof LineString) {
+            return geometry.getCoordinates().map(
+                (coordinate): [number, number] => [coordinate[0], coordinate[1]],
+            );
+        }
+
+        return null;
+    }
+
+    /**
+     * Applies moved polyline vertices locally, without talking to the game.
+     * The measurement overlay follows, so the labels match the new geometry.
+     */
+    public applyPolylineGeometry(name: string, points: ReadonlyArray<readonly [number, number]>): boolean {
+        if (this.destroyed) {
+            return false;
+        }
+
+        const feature = this.getRegisteredFeature(name);
+        const geometry = feature?.getGeometry();
+        if (!feature || !(geometry instanceof LineString)) {
+            return false;
+        }
+
+        const coordinates = points.map(
+            ([x, y]): [number, number] => [x, y],
+        );
+        if (coordinates.length < 2) {
+            return false;
+        }
+
+        geometry.setCoordinates(coordinates);
+
+        const channel = this.resolveChannel(feature.get('channel'));
+        if (isPolylineMeasurementsText((feature.get('label') as string | undefined) ?? '')) {
+            this.measurementLayer.upsert(name, channel, coordinates);
+        } else {
+            this.measurementLayer.remove(name);
+        }
+
+        this.channelLayers.get(channel)?.source.changed();
+        return true;
+    }
+
+    /**
+     * Applies edited polyline vertices locally and sends them to the game.
+     * Rejects when the marker is not a local polyline or the request fails, so
+     * the caller can restore the previous points.
+     */
+    public async updatePolylineData(name: string, points: ReadonlyArray<readonly [number, number]>): Promise<void> {
+        if (this.destroyed || !isEditableMarkerName(name)) {
+            throw new Error('Only player-created markers can be edited');
+        }
+
+        if (!this.applyPolylineGeometry(name, points)) {
+            throw new Error('The marker is not an editable polyline');
+        }
+
+        const flat: number[] = [];
+        for (const [x, y] of points) {
+            flat.push(x, y);
+        }
+
+        await updateMarkerRequest(name, { polyline: flat });
+    }
+
+    /**
      * Registers a marker as being dragged. Until `endMarkerMove` is called the
      * local geometry wins over game updates, and the marker renders elevated.
      */
@@ -1457,6 +1587,11 @@ export class MarkerLayerManager {
 
         // Remove it right away; the round trip must not delay the UI.
         this.removeMarkerFeature(name);
+
+        // A deleted marker cannot be dragged or edited any more.
+        if (this.editingPolylineName === name) {
+            this.editingPolylineName = null;
+        }
 
         // A deleted marker cannot be dragged any more; drop any pending move.
         const move = this.movingMarkers.get(name);
@@ -1806,6 +1941,9 @@ export class MarkerLayerManager {
         // While the user drags this marker, the local geometry wins. Every
         // other field is still applied; only the position/geometry is kept.
         const isMoving = this.movingMarkers.has(name);
+        // The polyline editor owns the geometry of its marker for the same
+        // reason: an incoming update must not make the vertices jump.
+        const isEditing = this.editingPolylineName === name;
 
         const sizeSplit = parseMarkerSize(size);
         const featureStyle = this.createFeatureStyle(type, shape, color, brush, size, alpha, effectiveChannel);
@@ -1842,11 +1980,11 @@ export class MarkerLayerManager {
             if (existingFeature) {
                 const geometry = existingFeature.getGeometry();
                 if (geometry instanceof LineString) {
-                    if (!isMoving) {
+                    if (!isMoving && !isEditing) {
                         geometry.setCoordinates(coordinates);
                     }
-                } else if (isMoving) {
-                    // Do not swap the dragged point for the incoming polyline.
+                } else if (isMoving || isEditing) {
+                    // Do not swap the dragged/edited point for the incoming polyline.
                     this.applyMarkerProperties(existingFeature, featureProps);
                     return;
                 } else {
@@ -1872,11 +2010,14 @@ export class MarkerLayerManager {
             }
 
             if (isPolylineMeasurementsText(text)) {
-                this.measurementLayer.upsert(
-                    name,
-                    effectiveChannel,
-                    coordinates as Array<[number, number]>,
-                );
+                // Keep the overlay in step with the geometry the editor owns.
+                if (!isEditing) {
+                    this.measurementLayer.upsert(
+                        name,
+                        effectiveChannel,
+                        coordinates as Array<[number, number]>,
+                    );
+                }
             } else {
                 this.measurementLayer.remove(name);
             }
@@ -2003,6 +2144,7 @@ export class MarkerLayerManager {
 
         this.markerRegistry.clear();
         this.measurementLayer.clear();
+        this.editingPolylineName = null;
         this.hideMarkerPreview();
     }
 }

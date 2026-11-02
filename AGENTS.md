@@ -75,13 +75,25 @@ section in the same change.
 - `dist/`, `data/index.html`, and `apps/*/data/*.js` are generated, git-ignored
   artifacts. Never edit them by hand. Live runtime suites need the game and web
   host running (`npm run test:host`, `npm run test:host-ui`,
-  `npm run test:messaging`, `npm run test:map`, or `npm run test:all`); release
-  builds strip `console.log/debug/info` and keep `warn`/`error`. Node 20.19+ or
-  22.12+.
+  `npm run test:messaging`, `npm run test:messaging-ui`, `npm run test:map`, or
+  `npm run test:all`); `npm run test:unit` needs neither game nor browser, and
+  `npm run test:gps-interactive` is opt-in and needs a human in a vehicle.
+  Release builds strip `console.log/debug/info` and keep `warn`/`error`. Node
+  20.19+ or 22.12+.
 - **Test harness**: the shared browser/Node helpers live in
   `ACE_TacPhone_Main/test/lib/`; app test folders import them and keep only
   app-specific helpers. `ACE_TacPhone_Main/test` must not import another app's
-  test code.
+  test code. Live suites never import app or SQF source: they use the public
+  protocol, the DOM and the debug hooks (for the Map,
+  `window.__TACPHONE_MAP_TEST__`). The one exception is the **unit tier**:
+  `test/unit/*.unit.mjs` may import a verified browser-free app module through
+  `ACE_TacPhone_Main/test/lib/ts-module.mjs` (an in-memory Vite bundle of the real
+  TypeScript). Unit tests are deterministic and timer-free, and never import a
+  module that touches `window`/DOM at import time.
+- **Interactive tests**: a scenario that needs a human watching or playing
+  (currently only `npm run test:gps-interactive`) must be opt-in through both an
+  environment variable and a `--opt-in` flag, must print what the human has to do,
+  and must never be part of `test:all`, `test:map` or any default listing.
 - **Test analysis**: Automated tests must be deterministic and headless-capable.
   Prefer DOM, attribute, geometry and `getComputedStyle()` assertions over pixel
   inspection. OCR/image analysis is allowed only when it runs locally on the test

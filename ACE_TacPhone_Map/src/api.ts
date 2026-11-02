@@ -46,6 +46,17 @@ export interface MapFlyToOptions {
     highlightSizePx?: number;
 }
 
+/** Options for {@link GpsApi.startRouteTo}. */
+export interface GpsStartRouteOptions {
+    /**
+     * Replace the current GPS waypoints (default) or append the target to the
+     * existing list.
+     */
+    replace?: boolean;
+    /** Start following the route immediately. Default true. */
+    start?: boolean;
+}
+
 /** Options for {@link MapApi.focusMarker}. */
 export interface MapFocusMarkerOptions {
     /** Optional world-space box; defaults to a box around the marker. */
@@ -85,5 +96,28 @@ export interface MapApi {
     focusMarker(name: string, options?: MapFocusMarkerOptions): Promise<boolean>;
 }
 
+/**
+ * GPS-panel-only API. Registered only by `ACE_TacPhone_Map_GPS`, never by Map.
+ *
+ * A GPS is also a Map: it inherits every {@link MapApi} method and adds the
+ * route commands. A Map panel does not inherit the GPS commands.
+ */
+export interface GpsApi extends MapApi {
+    /** Shows a shared `map.gps_route` preview and lets the player start it. */
+    openSharedRoute(route: unknown): Promise<boolean>;
+    /**
+     * Plans a GPS route to a world position and, by default, starts following
+     * it. This is the entry point for "Show me how to get there" actions in
+     * other apps (for example a Messenger position message).
+     *
+     * Resolves false when the point is outside the terrain or planning fails.
+     * The caller does not need to know the player's travel mode: the GPS plans
+     * for the currently detected mode.
+     */
+    startRouteTo(position: [number, number], options?: GpsStartRouteOptions): Promise<boolean>;
+}
+
 export const MAP_SERVICE = "map";
 export const MAP_SERVICE_VERSION = 1;
+export const GPS_SERVICE = "gps";
+export const GPS_SERVICE_VERSION = 1;

@@ -23,6 +23,14 @@ export async function init(): Promise<void> {
     await window.TacPhone.localization.load(MAP_BASE_GAME_STRINGS);
 
     registerMapOptions();
+
+    // Option labels are `t()` lookups resolved when the schema is built, so a
+    // later table change (for example an on-demand key arriving) re-registers
+    // the schema; the host keeps the values the user already chose.
+    window.TacPhone.localization.onDidChange(() => {
+        registerMapOptions();
+    });
+
     installMapTestHooks();
 }
 
@@ -30,6 +38,11 @@ class AppPlaceholder extends React.Component<AppProps, {loading: boolean}> {
     render() {
         return (<><div style={{color: 'red'}}>Wololo!</div></>);
     }
+}
+
+/** GPS is the same Map widget in navigation mode. */
+function GpsApp(props: AppProps): React.JSX.Element {
+    return <App {...props} mode="gps" />;
 }
 
 export function GetTacPhoneApps(): Array<AppPanelInfo> {
@@ -48,6 +61,16 @@ export function GetTacPhoneApps(): Array<AppPanelInfo> {
 
     },
 
+    {
+        id: "ACE_TacPhone_Map_GPS",
+        appComponent: GpsApp,
+        GetDefaultTitle() {
+            return t('str_a3_gps1');
+        },
+        GetTacPhoneIcon() {
+            return "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Cpath fill='%23222222' d='M256 48a208 208 0 1 0 0 416 208 208 0 0 0 0-416zm0 64a144 144 0 1 1 0 288 144 144 0 0 1 0-288zm-16 32v48h-48v32h48v80h32v-80h48v-32h-48v-48z'/%3E%3C/svg%3E";
+        },
+    },
     {
         id: "ACE_TacPhone_Map_Placeholder",
         appComponent: AppPlaceholder,

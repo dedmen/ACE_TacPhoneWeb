@@ -66,7 +66,10 @@ External browser (WebSocket):
 `requestprocessor` with `[request, clientId, callback, callbackArgs]`, and handles
 a promise return via `continueWith`. `clientId` is `"local"` in-game and the
 WebSocket connection id remotely. Web code validates data; do not repeat type
-checks in SQF.
+checks in SQF. That means no `isEqualType`/`typeName`/`count` validation of
+web-supplied fields, no `params` type annotations for them, and no fallback
+branch for a wrong type. Use `getOrDefault` only for an optional field that the
+protocol says may be absent; if it is present, trust it.
 
 ### Processor contract
 

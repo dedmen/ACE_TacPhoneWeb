@@ -18,12 +18,18 @@ export interface PolylineDrawControlsProps {
     channelLabel?: string;
     /** True when a tap places one vertex instead of drawing freehand. */
     clickPerPoint: boolean;
+    /** True while an existing polyline is edited instead of drawn. */
+    isEditing?: boolean;
+    /** Label/name of the polyline being edited. */
+    editingName?: string;
     onToggle: () => void;
     onSelectColor: (className: string) => void;
     onClickPerPointChange: (clickPerPoint: boolean) => void;
     onUndo: () => void;
     onCancel: () => void;
     onFinish: () => void;
+    /** Saves the edited vertices; only used while {@link isEditing}. */
+    onSave?: () => void;
 }
 
 export function PolylineDrawControls({
@@ -33,15 +39,19 @@ export function PolylineDrawControls({
     selectedColor,
     channelLabel = '',
     clickPerPoint,
+    isEditing = false,
+    editingName = '',
     onToggle,
     onSelectColor,
     onClickPerPointChange,
     onUndo,
     onCancel,
     onFinish,
+    onSave,
 }: PolylineDrawControlsProps): React.JSX.Element {
     const canUndo = vertexCount > 0;
     const canFinish = vertexCount >= 2;
+    const canSave = vertexCount >= 2;
 
     return (
         <div className={PolylineStyle.polyline_controls_container}>
@@ -56,7 +66,41 @@ export function PolylineDrawControls({
                 ✏️
             </button>
 
-            {isActive && (
+            {isActive && isEditing ? (
+                <div
+                    className={PolylineStyle.polyline_panel}
+                    role="group"
+                    aria-label={t('STR_ACE_Tacphone_Map_PolylineEdit_Editing')}
+                    data-editing-name={editingName}
+                >
+                    <div className={PolylineStyle.panel_header}>
+                        {t('STR_ACE_Tacphone_Map_PolylineEdit_Editing')}
+                    </div>
+                    <div className={PolylineStyle.panel_muted}>
+                        {t('STR_ACE_Tacphone_Map_PolylineEdit_DragPoint')}
+                    </div>
+
+                    <div className={PolylineStyle.panel_muted}>{t('STR_ACE_Tacphone_Map_Polyline_Points', vertexCount)}</div>
+
+                    <div className={PolylineStyle.panel_actions}>
+                        <button
+                            type="button"
+                            className={PolylineStyle.action_button}
+                            onClick={onCancel}
+                        >
+                            {t('STR_3DEN_Display3DEN_ControlsHint_Cancel')}
+                        </button>
+                        <button
+                            type="button"
+                            className={`${PolylineStyle.action_button} ${PolylineStyle.action_button_primary}`}
+                            onClick={onSave}
+                            disabled={!canSave}
+                        >
+                            {t('str_3den_display3den_menubar_missionsave_text')}
+                        </button>
+                    </div>
+                </div>
+            ) : isActive && (
                 <div
                     className={PolylineStyle.polyline_panel}
                     role="group"

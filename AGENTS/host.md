@@ -210,7 +210,10 @@ compress each layer and stream `ReplyRequestTerrainSVG` chunks back (with
 `ReplyRequestTexture` as the WebP data URL unchanged; they are already
 compressed. `LoadGameTerrain` resolves to a `TerrainData`
 (`width`, `height`, `layers: [{ name, svg }]`); a legacy whole-SVG reply is still
-accepted by decompressing and splitting it locally. `ReplyTerrainSVG` is not
+accepted by decompressing and splitting it locally. Identical terrain requests
+are coalesced in both transports: while one is in flight the next caller shares
+it, and a completed result is reused for 5 seconds. This absorbs React
+StrictMode's double mount without sending two `RequestTerrainSVG` frames. `ReplyTerrainSVG` is not
 implemented by the browser transport. A game add-on built with `__A3_DEBUG__`
 and the server/mission `allowDebug` CBA setting makes `gameInfo.isDebug()` true;
 `ReplyTerrainSVG` then logs each layer's raw SVG size, gzip size, base64 size,
@@ -339,7 +342,10 @@ warning and becomes a no-op.
 
 `Backend/AudioTestHooks.ts` installs `window.__TACPHONE_AUDIO_TEST__` only in
 the Vite dev server or a game debug build (same pattern as the Map's
-`__TACPHONE_MAP_TEST__`); `Host.ts` calls it after the host object is built. It
+`__TACPHONE_MAP_TEST__`); `Host.ts` calls it after the host object is built.
+The same bootstrap installs `window.__TACPHONE_DEBUG_EVAL__`, an indirect
+`eval()` that throws unless `gameInfo.isDebug()` is true. It exists only for
+live page inspection; app code must never call it. It
 exposes `getState()` (`state`, `currentTime`, `hasUserGesture`, `pending`,
 `scheduled`, `completed`, `lastPeak`), `play(sound)`, `suspend()`, `resume()`
 and `renderOffline(sound)`. Enabling it also turns on a debug analyser tap

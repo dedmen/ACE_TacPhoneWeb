@@ -55,6 +55,10 @@ the add-on stringtable; see [`localization.md`](localization.md).
   registered from the panel lifecycle. `shareObject()` opens the target selector
   through `dialogBus.ts` and resolves on send or cancel; other apps register
   chat-object renderers through `registerObjectRenderer()`.
+  `getMessages(roomId)` returns the currently loaded messages with stored chat
+  objects already decoded; use it for cross-app actions and for debug
+  inspection of reproducible payloads (`map.gps_route`, future position
+  messages).
 - Notifications: `Message.New` and invites raise `sound: "message"` banners and
   route to the room through `interApp.resolveAsync({ service: 'messenger',
   panelId: 'Messaging' })`.
@@ -85,13 +89,25 @@ protocol, state model, persistence status and debug commands are documented in
 
 ## Tests
 
-`MessagingApp/test/` is a live Node WebSocket suite. It needs a running
-`__A3_DEBUG__` game with the TacPhone host on port 8001 and Node trusting the
-local HTTPS certificate (`NODE_EXTRA_CA_CERTS`). It exercises rooms, messages,
-forwarding, invites, groups, group events, AI groups, leave, presence, side
-filtering, reconnect sync and map-marker sharing through fake players; see
-[`../MessagingApp/test/README.md`](../MessagingApp/test/README.md). It is not part
-of `npm run check`.
+`MessagingApp/test/` has two tiers:
+
+- **Unit, game-free:** `npm run test:unit` runs
+  `MessagingApp/test/run-unit-tests.mjs`, which bundles
+  `test/unit/object-codec.unit.mjs` in memory through
+  `ACE_TacPhone_Main/test/lib/ts-module.mjs` and exercises the codec against a
+  `node:zlib` stub of `window.TacPhone.utils`: small payloads stay plain, large
+  ones become the gzip envelope, decoding restores `data`/`action`, a corrupted
+  payload keeps the preview, forwarding is idempotent, and the decode cache is
+  bounded. It also pins `checkEncodedObjects()` /
+  `MAX_ENCODED_MESSAGE_CHARS` (the size helper `ChatStore.sendMessage()` uses to
+  reject oversized objects). No game, no browser, no Arma.
+- **Live, game needed:** the Node WebSocket suite needs a running
+  `__A3_DEBUG__` game with the TacPhone host on port 8001 and Node trusting the
+  local HTTPS certificate (`NODE_EXTRA_CA_CERTS`). It exercises rooms, messages,
+  forwarding, invites, groups, group events, AI groups, leave, presence, side
+  filtering, reconnect sync and map-marker sharing through fake players; see
+  [`../MessagingApp/test/README.md`](../MessagingApp/test/README.md). It is not part
+  of `npm run check`.
 
 ## Object renderers and activation
 

@@ -65,6 +65,47 @@ distance, compass bearing, interior angles and terrain-height labels with height
 differences. The measurements are preview data and stay out of the marker text
 except for an internal tag used to rebuild them on other clients.
 
+Right-click a player-created polyline and choose **Edit polyline** to drag its
+existing vertices. **Save** sends the new geometry to the game; **Cancel** or
+Escape restores the original line. The context menu also keeps **Share to
+Messenger**.
+
+### GPS
+
+Open **GPS** from the app chooser. The GPS panel is the same map widget in
+navigation mode:
+
+- the player is an OpenLayers feature, so it moves correctly with pan/zoom/
+  rotation even while auto-follow is suspended. The top HUD shows `HDG`, the
+  route arrow, one compass SVG and the distance/ETA;
+- there is **no transport-mode selector**: the GPS always plans for the
+  player's current detected mode and recalculates when the vehicle changes;
+- open the bottom-right floating editor, tap the map to add ordered waypoints,
+  then **Calculate** and **Start**. Waypoints are draggable; clicking an
+  existing route line inserts a waypoint there and renumbers the rest; the
+  preview and the distance/height labels update while placing them;
+- the route prefers roads for ground vehicles, avoids water unless the vehicle
+  floats, and uses the vehicle's `maxSpeed`/`enginePower`/mass and the terrain
+  slope for the ETA. Roads still use the slope/engine model; they only skip
+  `terrainCoef` and the forest penalty;
+- the route behind the player fades; waypoint and arrival sounds play;
+- **Share route** sends the route through Messenger. Receiving a shared route
+  opens a preview; **Start route** joins the nearest point and follows it, and
+  the card asks before replacing a route that is already running;
+- if a shared leg expects a different transport mode, the advisor can offer a
+  faster current-mode route after a short delay;
+- the map follows the player only while moving. Pan/zoom or `flyTo` suspends
+  following for a few seconds, then following resumes when the player moves or
+  turns;
+- debug builds show a `DBG` button in the bottom-left corner with cost/height
+  route overlays, an "Ignore slope influence" toggle and a "Scan current view"
+  action that colours the visible viewport without planning a route. It
+  depends on `window.TacPhone.gameInfo.isDebug()`.
+- route planning uses a bounded 32x32 coarse height grid (>= 10 m spacing) for
+  slope cost; foot routes are re-checked at 1 m after the path exists and
+  re-planned around steep sections. The debug dialog can scan the current
+  viewport without planning a route.
+
 ## Options
 
 Open the host **Options** panel (app chooser → Options → Map). Presets are
@@ -77,6 +118,8 @@ Open the host **Options** panel (app chooser → Options → Map). Presets are
 | Pixel ratio | Device | Caps the render pixel ratio; 1x is fastest |
 | Tile preload | 0 | How many extra tile levels to preload |
 | Smooth scaling | on | Canvas smoothing and tile interpolation |
+| GPS: rotate map with view direction | on | Rotate the map instead of the player arrow |
+| GPS: automatically recalculate route | off | Recalculate after deviating |
 
 Terrain tiles are fixed at 128 px. Changing a tiling option rebuilds the tile
 sources from the already-decoded terrain, without asking the game again.
@@ -119,8 +162,17 @@ Each mounted Map panel provides the `map` service (version `1`):
 | `hasMarker(name)` | True while a marker with that internal name is loaded. |
 | `focusMarker(name, options?)` | Flies to a marker and fits a box (default 800 m); `highlight` shows the glow. A missing marker opens `options.fallbackPosition` when provided. Resolves `false` when neither exists. |
 
-Use `window.TacPhone.interApp.resolveAsync({ service: 'map', ... })` to route to a
-mounted Map, including one that is not currently selected. Types are exported by
+A GPS panel also registers the `gps` service (version `1`). It inherits the
+`map` methods and adds:
+
+| Method | Meaning |
+| --- | --- |
+| `openSharedRoute(route)` | Opens a validated `map.gps_route` payload as a preview. |
+| `startRouteTo([x, y], options?)` | Plans a route and, by default, starts following it. `options.replace` defaults true; `options.start` defaults true. |
+
+A regular Map panel never registers `gps`, so route commands cannot select it.
+Use `resolveAsync({ service: 'map', ... })` for map commands and
+`resolveAsync({ service: 'gps', ... })` for GPS commands. Types are exported by
 the generated `dist/ace_tacphone_map.d.ts`.
 
 ## Localization

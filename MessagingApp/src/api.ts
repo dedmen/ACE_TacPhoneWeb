@@ -223,6 +223,12 @@ export interface MessengerApi {
     getRooms(): ChatRoomSummary[];
     /** One room summary, if it exists. */
     getRoom(roomId: string): ChatRoomSummary | undefined;
+    /**
+     * Every message currently loaded for a room, oldest first, with stored chat
+     * objects already decoded. Useful for cross-app actions and for debug
+     * inspection of shared payloads.
+     */
+    getMessages(roomId: string): ChatMessage[];
     /** Select a room in the panel, opening the app when needed. */
     openRoom(roomId: string): boolean;
     /** Send a text message with optional chat objects. */

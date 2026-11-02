@@ -43,6 +43,8 @@ npm run test:host-ui   # Playwright host page tests (audio); needs the host dev 
 npm run test:messaging # live Messenger WebSocket tests; needs the game running
 npm run test:messaging-ui # Playwright Messenger UI tests; needs the game and host page
 npm run test:map       # Map protocol + Playwright browser tests; needs the game running
+npm run test:unit      # game-free unit tests (no Arma, no browser)
+npm run test:gps-interactive # opt-in: in-vehicle GPS follow; needs a human
 npm run test:all       # every suite above, in one summary; needs the game running
 ```
 
@@ -191,11 +193,13 @@ is running.
   way; only app bundles are.
 - An app produces one self-contained ESM bundle plus a self-contained
   declaration file. See [`apps.md`](apps.md) for the packaging rules.
-- There are no unit tests. `npm run check` is the typecheck; builds run the
+- There are no unit *bundles*. `npm run check` is the typecheck; builds run the
   shared-import checker automatically. That checker decodes the bundle first; a
   bundle without the header fails the build of its own package and only warns
   while another package is built, so a stale `dist/` cannot block unrelated
-  builds.
+  builds. Game-free unit tests are separate from the build: `npm run test:unit`
+  runs `scripts/test-unit.mjs`, which spawns the Messenger and Map unit runners
+  (see [`ACE_TacPhone_Main/test/README.md`](../ACE_TacPhone_Main/test/README.md)).
 - Live runtime suites need the game and web host running: `npm run test:host`
   (see [`ACE_TacPhone_Main/test/README.md`](../ACE_TacPhone_Main/test/README.md)),
   `npm run test:messaging` (see
@@ -207,19 +211,33 @@ is running.
   `npm run test:host-ui` is the host's own Playwright suite (audio unlock,
   keep-alive and the one pending sound); it takes the same prerequisites as the
   other browser suites. The host suite also has a browser checklist for the
-  Options panel and Map settings. `npm run test:all` runs all
-  five sequentially and prints one summary; use `-- --suite host,map`,
-  `-- --no-browser` or `-- --fail-fast` to narrow it. Add `-- --slow` to the
-  browser suites (or `test:all`) to show the Playwright browser and slow every
-  action; `--slow-ms <ms>` changes the delay.
+  Options panel and Map settings. `npm run test:all` runs the host, Messenger,
+  Map and `unit` suites sequentially and prints one summary; use
+  `-- --suite unit,map`, `-- --no-browser` or `-- --fail-fast` to narrow it. Add
+  `-- --slow` to the browser suites (or `test:all`) to show the Playwright browser
+  and slow every action; `--slow-ms <ms>` changes the delay.
+- **`npm run test:gps-interactive` is opt-in only.** It needs a human inside a
+  vehicle, so it is deliberately absent from `test:all`, `test:map` and every
+  default listing; without `$env:TACPHONE_GPS_INTERACTIVE = '1'` (or `--opt-in`)
+  the runner prints the instructions and exits 0 with a SKIP. Never add it to an
+  aggregate suite.
+- **Live suites must not import app source; the unit tier imports pure modules
+  through the Vite loader.** The live Node/browser scenarios use only the public
+  protocol, the DOM and the debug hooks. `test/unit/*.unit.mjs` may import a
+  verified browser-free app module through `ts-module.mjs` (an in-memory Vite
+  bundle of the real TypeScript); modules that touch `window`/DOM at import time
+  (for example `GpsModule.ts`) stay out, and `gps-payload` asserts that guard.
 - The shared test harness lives in `ACE_TacPhone_Main/test/lib/`:
   `browser.mjs` (`DEFAULT_PAGE_URL`, channel, `launchBrowser`), `host-page.mjs`
   (`launchHostPage`, `openAppThroughChooser`, `activatePanelTab`, `requestApp`),
-  `skip.mjs` (`SkipError`/`skip`), `assertions.mjs` and `ws-client.mjs` (the one
-  RFC 6455 client, with per-request `{ app }` and the Messenger push helpers).
-  App test folders import it and keep only app-specific helpers (the Map keeps
-  `map-page.mjs` with `openMapPage`, `getMapState`, `getMapView` and the
-  marker/polyline protocol helpers; the Messenger keeps `fake-players.mjs`).
+  `skip.mjs` (`SkipError`/`skip`), `assertions.mjs`, `ws-client.mjs` (the one
+  RFC 6455 client, with per-request `{ app }` and the Messenger push helpers),
+  `ts-module.mjs`/`unit-runner.mjs` (game-free unit loader and CLI). App test
+  folders import it and keep
+  only app-specific helpers (the Map keeps `map-page.mjs` with `openMapPage`,
+  `getMapState`, `getMapView` and the marker/polyline protocol helpers, plus
+  `gps-page.mjs` with `openGpsPage`, `getGpsDebug`, `waitForGpsDebug`,
+  `gpsCall`, `gpsT`, `pointAt`; the Messenger keeps `fake-players.mjs`).
   Never keep a second copy of a shared helper, and `ACE_TacPhone_Main/test` must
   not import `ACE_TacPhone_Map`, `MessagingApp` or `SampleApp`.
 

@@ -19,6 +19,102 @@ export const MAP_APP = 'ACE_TacPhone_Map';
 export const TERRAIN_QUIET_MS = 750;
 
 /**
+ * Opens one Map-family panel on an already launched host page and waits until
+ * the terrain view and all visible terrain tiles have finished loading.
+ *
+ * `tileTitle` is the app chooser's tile title (`Map`, `GPS`, …); pass a
+ * function to resolve a localized title after the page is up.
+ * @param {import('playwright').Page} page
+ * @param {{ appName: string, tileTitle: string | ((page: any) => Promise<string>), label?: string, log?: (message: string) => void, waitForMapState?: boolean }} options
+ */
+export async function openPanelOnPage(page, {
+    appName,
+    tileTitle,
+    label = appName,
+    log = undefined,
+    waitForMapState = false,
+    waitForQuiet = true,
+}) {
+    const title = typeof tileTitle === 'function' ? await tileTitle(page) : tileTitle;
+
+    await openAppThroughChooser(page, appName, { tileTitle: title });
+
+    await page.waitForFunction(
+        () => document.querySelectorAll('.ol-viewport').length > 0,
+        null,
+        { timeout: 30000 },
+    );
+    await page.waitForFunction(
+        () => typeof window.__TACPHONE_MAP_TEST__?.getViewState === 'function',
+        null,
+        { timeout: 30000 },
+    );
+    await page.waitForFunction(
+        ({ quietMs, requireQuiet }) => {
+            const state = window.__TACPHONE_MAP_TEST__?.getViewState?.();
+            return Boolean(
+                state?.ready
+                && (!requireQuiet || (state.settled && state.quietForMs >= quietMs)),
+            );
+        },
+        { quietMs: TERRAIN_QUIET_MS, requireQuiet: waitForQuiet },
+        { timeout: 60000 },
+    );
+
+    if (waitForMapState) {
+        await page.waitForFunction(
+            () => window.__TACPHONE_MAP_TEST__.getMapState() !== null,
+            null,
+            { timeout: 30000 },
+        );
+    }
+
+    const viewState = await page.evaluate(() => window.__TACPHONE_MAP_TEST__.getViewState());
+    log?.(`${label} opened through a new tab and the app chooser; terrain tiles: ${viewState.finished}/${viewState.started} loaded, ${viewState.loading} loading, ${viewState.errored} errors across ${viewState.tiles.length} layers`);
+
+    return { viewState };
+}
+
+/**
+ * Launches the host and opens one Map-family panel in it.
+ * @param {string} pageUrl
+ * @param {{ appName: string, tileTitle: string | ((page: any) => Promise<string>), label?: string, headed?: boolean, slowMo?: number, hasTouch?: boolean, viewport?: { width: number, height: number }, log?: (message: string) => void, waitForMapState?: boolean }} options
+ */
+export async function openPanelPage(pageUrl, {
+    appName,
+    tileTitle,
+    label = appName,
+    headed = false,
+    slowMo = 0,
+    hasTouch = false,
+    viewport = { width: 1280, height: 900 },
+    log = undefined,
+    waitForMapState = false,
+    waitForQuiet = true,
+}) {
+    const host = await launchHostPage({ pageUrl, headed, slowMo, hasTouch, viewport });
+    const { browser, page } = host;
+
+    try {
+        await openPanelOnPage(page, {
+            appName,
+            tileTitle,
+            label,
+            log,
+            waitForMapState,
+            waitForQuiet,
+        });
+
+        const gameInfo = await page.evaluate(() => window.TacPhone.gameInfo.whenReady());
+
+        return { ...host, gameInfo };
+    } catch (error) {
+        await browser.close().catch(() => {});
+        throw error;
+    }
+}
+
+/**
  * Launches the host, opens the Map through a new flexlayout tab and the app
  * chooser, then waits until the terrain view and all visible terrain tiles have
  * finished loading.
@@ -32,46 +128,17 @@ export async function openMapPage({
     viewport = { width: 1280, height: 900 },
     log = undefined,
 }) {
-    const host = await launchHostPage({ pageUrl, headed, slowMo, hasTouch, viewport });
-    const { browser, page } = host;
-
-    try {
-        await openAppThroughChooser(page, MAP_APP, { tileTitle: 'Map' });
-
-        await page.waitForFunction(
-            () => document.querySelectorAll('.ol-viewport').length > 0,
-            null,
-            { timeout: 30000 },
-        );
-        await page.waitForFunction(
-            () => typeof window.__TACPHONE_MAP_TEST__?.getViewState === 'function',
-            null,
-            { timeout: 30000 },
-        );
-        await page.waitForFunction(
-            (quietMs) => {
-                const state = window.__TACPHONE_MAP_TEST__?.getViewState?.();
-                return Boolean(state?.ready && state.settled && state.quietForMs >= quietMs);
-            },
-            TERRAIN_QUIET_MS,
-            { timeout: 60000 },
-        );
-        await page.waitForFunction(
-            () => window.__TACPHONE_MAP_TEST__.getMapState() !== null,
-            null,
-            { timeout: 30000 },
-        );
-
-        const viewState = await page.evaluate(() => window.__TACPHONE_MAP_TEST__.getViewState());
-        log?.(`Map opened through a new tab and the app chooser; terrain tiles: ${viewState.finished}/${viewState.started} loaded, ${viewState.loading} loading, ${viewState.errored} errors across ${viewState.tiles.length} layers`);
-
-        const gameInfo = await page.evaluate(() => window.TacPhone.gameInfo.whenReady());
-
-        return { ...host, gameInfo };
-    } catch (error) {
-        await browser.close().catch(() => {});
-        throw error;
-    }
+    return openPanelPage(pageUrl, {
+        appName: MAP_APP,
+        tileTitle: 'Map',
+        label: 'Map',
+        headed,
+        slowMo,
+        hasTouch,
+        viewport,
+        log,
+        waitForMapState: true,
+    });
 }
 
 /** Current live Map debug state, or null when the panel is not mounted. */

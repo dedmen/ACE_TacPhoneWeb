@@ -81,6 +81,12 @@ interface MarkerOverlayProps {
     flyTo(options: MapFlyToOptions): void;
     /** Close the map layer switcher when a marker panel opens. */
     onRequestCloseLayers(): void;
+    /**
+     * False for a read-only map (GPS): markers are still drawn, but no drawing
+     * controls, dialogs, context menu or edit interactions are offered.
+     * @default true
+     */
+    interactive?: boolean;
 }
 
 const EMPTY_DIALOG: MarkerDialogState = {
@@ -106,10 +112,12 @@ const EMPTY_POLYLINE: PolylineUiState = {
     color: '',
     vertexCount: 0,
     clickPerPoint: false,
+    isEditing: false,
+    editingName: '',
 };
 
 export const MarkerOverlay = forwardRef<MarkerOverlayHandle, MarkerOverlayProps>(function MarkerOverlay(
-    { map, mapContainer, layerSwitcher, flyTo, onRequestCloseLayers },
+    { map, mapContainer, layerSwitcher, flyTo, onRequestCloseLayers, interactive = true },
     ref,
 ) {
     const [ready, setReady] = useState(false);
@@ -124,9 +132,11 @@ export const MarkerOverlay = forwardRef<MarkerOverlayHandle, MarkerOverlayProps>
     const moduleRef = useRef<MarkerModule | null>(null);
     const dialogRef = useRef(dialog);
     const flyToRef = useRef(flyTo);
+    const interactiveRef = useRef(interactive);
 
     dialogRef.current = dialog;
     flyToRef.current = flyTo;
+    interactiveRef.current = interactive;
 
     const loadMarkerIcon = useCallback((iconPath: string): Promise<string> => {
         const module = moduleRef.current;
@@ -367,6 +377,7 @@ export const MarkerOverlay = forwardRef<MarkerOverlayHandle, MarkerOverlayProps>
         const releaseInterest = window.TacPhone.interests.acquire(MAP_MARKERS_INTEREST);
         const module = new MarkerModule(map, {
             isDialogOpen: () => dialogRef.current.isOpen,
+            isInteractive: () => interactiveRef.current,
             onOpenCreateDialog: (coordinate) => callbacksRef.current.openCreate(coordinate),
             onOpenEditDialog: (name) => callbacksRef.current.openEdit(name),
             onOpenMarkerMenu: (name, clientX, clientY) => callbacksRef.current.openMenu(name, clientX, clientY),
@@ -418,25 +429,37 @@ export const MarkerOverlay = forwardRef<MarkerOverlayHandle, MarkerOverlayProps>
 
     return (
         <>
-            <PolylineDrawControls
-                isActive={polylineDraw.isActive}
-                vertexCount={polylineDraw.vertexCount}
-                colors={moduleRef.current?.getPolylineColors() ?? []}
-                selectedColor={polylineDraw.color}
-                clickPerPoint={polylineDraw.clickPerPoint}
-                channelLabel={channelSnapshot.activeChannelLabel}
-                onToggle={() => {
-                    onRequestCloseLayers();
-                    moduleRef.current?.togglePolyline();
-                }}
-                onSelectColor={(color) => moduleRef.current?.setPolylineColor(color)}
-                onClickPerPointChange={(value) => moduleRef.current?.setPolylineClickPerPoint(value)}
-                onUndo={() => moduleRef.current?.undoPolyline()}
-                onCancel={() => moduleRef.current?.stopPolyline()}
-                onFinish={() => moduleRef.current?.finishPolyline()}
-            />
+            {interactive && (
+                <PolylineDrawControls
+                    isActive={polylineDraw.isActive}
+                    vertexCount={polylineDraw.vertexCount}
+                    colors={moduleRef.current?.getPolylineColors() ?? []}
+                    selectedColor={polylineDraw.color}
+                    clickPerPoint={polylineDraw.clickPerPoint}
+                    isEditing={polylineDraw.isEditing}
+                    editingName={polylineDraw.editingName}
+                    channelLabel={channelSnapshot.activeChannelLabel}
+                    onToggle={() => {
+                        onRequestCloseLayers();
+                        moduleRef.current?.togglePolyline();
+                    }}
+                    onSelectColor={(color) => moduleRef.current?.setPolylineColor(color)}
+                    onClickPerPointChange={(value) => moduleRef.current?.setPolylineClickPerPoint(value)}
+                    onUndo={() => moduleRef.current?.undoPolyline()}
+                    onCancel={() => {
+                        if (polylineDraw.isEditing) {
+                            moduleRef.current?.cancelPolylineEdit();
+                            return;
+                        }
 
-            {dialog.isOpen && dialog.coordinate !== null && (
+                        moduleRef.current?.stopPolyline();
+                    }}
+                    onFinish={() => moduleRef.current?.finishPolyline()}
+                    onSave={() => moduleRef.current?.savePolylineEdit()}
+                />
+            )}
+
+            {interactive && dialog.isOpen && dialog.coordinate !== null && (
                 <MarkerCreateDialog
                     key={dialog.mode === 'edit' ? `edit:${dialog.markerName}` : 'create'}
                     mode={dialog.mode}
@@ -463,25 +486,37 @@ export const MarkerOverlay = forwardRef<MarkerOverlayHandle, MarkerOverlayProps>
                 />
             )}
 
-            {menu !== null && (
-                <MarkerContextMenu
-                    x={menu.x}
-                    y={menu.y}
-                    onEdit={() => {
-                        closeMarkerMenu();
-                        openMarkerEditDialog(menu.name);
-                    }}
-                    onDelete={() => {
-                        moduleRef.current?.deleteMarker(menu.name);
-                        closeMarkerMenu();
-                    }}
-                    onShare={() => handleShareMarkerFromMenu(menu.name)}
-                    canShare={canShareMarker(menu.name)}
-                    canEdit={moduleRef.current?.getMarkerData(menu.name) != null}
-                    canDelete={moduleRef.current?.getMarkerData(menu.name) != null}
-                    onClose={closeMarkerMenu}
-                />
-            )}
+            {interactive && menu !== null && (() => {
+                const module = moduleRef.current;
+                const editTarget = module?.getMarkerEditTarget(menu.name) ?? null;
+                const canEdit = editTarget !== null;
+
+                return (
+                    <MarkerContextMenu
+                        x={menu.x}
+                        y={menu.y}
+                        kind={editTarget === 'polyline' ? 'polyline' : 'marker'}
+                        onEdit={() => {
+                            closeMarkerMenu();
+                            if (editTarget === 'polyline') {
+                                moduleRef.current?.beginPolylineEdit(menu.name);
+                                return;
+                            }
+
+                            openMarkerEditDialog(menu.name);
+                        }}
+                        onDelete={() => {
+                            moduleRef.current?.deleteMarker(menu.name);
+                            closeMarkerMenu();
+                        }}
+                        onShare={() => handleShareMarkerFromMenu(menu.name)}
+                        canShare={canShareMarker(menu.name)}
+                        canEdit={canEdit}
+                        canDelete={module?.getMarkerData(menu.name) != null}
+                        onClose={closeMarkerMenu}
+                    />
+                );
+            })()}
         </>
     );
 });

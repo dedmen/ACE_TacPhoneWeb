@@ -51,6 +51,10 @@ export const messengerApi: MessengerApi = {
         return chatStore.getRoom(roomId);
     },
 
+    getMessages(roomId) {
+        return chatStore.getMessages(roomId);
+    },
+
     openRoom(roomId) {
         if (!chatStore.getRoom(roomId)) return false;
 
