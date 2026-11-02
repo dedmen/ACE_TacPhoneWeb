@@ -37,6 +37,7 @@ import {
     openGpsPage,
     pointAt,
     waitForGpsDebug,
+    waitForTerrainBounds,
 } from '../lib/gps-page.mjs';
 
 export const name = 'gps-shared-messenger';
@@ -127,7 +128,7 @@ export async function run({ pageUrl, options, log }) {
         log?.(`Created room ${roomName}`);
 
         // ---- a long air route in the GPS panel --------------------------
-        const bounds = await gpsCall(page, 'getTerrainBounds');
+        const bounds = await waitForTerrainBounds(page);
         assert(bounds && bounds.width > 200 && bounds.height > 200, 'The GPS has no usable terrain bounds');
         const realPos = await requestApp(page, 'main', 'GetPlayerPos');
         assert(Array.isArray(realPos) && realPos.length >= 2, 'GetPlayerPos did not return a position array');

@@ -97,6 +97,31 @@ export function getGpsDebug(page) {
     return page.evaluate(() => window.__TACPHONE_MAP_TEST__?.getGpsDebugState?.() ?? null);
 }
 
+/**
+ * Waits until the GPS planner has terrain bounds.
+ *
+ * The Map can mount the GPS panel before `GetTerrainSVG` has finished and
+ * passed the terrain snapshot down. The old single `getTerrainBounds()` call
+ * made the route scenarios race that hand-off.
+ */
+export async function waitForTerrainBounds(page, timeout = 15000) {
+    const startedAt = Date.now();
+    let last = null;
+
+    while (Date.now() - startedAt < timeout) {
+        last = await gpsCall(page, 'getTerrainBounds');
+        if (last && last.width > 200 && last.height > 200) {
+            return last;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+
+    throw new Error(
+        `Timed out after ${timeout} ms waiting for terrain bounds`
+        + `\n  last bounds: ${JSON.stringify(last)}`,
+    );
+}
+
 /** Waits until `getGpsDebugState()` satisfies `predicate` (evaluated in Node). */
 export async function waitForGpsDebug(page, predicate, description = 'GPS state', timeout = 15000) {
     const startedAt = Date.now();

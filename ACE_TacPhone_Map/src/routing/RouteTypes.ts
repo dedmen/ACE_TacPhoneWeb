@@ -50,6 +50,12 @@ export interface RouteLeg {
     distance: number;
     /** Travel time in seconds with the performance used at creation time. */
     eta: number;
+    /** Actual ground surface when known (planned ground legs); display only. */
+    surface?: 'water' | 'road' | 'forest' | 'offroad';
+    /** Road graph class when the leg came from the road graph. */
+    roadKind?: 'main' | 'road' | 'track' | 'rail' | 'trail';
+    /** False when the vehicle cannot traverse this leg (for example water). */
+    passable?: boolean;
     /** Where this leg came from: local planning, a shared route, the advisor. */
     source?: 'planned' | 'shared' | 'advisor' | 'connector';
 }
@@ -86,6 +92,11 @@ export interface RoutePlanRequest {
      * Off for live previews; on for an explicit Calculate/Recalculate.
      */
     validate?: boolean;
+    /**
+     * Ground vehicles: allow long off-road sections when they are faster.
+     * False (default) gives the road graph a search-cost bias.
+     */
+    groundFastest?: boolean;
     /** Returns true when a newer request superseded this one. */
     cancelled?: () => boolean;
 }

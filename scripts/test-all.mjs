@@ -12,13 +12,15 @@
  * Prerequisites are the same as the individual suites: Arma is running a
  * mission with the current TacPhone PBO loaded, the TacPhone web host listens
  * on port 8001, Node trusts the local HTTPS certificate, and the browser
- * scenarios can launch the installed Chrome channel.
+ * scenarios can launch the installed Chrome channel and, when present, Firefox.
+ * Browser suites run once per detected engine; a missing Firefox is skipped.
  *
  * Usage (from `websource`):
  *
  *   npm run test:all
  *   npm run test:all -- --verbose
  *   npm run test:all -- --suite host,map --headed
+ *   npm run test:all -- --browsers firefox
  *   npm run test:all -- --fail-fast
  */
 
@@ -46,6 +48,7 @@ const SUITES = [
         script: 'ACE_TacPhone_Main/test/run-browser-tests.mjs',
         description: 'Host page Playwright: audio unlock, keep-alive, pending sound',
         accepts: ['page-url', 'verbose', 'headed', 'slow', 'slow-ms', 'no-browser'],
+        browser: true,
     },
     {
         name: 'messaging',
@@ -58,16 +61,18 @@ const SUITES = [
         script: 'MessagingApp/test/run-browser-tests.mjs',
         description: 'Messenger UI: rooms, messages, marker sharing, map focus',
         accepts: ['page-url', 'verbose', 'headed', 'slow', 'slow-ms', 'no-browser'],
+        browser: true,
     },
     {
         name: 'map',
         script: 'ACE_TacPhone_Map/test/run-tests.mjs',
         description: 'Map marker protocol, channels, colors, SelectMenu, polyline drawing',
-        accepts: ['url', 'page-url', 'timeout', 'verbose', 'headed', 'slow', 'slow-ms', 'no-browser'],
+        accepts: ['url', 'page-url', 'timeout', 'verbose', 'headed', 'slow', 'slow-ms', 'no-browser', 'no-node'],
+        browser: true,
     },
 ];
 
-const VALUE_OPTIONS = new Set(['url', 'page-url', 'timeout', 'slow-ms']);
+const VALUE_OPTIONS = new Set(['url', 'page-url', 'timeout', 'slow-ms', 'browsers']);
 const FLAG_OPTIONS = new Set(['verbose', 'headed', 'slow', 'no-browser', 'fail-fast']);
 
 function printHelp() {
@@ -82,6 +87,8 @@ Options:
   --url <url>          Game WebSocket URL (default wss://localhost:8001/ws)
   --page-url <url>     Host page URL for browser tests
   --timeout <ms>       Per request/reply timeout (default 8000)
+  --browsers <list>    Browser suites to run: chrome, firefox (default both;
+                       Firefox is skipped automatically when it is not installed)
   --verbose            Log requests, replies and scenario progress
   --headed             Run browser scenarios with a visible window
   --slow               Slow every Playwright action and show the browser (700 ms default)
@@ -95,7 +102,8 @@ Prerequisites:
   - Arma 3 is running a mission with the current TacPhone PBO loaded.
   - The TacPhone web host is listening on port 8001.
   - Node trusts the local HTTPS certificate (NODE_EXTRA_CA_CERTS).
-  - Browser scenarios: Playwright with an installed Chrome channel.`);
+  - Browser scenarios: Playwright with an installed Chrome channel, or Firefox
+    via \`npx playwright install firefox\`. Missing Firefox is skipped.`);
 }
 
 function parseArgs(argv) {
@@ -209,24 +217,63 @@ function suiteArguments(suite, options) {
     return args;
 }
 
-function runSuite(suite, options) {
+async function detectBrowsers(requested) {
+    if (requested.length === 0) {
+        return [];
+    }
+
+    let playwright;
+    try {
+        playwright = await import('playwright');
+    } catch {
+        return [];
+    }
+
+    const available = [];
+    for (const browser of requested) {
+        try {
+            if (browser === 'chrome' || browser === 'msedge') {
+                const instance = await playwright.chromium.launch({ channel: browser, headless: true });
+                await instance.close();
+            } else if (browser === 'firefox' || browser === 'webkit') {
+                const instance = await playwright[browser].launch({ headless: true });
+                await instance.close();
+            } else {
+                continue;
+            }
+            available.push(browser);
+        } catch {
+            // Browser is not installed; the runner reports it as skipped.
+        }
+    }
+
+    return available;
+}
+
+function runSuite(suite, options, { browser = null, skipNode = false, label = suite.name } = {}) {
     const args = suiteArguments(suite, options);
+    if (browser !== null && skipNode && suite.name === 'map') {
+        args.push('--no-node');
+    }
 
     return new Promise((resolve) => {
         const startedAt = Date.now();
         const child = spawn(process.execPath, args, {
             cwd: ROOT,
             stdio: 'inherit',
-            env: process.env,
+            env: browser === null
+                ? process.env
+                : { ...process.env, TACPHONE_TEST_BROWSER: browser },
         });
 
         child.on('error', (error) => {
-            resolve({ suite, status: 'fail', durationMs: Date.now() - startedAt, error });
+            resolve({ suite, label, status: 'fail', durationMs: Date.now() - startedAt, error });
         });
 
         child.on('close', (code, signal) => {
             resolve({
                 suite,
+                label,
                 status: code === 0 ? 'pass' : 'fail',
                 durationMs: Date.now() - startedAt,
                 code,
@@ -271,17 +318,54 @@ async function main() {
     }
 
     console.log(`TacPhone complete runtime test suite (Node ${process.version})`);
-    console.log(`Suites: ${suites.map((suite) => suite.name).join(', ')}\n`);
+    console.log(`Suites: ${suites.map((suite) => suite.name).join(', ')}`);
+
+    const requestedBrowsers = (options.values.browsers ?? 'chrome,firefox')
+        .split(',')
+        .map((name) => name.trim())
+        .filter(Boolean);
+    const detectedBrowsers = options.flags.has('no-browser')
+        ? []
+        : await detectBrowsers(requestedBrowsers);
+    const skippedBrowsers = requestedBrowsers.filter((name) => !detectedBrowsers.includes(name));
+
+    if (detectedBrowsers.length > 0) {
+        console.log(`Browsers: ${detectedBrowsers.join(', ')}`);
+    }
+    if (skippedBrowsers.length > 0) {
+        console.log(`SKIP browser(s): ${skippedBrowsers.join(', ')} (not installed)`);
+    }
+    console.log('');
+
+    const runs = [];
+    for (const suite of suites) {
+        if (!suite.browser || options.flags.has('no-browser')) {
+            runs.push({ suite });
+            continue;
+        }
+        for (const [index, browser] of detectedBrowsers.entries()) {
+            runs.push({
+                suite,
+                browser,
+                label: `${suite.name} (${browser})`,
+                skipNode: index > 0,
+            });
+        }
+        if (detectedBrowsers.length === 0) {
+            console.log(`SKIP ${suite.name}: no browser available`);
+        }
+    }
 
     const results = [];
 
-    for (const [index, suite] of suites.entries()) {
-        console.log(`==== [${index + 1}/${suites.length}] ${suite.name}: ${suite.description} ====\n`);
-        const result = await runSuite(suite, options);
+    for (const [index, run] of runs.entries()) {
+        const label = run.label ?? run.suite.name;
+        console.log(`==== [${index + 1}/${runs.length}] ${label}: ${run.suite.description} ====\n`);
+        const result = await runSuite(run.suite, options, run);
         results.push(result);
 
-        const label = result.status === 'pass' ? 'PASS' : 'FAIL';
-        console.log(`\n==== ${label} ${suite.name} (${result.durationMs} ms) ====\n`);
+        const status = result.status === 'pass' ? 'PASS' : 'FAIL';
+        console.log(`\n==== ${status} ${label} (${result.durationMs} ms) ====\n`);
 
         if (result.status === 'fail' && options.flags.has('fail-fast')) {
             console.error('Stopping after the first failing suite (--fail-fast).');
@@ -291,12 +375,12 @@ async function main() {
 
     const passed = results.filter((result) => result.status === 'pass').length;
     const failed = results.length - passed;
-    const skipped = suites.length - results.length;
+    const skipped = runs.length - results.length;
 
     console.log('TacPhone suite summary');
     for (const result of results) {
         console.log(
-            `  ${result.status === 'pass' ? 'PASS' : 'FAIL'}  ${result.suite.name.padEnd(12)} ${result.durationMs} ms` +
+            `  ${result.status === 'pass' ? 'PASS' : 'FAIL'}  ${(result.label ?? result.suite.name).padEnd(20)} ${result.durationMs} ms` +
                 (result.status === 'fail' ? ` (exit ${result.code ?? result.signal ?? 'error'})` : ''),
         );
     }

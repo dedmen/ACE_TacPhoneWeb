@@ -363,6 +363,12 @@ remain visible.
 - `setSinkId(deviceId)` uses `AudioContext.setSinkId()` and rejects with a clear
   error when the browser lacks it; the selected id is remembered.
 - `getOutputDeviceId()` returns that id, or undefined for the browser default.
+- `speak(text, options)` uses the Web Speech API `SpeechSynthesisUtterance`.
+  It is silent before the first gesture and when unavailable; `interrupt`
+  defaults to true (cancels the current utterance), with optional `rate`,
+  `pitch`, `volume` and `lang`.
+- `stopSpeaking()` cancels the current utterance; `isSpeechAvailable()` reports
+  whether `speechSynthesis` exists.
 
 Sounds are synthesised with oscillators and gain envelopes: there are no audio
 assets and no `new Audio()` elements. The single `AudioContext` is created
@@ -378,7 +384,9 @@ suspended context keeps **at most one pending preset**: `play()` stores it,
 resumes, and schedules it when `resume()` settles within ~500 ms; otherwise the
 pending sound is dropped. A running context plays immediately. The per-preset
 cooldown (400 ms) is the burst guard. Without Web Audio the engine logs one
-warning and becomes a no-op.
+warning and becomes a no-op. The Web Speech API follows the same gesture gate;
+speech is dropped before the first user interaction, and `stopSpeaking()` is a
+no-op when the API is missing.
 
 `Backend/AudioTestHooks.ts` installs `window.__TACPHONE_AUDIO_TEST__` only in
 the Vite dev server or a game debug build (same pattern as the Map's

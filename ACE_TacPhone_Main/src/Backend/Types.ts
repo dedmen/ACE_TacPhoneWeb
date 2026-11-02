@@ -47,6 +47,7 @@ export type {
     PanelRect,
     SelectMenuProps,
     SelectOption,
+    SpeechOptions,
     TacPhoneHost,
     TacPhoneNotification,
     TacPhoneUtils,

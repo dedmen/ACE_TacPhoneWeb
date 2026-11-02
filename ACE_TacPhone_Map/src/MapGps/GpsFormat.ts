@@ -19,6 +19,14 @@ export function formatDistance(metres: number): string {
     return `${Math.round(metres)} m`;
 }
 
+/** Average speed with an untranslated unit: `4.8 km/h`; `--` when unknown. */
+export function formatSpeed(metresPerSecond: number | null): string {
+    if (metresPerSecond === null || !Number.isFinite(metresPerSecond) || metresPerSecond <= 0) {
+        return '--';
+    }
+    return `${(metresPerSecond * 3.6).toFixed(1)} km/h`;
+}
+
 /** Shared-route summary: mode · distance · waypoint count, no translatable text. */
 export function formatSharedSummary(
     mode: string,

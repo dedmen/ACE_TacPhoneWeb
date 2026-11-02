@@ -11,6 +11,7 @@ import {
     equal,
     ok,
 } from '../../../ACE_TacPhone_Main/test/lib/assertions.mjs';
+import { skip } from '../../../ACE_TacPhone_Main/test/lib/skip.mjs';
 import {
     delay,
     fakePlayersForSide,
@@ -92,7 +93,7 @@ export async function run(context) {
                 .map(([id]) => id);
 
             if (extraVisible.length > 0) {
-                throw new Error(
+                skip(
                     'Close every other remote phone/tablet/dev page before running the presence scenario. ' +
                         `Visible external clients: ${extraVisible.join(', ')}`,
                 );

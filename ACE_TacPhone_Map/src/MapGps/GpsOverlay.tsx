@@ -29,7 +29,7 @@ import {
     shareGpsRouteToMessenger,
 } from '../MessagingBridge';
 import { DEBUG_OVERLAY_ALPHA, type DebugSample } from './GpsDebugOverlay';
-import { formatDistance, formatDuration, formatSharedSummary } from './GpsFormat';
+import { formatDistance, formatDuration, formatSharedSummary, formatSpeed } from './GpsFormat';
 import { GpsHud } from './GpsHud';
 import {
     GPS_INTEREST,
@@ -42,6 +42,7 @@ import {
     type GpsDebugOverlayMode,
     type GpsStatus,
     type GpsViewState,
+    type RouteLegKind,
 } from './GpsTypes';
 import {
     decodeSharedRoute,
@@ -69,6 +70,47 @@ function formatWaypointCount(count: number): string {
     return count === 1
         ? t('STR_ACE_Tacphone_Map_Gps_Shared_Waypoints_One', count)
         : t('STR_ACE_Tacphone_Map_Gps_Shared_Waypoints_Other', count);
+}
+
+function legKindLabel(
+    kind: RouteLegKind,
+    surface?: 'water' | 'road' | 'forest' | 'offroad',
+    roadKind?: 'main' | 'road' | 'track' | 'rail' | 'trail',
+    passable?: boolean,
+): string {
+    if (passable === false) {
+        return t('STR_ACE_Tacphone_Map_Gps_LegInfo_Impassable');
+    }
+    if (roadKind === 'track') {
+        return t('STR_ACE_Tacphone_Map_Gps_LegInfo_Track');
+    }
+    if (roadKind === 'rail') {
+        return t('STR_ACE_Tacphone_Map_Gps_LegInfo_Rail');
+    }
+    if (roadKind === 'trail') {
+        return t('STR_ACE_Tacphone_Map_Gps_LegInfo_Trail');
+    }
+    if (roadKind === 'main' || roadKind === 'road' || surface === 'road') {
+        return t('STR_ACE_Tacphone_Map_Gps_LegInfo_Road');
+    }
+    if (surface === 'forest') {
+        return t('STR_ACE_Tacphone_Map_Gps_LegInfo_Forest');
+    }
+    if (surface === 'offroad') {
+        return t('STR_ACE_Tacphone_Map_Gps_LegInfo_Offroad');
+    }
+    switch (kind) {
+        case 'road':
+            return t('STR_ACE_Tacphone_Map_Gps_LegInfo_Road');
+        case 'offroad':
+            return t('STR_ACE_Tacphone_Map_Gps_LegInfo_Offroad');
+        case 'water':
+            return t('STR_ACE_Tacphone_Map_Gps_LegInfo_Swim');
+        case 'air':
+            return t('STR_ACE_Tacphone_Map_Gps_LegInfo_Air');
+        default:
+            return t('STR_ACE_Tacphone_Map_Gps_LegInfo_Land');
+    }
 }
 
 function statusText(status: GpsStatus | null): string | null {
@@ -260,6 +302,15 @@ export const GpsOverlay = forwardRef<GpsOverlayHandle, GpsOverlayProps>(function
             moduleRef.current?.setTerrain(terrain);
         }
     }, [terrain, ready]);
+
+    useEffect(() => {
+        if (!ready) {
+            return undefined;
+        }
+
+        moduleRef.current?.setRouteHoverEnabled(panelOpen);
+        return () => moduleRef.current?.setRouteHoverEnabled(false);
+    }, [panelOpen, ready]);
 
     useEffect(() => {
         try {
@@ -535,6 +586,37 @@ export const GpsOverlay = forwardRef<GpsOverlayHandle, GpsOverlayProps>(function
                     <p className={styles.muted}>{t('STR_ACE_Tacphone_Map_Gps_Route_NoRoute')}</p>
                 )}
 
+                {state.routeHover && (
+                    <div className={styles.legInfo} data-testid="gps-leg-info">
+                        <div className={styles.legInfoTitle}>
+                            {t('STR_ACE_Tacphone_Map_Gps_LegInfo_Title')}
+                        </div>
+                        <div className={styles.legInfoRow}>
+                            {t(
+                                'STR_ACE_Tacphone_Map_Gps_LegInfo_Leg',
+                                legKindLabel(
+                                    state.routeHover.kind,
+                                    state.routeHover.surface,
+                                    state.routeHover.roadKind,
+                                    state.routeHover.passable,
+                                ),
+                                formatDistance(state.routeHover.distance),
+                                formatSpeed(state.routeHover.speed),
+                                formatDuration(state.routeHover.eta),
+                            )}
+                        </div>
+                        <div className={styles.legInfoRow}>
+                            {t(
+                                'STR_ACE_Tacphone_Map_Gps_LegInfo_ToWaypoint',
+                                state.routeHover.nextWaypointIndex + 1,
+                                formatDistance(state.routeHover.spanDistance),
+                                formatSpeed(state.routeHover.spanSpeed),
+                                formatDuration(state.routeHover.spanEta),
+                            )}
+                        </div>
+                    </div>
+                )}
+
                 <div className={styles.actionRow}>
                     <button
                         type="button"
@@ -577,6 +659,23 @@ export const GpsOverlay = forwardRef<GpsOverlayHandle, GpsOverlayProps>(function
                         {t('STR_ACE_Tacphone_Map_Gps_Route_Share')}
                     </button>
                 </div>
+
+                {state.mode === 'ground' && (
+                    <label
+                        className={styles.toggleRow}
+                        title={t('STR_ACE_Tacphone_Map_Gps_Route_Fastest_Desc')}
+                    >
+                        <input
+                            type="checkbox"
+                            checked={state.groundFastest}
+                            data-testid="gps-ground-fastest"
+                            onChange={(event) => {
+                                moduleRef.current?.setGroundFastest(event.target.checked);
+                            }}
+                        />
+                        <span>{t('STR_ACE_Tacphone_Map_Gps_Route_Fastest')}</span>
+                    </label>
+                )}
 
                 {shared && (
                     <div className={styles.card} data-testid="gps-shared-card">

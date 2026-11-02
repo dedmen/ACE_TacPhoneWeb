@@ -26,6 +26,7 @@ import {
     openGpsPage,
     pointAt,
     waitForGpsDebug,
+    waitForTerrainBounds,
 } from '../lib/gps-page.mjs';
 import { getMapView } from '../lib/map-page.mjs';
 
@@ -194,7 +195,7 @@ export async function run({ pageUrl, options, log }) {
         // ---- 2. live fix, targets and route ------------------------------
         await waitForGpsDebug(page, (state) => state.hasFix && state.position !== null, 'the first live GPS fix', 30000);
 
-        const bounds = await gpsCall(page, 'getTerrainBounds');
+        const bounds = await waitForTerrainBounds(page);
         assert(bounds && bounds.width > 200 && bounds.height > 200, 'The GPS has no usable terrain bounds');
 
         // Re-read right before planning: the player may still be moving.

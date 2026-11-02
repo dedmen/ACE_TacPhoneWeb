@@ -11,11 +11,17 @@ import { equal, ok, fail } from '../../../ACE_TacPhone_Main/test/lib/assertions.
 import { buildRouteGeometry } from '../../src/MapGps/RouteSplice.ts';
 import { computeRouteMetrics, remainingEta, arrivalRadius } from '../../src/routing/RouteMetrics.ts';
 import {
+    isRoadLeg,
+    legStartDistances,
     nextManeuver,
+    nextSurfaceTransition,
     nextWaypointAhead,
     pointAtDistance,
+    spokenDistance,
+    guidanceCue,
 } from '../../src/routing/TurnInstructions.ts';
 import { DeviationTracker, OFF_ROUTE_THRESHOLD_M } from '../../src/routing/DeviationTracker.ts';
+import { followRadius, followResolution } from '../../src/routing/FollowZoom.ts';
 import { parseVehicleChange, readPerformance } from '../../src/routing/VehicleChange.ts';
 import { TerrainHeights, heightAt, slopeAt } from '../../src/routing/TerrainHeights.ts';
 import { formatDistance, formatSharedSummary } from '../../src/MapGps/GpsFormat.ts';
@@ -98,38 +104,86 @@ export async function run() {
     equal(next?.[0], 100, 'the next waypoint after 60 m is the 150 m one');
     equal(nextWaypointAhead([], [], 0), null, 'no waypoints returns null');
 
+    // Spoken cues use the real distance, not a fixed threshold bucket.
+    equal(spokenDistance(203), 200, 'a nearby turn is spoken as its real distance');
+    equal(spokenDistance(497), 500, 'the distance is rounded to 10 m');
+    equal(spokenDistance(24), 20, 'short distances round to 10 m');
+    equal(spokenDistance(4), 10, 'a spoken distance never goes below 10 m');
+    equal(spokenDistance(Number.NaN), 10, 'a missing distance falls back to 10 m');
+
+    // A junction gets one advance cue and one final cue.
+    equal(guidanceCue(600), null, 'no cue beyond the advance range');
+    equal(guidanceCue(500), 'far', 'the advance cue starts at 500 m');
+    equal(guidanceCue(300), 'far', 'the advance cue covers the approach');
+    equal(guidanceCue(100), 'near', 'the final cue starts at 100 m');
+    equal(guidanceCue(50), 'near', 'the final cue covers the last stretch');
+    equal(guidanceCue(Number.NaN), null, 'a missing distance has no cue');
+
+    // ---- road/off-road surface transitions -------------------------------
+    const transitionLegs = [
+        { mode: 'ground', kind: 'offroad', points: [0, 0, 100, 0], distance: 100, eta: 10 },
+        { mode: 'ground', kind: 'road', roadKind: 'road', points: [100, 0, 100, 100], distance: 100, eta: 5 },
+    ];
+    const transitionGeometry = buildRouteGeometry(transitionLegs);
+    const starts = legStartDistances(transitionGeometry);
+    approx(starts[0], 0, 'first leg starts at 0');
+    approx(starts[1], 100, 'second leg starts after the first');
+    equal(isRoadLeg(transitionLegs[0]), false, 'grid offroad is not a road leg');
+    equal(isRoadLeg(transitionLegs[1]), true, 'a road-graph leg is a road leg');
+    const enter = nextSurfaceTransition(transitionLegs, transitionGeometry, 50, 0, 100);
+    ok(enter, 'entering the road is detected');
+    approx(enter.distance, 50, 'transition distance is measured along the route');
+    equal(enter.enteringRoad, true, 'offroad -> road is entering');
+    equal(enter.direction, 'left', 'the turn onto the road is left');
+
+    const leaving = nextSurfaceTransition(
+        [transitionLegs[1], transitionLegs[0]],
+        buildRouteGeometry([transitionLegs[1], transitionLegs[0]]),
+        0,
+        0,
+        100,
+    );
+    ok(leaving, 'leaving the road is detected');
+    equal(leaving.enteringRoad, false, 'road -> offroad is leaving');
+
+    // ---- follow zoom: one minute ahead, 200 m while stationary -----------
+    approx(followRadius(0), 200, 'a stationary player keeps a 200 m radius');
+    approx(followRadius(10), 600, 'ten metres per second shows one minute of travel');
+    approx(followRadius(-5), 200, 'a negative speed uses the stationary radius');
+    approx(followRadius(Number.NaN), 200, 'an unknown speed uses the stationary radius');
+    approx(followResolution(0, 400, 0.1, 100), 1, '200 m each way fills a 400 px side');
+    approx(followResolution(20, 600, 0.1, 100), 4, '1200 m each way fills a 600 px side');
+    approx(followResolution(0, 4000, 1, 100), 1, 'the view minimum resolution wins');
+    approx(followResolution(60, 100, 0.1, 10), 10, 'the view maximum resolution wins');
+    equal(followResolution(0, 0, 0.1, 100), null, 'no viewport means no target');
+    equal(followResolution(0, 400, 0, 100), null, 'an invalid minimum means no target');
+    approx(
+        followResolution(0, 400, 0.1, 100, 300),
+        1.5,
+        'an explicit radius overrides the speed rule',
+    );
+
     // ---- DeviationTracker ------------------------------------------------
     const tracker = new DeviationTracker();
     const offRoute = tracker.update({
         now: 1000,
         metrics: metric({ distance: OFF_ROUTE_THRESHOLD_M + 1 }),
         mode: 'ground',
-        speed: 5,
         navigating: true,
-        following: false,
         autoRepath: true,
         waypointAlong: [100, 500],
-        nextWaypoint: [1000, 0],
-        position: [0, 0],
-        view: null,
     });
     equal(offRoute.offRoute, true, 'beyond the threshold is off-route');
     equal(offRoute.repath, false, 'no repath before the delay');
-    equal(offRoute.zoomResolution, null, 'no zoom without a view');
 
     ok(
         !tracker.update({
             now: 4500,
             metrics: metric({ distance: OFF_ROUTE_THRESHOLD_M + 1 }),
             mode: 'ground',
-            speed: 5,
             navigating: true,
-            following: false,
             autoRepath: true,
             waypointAlong: [100, 500],
-            nextWaypoint: [1000, 0],
-            position: [0, 0],
-            view: null,
         }).repath,
         'the 4 s off-route delay is respected',
     );
@@ -138,14 +192,9 @@ export async function run() {
         now: 5001,
         metrics: metric({ distance: OFF_ROUTE_THRESHOLD_M + 1 }),
         mode: 'ground',
-        speed: 5,
         navigating: true,
-        following: false,
         autoRepath: true,
         waypointAlong: [100, 500],
-        nextWaypoint: [1000, 0],
-        position: [0, 0],
-        view: null,
     });
     equal(repath.repath, true, 'after the delay the tracker asks for a repath');
     equal(
@@ -153,14 +202,9 @@ export async function run() {
             now: 6000,
             metrics: metric({ distance: OFF_ROUTE_THRESHOLD_M + 1 }),
             mode: 'ground',
-            speed: 5,
             navigating: true,
-            following: false,
             autoRepath: true,
             waypointAlong: [100, 500],
-            nextWaypoint: [1000, 0],
-            position: [0, 0],
-            view: null,
         }).repath,
         false,
         'the repath cooldown suppresses a second request',
@@ -170,47 +214,20 @@ export async function run() {
         now: 7000,
         metrics: metric({ distance: 0, along: 100 }),
         mode: 'ground',
-        speed: 5,
         navigating: true,
-        following: false,
         autoRepath: false,
         waypointAlong: [100, 500],
-        nextWaypoint: [100, 0],
-        position: [100, 0],
-        view: null,
     });
     equal(reached.reachedWaypoint, true, 'crossing a waypoint raises the event');
     equal(tracker.reachedCount, 1, 'the reached counter advances');
-
-    const zoom = tracker.update({
-        now: 8000,
-        metrics: metric({ distance: OFF_ROUTE_THRESHOLD_M + 1 }),
-        mode: 'ground',
-        speed: 5,
-        navigating: true,
-        following: true,
-        autoRepath: false,
-        waypointAlong: [100, 500],
-        nextWaypoint: [3000, 0],
-        position: [0, 0],
-        view: { resolution: 10, maxResolution: 100, viewportPixels: 500 },
-    });
-    ok(zoom.zoomResolution !== null, 'a far waypoint asks for a zoom-out');
-    ok(zoom.zoomResolution <= 25, 'the zoom is capped at 2.5x the current resolution');
-    approx(zoom.zoomResolution, (3000 * 2.4) / 500, 'the zoom fits the next waypoint');
 
     const arrived = tracker.update({
         now: 9000,
         metrics: metric({ distance: 0, remaining: 70 }),
         mode: 'ground',
-        speed: 0,
         navigating: true,
-        following: true,
         autoRepath: false,
         waypointAlong: [100, 500],
-        nextWaypoint: [0, 0],
-        position: [0, 0],
-        view: null,
     });
     equal(arrived.arrived, true, 'a vehicle within 80 m has arrived');
 
@@ -272,6 +289,46 @@ export async function run() {
     ok(path !== null, 'width-aware snapping connects two roads 5 m apart');
     ok(path.length > 200, 'the connected path is longer than the direct gap');
     ok(path.kinds.length > 0, 'the path carries its road classes');
+
+    // ---- junctions: bends and head-to-head ends are not crossings ---------
+    const polyline = (points, kind = 'road') => ({
+        points,
+        strokeWidth: 8,
+        width: 6,
+        kind,
+        paint: kind,
+    });
+    const bend = new RoadNetwork([
+        polyline([[0, 0], [100, 0]]),
+        polyline([[100, 0], [100, 100]]),
+    ]);
+    equal(bend.isJunction([100, 0], 20), false, 'a road bend is not a junction');
+    equal(bend.isJunction([50, 0], 20), false, 'a straight road point is not a junction');
+
+    const tee = new RoadNetwork([
+        polyline([[0, 0], [100, 0]]),
+        polyline([[50, 0], [50, 50]]),
+    ]);
+    equal(tee.isJunction([50, 0], 20), true, 'a side road joining a road is a junction');
+    equal(tee.isJunction([50, 40], 20), false, 'a point along the side road is not a junction');
+
+    const cross = new RoadNetwork([
+        polyline([[0, 0], [100, 0]]),
+        polyline([[50, -50], [50, 50]]),
+    ]);
+    equal(cross.isJunction([50, 0], 20), true, 'a road crossing is a junction');
+
+    // An extra polyline that ends on the same road and points along it only
+    // adds a collinear branch; it must not look like a T junction.
+    const overlap = new RoadNetwork([
+        polyline([[0, 0], [100, 0]]),
+        polyline([[0, 0], [50, 0]]),
+    ]);
+    equal(
+        overlap.isJunction([50, 0], 20),
+        false,
+        'a collinear split of the same road is not a junction',
+    );
 
     // ---- TerrainHeights cache and peak ring ------------------------------
     const heights = new TerrainHeights({ lruMax: 2, peakMax: 8, peakProminenceM: 2 });

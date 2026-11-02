@@ -41,25 +41,30 @@ async function loadPlaywright() {
 }
 
 /**
- * Launches the installed Chromium-based browser.
+ * Launches an installed browser. `chrome`/`msedge` use the installed Chromium
+ * channel; `firefox` uses Playwright's Firefox build so the same suite can be
+ * checked across rendering engines (terrain rasterization used to differ).
  * @param {{ headed?: boolean, channel?: string, slowMo?: number }} [options]
  */
 export async function launchBrowser(options = {}) {
     const playwright = await loadPlaywright();
     const channel = options.channel || browserChannel();
     const slowMo = Number(options.slowMo);
-    const launchOptions = {
-        channel,
+    const common = {
         headless: options.headed !== true,
         ...(Number.isFinite(slowMo) && slowMo > 0 ? { slowMo } : {}),
     };
 
     try {
-        return await playwright.chromium.launch(launchOptions);
+        if (channel === 'firefox' || channel === 'webkit') {
+            return await playwright[channel].launch(common);
+        }
+        return await playwright.chromium.launch({ ...common, channel });
     } catch (error) {
         throw new SkipError(
             `Could not launch the "${channel}" browser: ${error?.message || String(error)}. ` +
-                'Set TACPHONE_TEST_BROWSER to an installed channel (for example chrome or msedge), ' +
+                'Set TACPHONE_TEST_BROWSER to an installed channel (chrome, msedge or firefox), ' +
+                'install Firefox with `npx playwright install firefox`, ' +
                 'or use the manual checklist of the suite you are running.',
         );
     }

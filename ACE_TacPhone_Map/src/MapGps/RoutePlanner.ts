@@ -20,12 +20,14 @@ import { TerrainMasks, type BBox, type RasterSet } from '../terrain/TerrainMasks
 import {
     edgeSpeed,
     legSpeed,
+    limitGroundEta,
     roadSpeed,
     type RouteSurface,
 } from '../routing/SpeedModel';
 import {
     buildDebugGrid,
     searchGrid,
+    segmentCost,
     simplifyGridPath,
     type GridContext,
 } from '../routing/TerrainGrid';
@@ -33,6 +35,16 @@ import {
     TerrainHeights,
     slopeAt as heightSlopeAt,
 } from '../routing/TerrainHeights';
+import {
+    corridorBounds,
+    extendRunToLand,
+    findWaterRuns,
+    mergeNearbyWaterRuns,
+    pathLength,
+    pointAt,
+    splitPathAtWater,
+    waterReplacementAcceptable,
+} from '../routing/WaterCorridor';
 import { MAX_GROUND_SLOPE } from '../routing/SpeedModel';
 import type {
     ActiveRoute,
@@ -45,8 +57,35 @@ import type {
     VehiclePerformance,
 } from '../routing/RouteTypes';
 import { distanceBetween } from './SharedRoute';
+import { buildRouteGeometry } from './RouteSplice';
 
 export { legSpeed } from '../routing/SpeedModel';
+
+/** Preferred clearance from water on repaired foot legs, metres. */
+const WATER_BUFFER_M = 3;
+/** Search-only slowdown for foot paths that hug a water edge, metres. */
+const WATER_EDGE_PENALTY_M = 3;
+const WATER_EDGE_PENALTY_FACTOR = 0.5;
+/** Water fragments shorter than this are a raster sliver, not a real crossing. */
+const MAX_FOOT_WATER_SLIVER_M = 10;
+/** Farthest a ground waypoint may snap to the road graph, metres. */
+const ROAD_MAX_SNAP_M = 8000;
+
+/** Search-only road-class bias; lower means the class is preferred. */
+function roadPreferenceFactor(kind: 'main' | 'road' | 'track' | 'rail' | 'trail'): number {
+    switch (kind) {
+        case 'main':
+            return 0.65;
+        case 'road':
+            return 0.7;
+        case 'track':
+            return 1.25;
+        case 'rail':
+            return 1.4;
+        case 'trail':
+            return 1.7;
+    }
+}
 
 /** Debug/test route for a water-capable vehicle or boat setup. */
 export interface WaterRouteWaypoints {
@@ -58,6 +97,13 @@ export interface WaterRouteWaypoints {
     waterPoint: [number, number];
     /** Road point back on land, on the return side. */
     roadEnd: [number, number];
+}
+
+/** One path span with the raster resolution it was planned against. */
+interface PathChunk {
+    points: number[];
+    rasters: RasterSet;
+    cell: number;
 }
 
 /** Plans routes for one terrain snapshot. */
@@ -101,19 +147,22 @@ export class RoutePlanner {
         startPoint: [number, number] | null;
         goalPoint: [number, number] | null;
         pathLength: number | null;
+        kinds?: string[];
     } {
         const network = this.getRoadNetwork();
         if (!network) {
             return { startNode: null, goalNode: null, startPoint: null, goalPoint: null, pathLength: null };
         }
 
-        const startNode = network.nearestNode(start, 500);
-        const goalNode = network.nearestNode(goal, 500);
+        const startNode = network.nearestNode(start, ROAD_MAX_SNAP_M);
+        const goalNode = network.nearestNode(goal, ROAD_MAX_SNAP_M);
         const path = startNode !== null && goalNode !== null
             ? network.findPath(
                 start,
                 goal,
                 (kind) => roadSpeed(kind, performance, waterCapable),
+                undefined,
+                ROAD_MAX_SNAP_M,
             )
             : null;
 
@@ -123,6 +172,7 @@ export class RoutePlanner {
             startPoint: startNode === null ? null : network.nodePoint(startNode),
             goalPoint: goalNode === null ? null : network.nodePoint(goalNode),
             pathLength: path?.length ?? null,
+            kinds: path?.kinds,
         };
     }
 
@@ -135,6 +185,15 @@ export class RoutePlanner {
         fineRequests: number;
     } {
         return this.heights.stats;
+    }
+
+    /**
+     * Nearest real road junction (three or more branch directions) within
+     * `radius` of `point`, or null. The returned node position doubles as a
+     * stable identity for speech deduplication.
+     */
+    public roadJunction(point: [number, number], radius = 15): [number, number] | null {
+        return this.getRoadNetwork()?.junctionPoint(point, radius) ?? null;
     }
 
     /** Debug/test only: road graph size, or null when no roads layer exists. */
@@ -150,6 +209,11 @@ export class RoutePlanner {
     }
 
     /** Replaces the terrain snapshot and drops parsed SVG data. */
+    /** True when the terrain snapshot already contains the roads layer. */
+    public hasRoadLayer(): boolean {
+        return this.masks.hasLayer('roads');
+    }
+
     public setTerrain(terrain: TerrainData | null): void {
         if (this.terrain === terrain) {
             return;
@@ -533,7 +597,8 @@ export class RoutePlanner {
         }
 
         if (mode === 'ground') {
-            const roadLegs = this.planRoadRoute(
+            const fastest = request.groundFastest === true;
+            let roadLegs = await this.planRoadRoute(
                 start,
                 waypoints,
                 rasters,
@@ -543,8 +608,90 @@ export class RoutePlanner {
                 waterCapable,
                 isCancelled,
                 slopeAt,
+                !fastest,
             );
+            let unbiasedRoadLegs: RouteLeg[] | null = null;
+            if (!fastest) {
+                // A biased search can lock onto a slightly shorter track path.
+                // If the unbiased graph route uses more actual road for a
+                // comparable ETA, prefer it: the user asked for road following.
+                unbiasedRoadLegs = await this.planRoadRoute(
+                    start,
+                    waypoints,
+                    rasters,
+                    bbox,
+                    cell,
+                    performance,
+                    waterCapable,
+                    isCancelled,
+                    slopeAt,
+                    false,
+                );
+                if ((!roadLegs || roadLegs.length === 0) && unbiasedRoadLegs) {
+                    roadLegs = unbiasedRoadLegs;
+                } else if (roadLegs && unbiasedRoadLegs
+                    && this.roadDistance(unbiasedRoadLegs) > this.roadDistance(roadLegs) + 100
+                    && this.legsEta(unbiasedRoadLegs) <= this.legsEta(roadLegs) * 1.1 + 60) {
+                    roadLegs = unbiasedRoadLegs;
+                }
+            }
             if (roadLegs && roadLegs.length > 0) {
+                if (!fastest) {
+                    const direct = this.directDistance(start, waypoints);
+                    if (this.legsDistance(roadLegs) > direct * 2 + 500) {
+                        // Road preference is not worth a 4 km loop for a 250 m
+                        // direct off-road hop. Only override a road route when
+                        // the grid is dramatically faster.
+                        const gridLegs = await this.planGridLegs(
+                            start,
+                            waypoints,
+                            mode,
+                            rasters,
+                            bbox,
+                            cell,
+                            performance,
+                            waterCapable,
+                            isCancelled,
+                            slopeAt,
+                        );
+                        if (gridLegs && gridLegs.length > 0
+                            && this.legsEta(gridLegs) <= this.legsEta(roadLegs) * 0.6) {
+                            return {
+                                ok: true,
+                                route: this.finishRoute(gridLegs, waypoints, 'planned'),
+                                debug: debug ?? undefined,
+                            };
+                        }
+                    }
+                    return {
+                        ok: true,
+                        route: this.finishRoute(roadLegs, waypoints, 'planned'),
+                        debug: debug ?? undefined,
+                    };
+                }
+
+                // Fastest: the road graph is only a candidate; a capable
+                // off-road vehicle may genuinely beat it.
+                const gridLegs = await this.planGridLegs(
+                    start,
+                    waypoints,
+                    mode,
+                    rasters,
+                    bbox,
+                    cell,
+                    performance,
+                    waterCapable,
+                    isCancelled,
+                    slopeAt,
+                );
+                if (gridLegs && gridLegs.length > 0
+                    && this.legsEta(gridLegs) < this.legsEta(roadLegs)) {
+                    return {
+                        ok: true,
+                        route: this.finishRoute(gridLegs, waypoints, 'planned'),
+                        debug: debug ?? undefined,
+                    };
+                }
                 return {
                     ok: true,
                     route: this.finishRoute(roadLegs, waypoints, 'planned'),
@@ -553,7 +700,7 @@ export class RoutePlanner {
             }
         }
 
-        let legs = this.planGridLegs(
+        let legs = await this.planGridLegs(
             start,
             waypoints,
             mode,
@@ -579,7 +726,7 @@ export class RoutePlanner {
             }
             if (problems.length > 0) {
                 const penaltyAt = this.makePenalty(problems);
-                const adjusted = this.planGridLegs(
+                const adjusted = await this.planGridLegs(
                     start,
                     waypoints,
                     mode,
@@ -606,7 +753,7 @@ export class RoutePlanner {
     }
 
     /** One grid/boat leg per waypoint. */
-    private planGridLegs(
+    private async planGridLegs(
         start: [number, number],
         waypoints: Array<[number, number]>,
         mode: TravelMode,
@@ -618,7 +765,7 @@ export class RoutePlanner {
         isCancelled: () => boolean,
         slopeAt?: (x: number, y: number) => number | null,
         penaltyAt?: (x: number, y: number) => number,
-    ): RouteLeg[] | null {
+    ): Promise<RouteLeg[] | null> {
         const legs: RouteLeg[] = [];
         let cursor: [number, number] = [start[0], start[1]];
 
@@ -629,7 +776,7 @@ export class RoutePlanner {
 
             const planned = mode === 'boat'
                 ? this.planBoatPair(cursor, waypoint, rasters, bbox, cell, performance, isCancelled)
-                : this.planGroundPair(
+                : await this.planGroundPair(
                     cursor,
                     waypoint,
                     mode,
@@ -644,7 +791,20 @@ export class RoutePlanner {
                 );
 
             if (!planned) {
-                return null;
+                const fallback = this.impassableStraightPair(
+                    cursor,
+                    waypoint,
+                    rasters,
+                    cell,
+                    performance,
+                    waterCapable,
+                );
+                if (!fallback) {
+                    return null;
+                }
+                legs.push(...fallback);
+                cursor = waypoint;
+                continue;
             }
 
             legs.push(...planned);
@@ -722,6 +882,31 @@ export class RoutePlanner {
         };
     }
 
+    /**
+     * Search-only slowdown for land within a few metres of water. Foot routes
+     * should not skim the coastline when a slightly inland line is just as
+     * fast; the displayed ETA stays the real speed.
+     */
+    private waterEdgePenalty(rasters: RasterSet): (x: number, y: number) => number {
+        const offsets: ReadonlyArray<readonly [number, number]> = [
+            [WATER_EDGE_PENALTY_M, 0],
+            [-WATER_EDGE_PENALTY_M, 0],
+            [0, WATER_EDGE_PENALTY_M],
+            [0, -WATER_EDGE_PENALTY_M],
+        ];
+        return (x: number, y: number): number => {
+            if (this.masks.landAt(x, y, rasters) === false) {
+                return 1;
+            }
+            for (const [dx, dy] of offsets) {
+                if (this.masks.landAt(x + dx, y + dy, rasters) === false) {
+                    return WATER_EDGE_PENALTY_FACTOR;
+                }
+            }
+            return 1;
+        };
+    }
+
     /** Aircraft: straight lines between the consecutive waypoints. */
     private planDirect(
         start: [number, number],
@@ -748,12 +933,41 @@ export class RoutePlanner {
         return { ok: true, route: this.finishRoute(legs, waypoints, 'planned') };
     }
 
+    /** Straight-line distance from start through the waypoints, metres. */
+    private directDistance(start: [number, number], waypoints: Array<[number, number]>): number {
+        let total = 0;
+        let cursor = start;
+        for (const waypoint of waypoints) {
+            total += distanceBetween(cursor[0], cursor[1], waypoint[0], waypoint[1]);
+            cursor = waypoint;
+        }
+        return total;
+    }
+
+    /** Total road-graph distance (main/road edges), metres. */
+    private roadDistance(legs: RouteLeg[]): number {
+        return legs.reduce((total, leg) => total + (
+            leg.kind === 'road' || leg.roadKind === 'main' || leg.roadKind === 'road'
+                ? leg.distance
+                : 0
+        ), 0);
+    }
+
+    /** Total display distance of a leg list. */
+    private legsDistance(legs: RouteLeg[]): number {
+        return legs.reduce((total, leg) => total + leg.distance, 0);
+    }
+
+    /** Total display ETA of a leg list. */
+    private legsEta(legs: RouteLeg[]): number {
+        return legs.reduce((total, leg) => total + leg.eta, 0);
+    }
+
     private finishRoute(
         legs: RouteLeg[],
         waypoints: Array<[number, number]>,
         source: 'planned',
-    ): ActiveRoute {
-        const distance = legs.reduce((total, leg) => total + leg.distance, 0);
+    ): ActiveRoute {        const distance = legs.reduce((total, leg) => total + leg.distance, 0);
         const eta = legs.reduce((total, leg) => total + leg.eta, 0);
 
         return {
@@ -797,6 +1011,7 @@ export class RoutePlanner {
     ): RouteLeg[] {
         const legs: RouteLeg[] = [];
         let startIndex = 0;
+        let previousSpeed = 0;
 
         while (startIndex < path.kinds.length) {
             const kind = path.kinds[startIndex];
@@ -820,23 +1035,27 @@ export class RoutePlanner {
                 points.push(path.points[index][0], path.points[index][1]);
             }
             if (points.length >= 4) {
+                const limitedEta = limitGroundEta(distance, eta, previousSpeed);
                 legs.push({
                     mode: 'ground',
                     kind: kind === 'main' || kind === 'road' ? 'road' : 'offroad',
+                    surface: kind === 'main' || kind === 'road' ? 'road' : 'offroad',
+                    roadKind: kind,
                     points,
                     distance,
-                    eta,
+                    eta: limitedEta,
                     source: 'planned',
                 });
+                previousSpeed = distance / limitedEta;
             }
 
             startIndex = endIndex;
         }
 
-        return legs;
+        return this.mergeStraightGroundLegs(this.mergeTinyGroundTimeLegs(legs));
     }
 
-    private planRoadRoute(
+    private async planRoadRoute(
         start: [number, number],
         waypoints: Array<[number, number]>,
         rasters: RasterSet,
@@ -846,7 +1065,8 @@ export class RoutePlanner {
         waterCapable: boolean,
         isCancelled: () => boolean,
         slopeAt?: (x: number, y: number) => number | null,
-    ): RouteLeg[] | null {
+        preferRoads = false,
+    ): Promise<RouteLeg[] | null> {
         const network = this.getRoadNetwork();
         if (!network || network.nodeCount === 0) {
             return null;
@@ -860,30 +1080,71 @@ export class RoutePlanner {
                 return null;
             }
 
-            const startNode = network.nearestNode(cursor, 500);
-            const goalNode = network.nearestNode(waypoint, 500);
+            const snapDistance = (node: number): number => {
+                const p = network.nodePoint(node);
+                return p ? distanceBetween(cursor[0], cursor[1], p[0], p[1]) : Number.POSITIVE_INFINITY;
+            };
+            const anyStart = network.snapToSegment(cursor, ROAD_MAX_SNAP_M);
+            const mainStart = preferRoads
+                ? network.snapToSegment(cursor, ROAD_MAX_SNAP_M, ['main', 'road'])
+                : null;
+            const startNode = mainStart !== null && anyStart !== null
+                && snapDistance(mainStart) > snapDistance(anyStart) * 1.5 + 100
+                ? anyStart
+                : mainStart ?? anyStart ?? network.nearestNode(cursor, ROAD_MAX_SNAP_M);
+
+            const snapGoalDistance = (node: number): number => {
+                const p = network.nodePoint(node);
+                return p ? distanceBetween(waypoint[0], waypoint[1], p[0], p[1]) : Number.POSITIVE_INFINITY;
+            };
+            const anyGoal = network.snapToSegment(waypoint, ROAD_MAX_SNAP_M);
+            const mainGoal = preferRoads
+                ? network.snapToSegment(waypoint, ROAD_MAX_SNAP_M, ['main', 'road'])
+                : null;
+            const goalNode = mainGoal !== null && anyGoal !== null
+                && snapGoalDistance(mainGoal) > snapGoalDistance(anyGoal) * 1.5 + 100
+                ? anyGoal
+                : mainGoal ?? anyGoal ?? network.nearestNode(waypoint, ROAD_MAX_SNAP_M);
             if (startNode === null || goalNode === null) {
                 return null;
             }
 
-            const path = network.findPath(
-                cursor,
-                waypoint,
-                (kind, a, b) => roadSpeed(
+            const speedFor = (kind: 'main' | 'road' | 'track' | 'rail' | 'trail',
+                a: [number, number],
+                b: [number, number]): number => {
+                const speed = roadSpeed(
                     kind,
                     performance,
                     waterCapable,
                     slopeAt?.((a[0] + b[0]) / 2, (a[1] + b[1]) / 2) ?? null,
-                ),
-                isCancelled,
+                );
+                return preferRoads ? speed * roadPreferenceFactor(kind) : speed;
+            };
+            const roadOnly = (kind: 'main' | 'road' | 'track' | 'rail' | 'trail',
+                a: [number, number],
+                b: [number, number]): number => (
+                kind === 'main' || kind === 'road' ? speedFor(kind, a, b) : 0
             );
+
+            let path = preferRoads
+                ? network.findPathNodes(startNode, goalNode, roadOnly, isCancelled)
+                : null;
+            if (!path) {
+                // No fully road-connected path: allow tracks/trails as a second tier.
+                path = network.findPathNodes(startNode, goalNode, speedFor, isCancelled);
+            }
+            if (!path) {
+                // The nearest main-road node can be an isolated stub; fall back
+                // to the connected graph from the nearest node of any class.
+                path = network.findPath(cursor, waypoint, speedFor, isCancelled, ROAD_MAX_SNAP_M);
+            }
             if (!path || path.points.length < 2) {
                 return null;
             }
 
             const first = path.points[0];
             if (distanceBetween(cursor[0], cursor[1], first[0], first[1]) > 2) {
-                const connector = this.planGroundPair(
+                const connector = await this.planGroundPair(
                     cursor,
                     first,
                     'ground',
@@ -896,16 +1157,22 @@ export class RoutePlanner {
                     slopeAt,
                 );
                 if (!connector) {
-                    return null;
+                    const fallback = this.straightGroundFallback(cursor, first, performance, rasters)
+                        ?? this.impassableStraightPair(cursor, first, rasters, cell, performance, waterCapable);
+                    if (!fallback) {
+                        return null;
+                    }
+                    legs.push(...(Array.isArray(fallback) ? fallback : [fallback]));
+                } else {
+                    legs.push(...connector);
                 }
-                legs.push(...connector);
             }
 
             legs.push(...this.roadPathLegs(path, performance, waterCapable, slopeAt));
 
             const last = path.points[path.points.length - 1];
             if (distanceBetween(last[0], last[1], waypoint[0], waypoint[1]) > 2) {
-                const connector = this.planGroundPair(
+                const connector = await this.planGroundPair(
                     last,
                     waypoint,
                     'ground',
@@ -918,9 +1185,15 @@ export class RoutePlanner {
                     slopeAt,
                 );
                 if (!connector) {
-                    return null;
+                    const fallback = this.straightGroundFallback(last, waypoint, performance, rasters)
+                        ?? this.impassableStraightPair(last, waypoint, rasters, cell, performance, waterCapable);
+                    if (!fallback) {
+                        return null;
+                    }
+                    legs.push(...(Array.isArray(fallback) ? fallback : [fallback]));
+                } else {
+                    legs.push(...connector);
                 }
-                legs.push(...connector);
             }
 
             cursor = waypoint;
@@ -929,7 +1202,47 @@ export class RoutePlanner {
         return legs;
     }
 
-    private planGroundPair(
+    /**
+     * Last-resort segment to a waypoint that the grid cannot route. Only used
+     * when the straight line crosses water: the water part becomes an
+     * impassable leg with a foot-swim ETA instead of failing the whole route.
+     */
+    private impassableStraightPair(
+        start: [number, number],
+        goal: [number, number],
+        rasters: RasterSet,
+        cell: number,
+        performance: VehiclePerformance | undefined,
+        waterCapable: boolean,
+    ): RouteLeg[] | null {
+        const distance = distanceBetween(start[0], start[1], goal[0], goal[1]);
+        const steps = Math.max(1, Math.ceil(distance / 10));
+        let hasWater = false;
+        for (let step = 0; step <= steps; step += 1) {
+            const t = step / steps;
+            const x = start[0] + (goal[0] - start[0]) * t;
+            const y = start[1] + (goal[1] - start[1]) * t;
+            if (this.masks.surfaceAt(x, y, rasters) === 'water') {
+                hasWater = true;
+                break;
+            }
+        }
+        if (!hasWater) {
+            return null;
+        }
+
+        return this.buildLegs(
+            'ground',
+            [start[0], start[1], goal[0], goal[1]],
+            rasters,
+            performance,
+            waterCapable,
+            undefined,
+            cell,
+        );
+    }
+
+    private async planGroundPair(
         start: [number, number],
         goal: [number, number],
         mode: TravelMode,
@@ -941,7 +1254,7 @@ export class RoutePlanner {
         isCancelled: () => boolean,
         slopeAt?: (x: number, y: number) => number | null,
         penaltyAt?: (x: number, y: number) => number,
-    ): RouteLeg[] | null {
+    ): Promise<RouteLeg[] | null> {
         const context = this.gridContext(
             mode,
             rasters,
@@ -959,7 +1272,345 @@ export class RoutePlanner {
         }
 
         const simplified = simplifyGridPath(context, result.path);
-        return this.buildLegs(mode, simplified, rasters, performance, waterCapable, slopeAt, cell);
+        const buildFromChunks = (source: PathChunk[]): RouteLeg[] => {
+            const built: RouteLeg[] = [];
+            for (const chunk of source) {
+                built.push(...this.buildLegs(
+                    mode,
+                    chunk.points,
+                    chunk.rasters,
+                    performance,
+                    waterCapable,
+                    slopeAt,
+                    chunk.cell,
+                ));
+            }
+            return this.mergeTinyLegs(built);
+        };
+        const hasRepairableWater = (candidate: RouteLeg[]): boolean => (
+            mode === 'foot'
+            && candidate.some((leg) => leg.kind === 'water' && leg.distance >= MAX_FOOT_WATER_SLIVER_M)
+        );
+        const secondPass = async (candidate: RouteLeg[]): Promise<RouteLeg[]> => {
+            if (!hasRepairableWater(candidate)) {
+                return candidate;
+            }
+            const retry = await this.repairFootWaterPath(
+                buildRouteGeometry(candidate).points,
+                context,
+                performance,
+                waterCapable,
+                slopeAt,
+                penaltyAt,
+                isCancelled,
+            );
+            return retry ? buildFromChunks(retry) : candidate;
+        };
+        const finishFoot = async (candidate: RouteLeg[]): Promise<RouteLeg[]> => {
+            let result = await secondPass(candidate);
+            if (mode !== 'foot') {
+                return result;
+            }
+
+            const water = this.routeWater(result);
+            if (!(water.waterDistance >= MAX_FOOT_WATER_SLIVER_M)) {
+                return result;
+            }
+
+            // The normal A* already prices water at swim speed, but a coarse
+            // mask can hide a slightly longer land route. Retry with water
+            // heavily penalised; this also picks the shortest swim when water
+            // is genuinely unavoidable.
+            const alternate = this.planWeightedFootPair(
+                context,
+                start,
+                goal,
+                performance,
+                waterCapable,
+                slopeAt,
+            );
+            if (!alternate) {
+                return result;
+            }
+
+            const alternateWater = this.routeWater(alternate);
+            const accept = alternateWater.waterDistance < water.waterDistance - 1
+                && alternateWater.eta <= water.eta * 1.1 + 60;
+            if (!accept) {
+                return result;
+            }
+            result = await secondPass(alternate);
+            return result;
+        };
+
+        if (mode === 'foot') {
+            const chunks = await this.repairFootWaterPath(
+                simplified,
+                context,
+                performance,
+                waterCapable,
+                slopeAt,
+                penaltyAt,
+                isCancelled,
+            );
+            if (chunks) {
+                return finishFoot(buildFromChunks(chunks));
+            }
+        }
+
+        return finishFoot(this.buildLegs(
+            mode,
+            simplified,
+            rasters,
+            performance,
+            waterCapable,
+            slopeAt,
+            cell,
+        ));
+    }
+
+    /** Water distance and display ETA of a leg list. */
+    private routeWater(legs: RouteLeg[]): { waterDistance: number; eta: number } {
+        let waterDistance = 0;
+        let eta = 0;
+        for (const leg of legs) {
+            eta += leg.eta;
+            if (leg.kind === 'water') {
+                waterDistance += leg.distance;
+            }
+        }
+        return { waterDistance, eta };
+    }
+
+    /** Foot A* with water penalised in the search but still passable. */
+    private planWeightedFootPair(
+        context: GridContext,
+        start: [number, number],
+        goal: [number, number],
+        performance: VehiclePerformance | undefined,
+        waterCapable: boolean,
+        slopeAt: ((x: number, y: number) => number | null) | undefined,
+    ): RouteLeg[] | null {
+        const waterPenalty = (x: number, y: number): number => {
+            const base = context.penaltyAt?.(x, y) ?? 1;
+            return this.masks.surfaceAt(x, y, context.rasters) === 'water'
+                ? base * 0.1
+                : base;
+        };
+        const weighted: GridContext = {
+            ...context,
+            avoidWater: false,
+            penaltyAt: waterPenalty,
+        };
+        const result = searchGrid(weighted, start, goal);
+        if (!result) {
+            return null;
+        }
+        const path = simplifyGridPath(weighted, result.path);
+        return this.buildLegs(
+            'foot',
+            path,
+            context.rasters,
+            performance,
+            waterCapable,
+            slopeAt,
+            context.cell,
+        );
+    }
+
+    /**
+     * Replans avoidable foot water stretches on a finer local raster.
+     *
+     * The coarse planning raster can turn a narrow beach or land bridge into
+     * water. Each water run gets a small corridor, a land-only A* at a finer
+     * cell, and a cost/distance guard so a short swim is still preferred over
+     * an absurd detour around the whole island.
+     */
+    private async repairFootWaterPath(
+        path: number[],
+        context: GridContext,
+        performance: VehiclePerformance | undefined,
+        waterCapable: boolean,
+        slopeAt?: (x: number, y: number) => number | null,
+        penaltyAt?: (x: number, y: number) => number,
+        isCancelled: () => boolean = () => false,
+    ): Promise<PathChunk[] | null> {
+        const surfaceAt = (x: number, y: number): string => (
+            this.masks.surfaceAt(x, y, context.rasters)
+        );
+        const splitStep = Math.max(5, Math.min(10, context.cell));
+        const splitPath = splitPathAtWater(path, surfaceAt, splitStep);
+        const runs = mergeNearbyWaterRuns(
+            splitPath,
+            findWaterRuns(splitPath, surfaceAt, splitStep),
+            40,
+        );
+        if (runs.length === 0) {
+            return null;
+        }
+
+        const chunks: PathChunk[] = [];
+        const count = Math.floor(splitPath.length / 2);
+        const maxRepairs = 8;
+        let cursor = 0;
+        let repaired = false;
+        let repairs = 0;
+
+        for (const rawRun of runs) {
+            if (isCancelled()) {
+                return null;
+            }
+            if (repairs >= maxRepairs) {
+                break;
+            }
+
+            const run = extendRunToLand(splitPath, rawRun, surfaceAt);
+            if (run === null || run.startIndex < cursor) {
+                continue;
+            }
+
+            const a = pointAt(splitPath, run.startIndex);
+            const b = pointAt(splitPath, run.endIndex);
+            const margin = Math.max(250, Math.min(1500, run.waterDistance * 2 + 250));
+            const fineBBox = this.clampBounds(corridorBounds(splitPath, run, margin));
+            const span = Math.max(fineBBox[2] - fineBBox[0], fineBBox[3] - fineBBox[1]);
+            const fineCell = Math.max(5, Math.min(context.cell, span / 900));
+            if (!(span > 0) || !(fineCell < context.cell)) {
+                continue;
+            }
+
+            const fineRasters = await this.masks.buildRasters('foot', fineBBox, fineCell, isCancelled);
+            if (isCancelled()) {
+                return null;
+            }
+            if (!fineRasters.terrain) {
+                continue;
+            }
+
+            const waterPenalty = (x: number, y: number): number => (
+                this.masks.landAt(x, y, fineRasters) === false
+                    ? 0
+                    : (penaltyAt?.(x, y) ?? 1)
+            );
+            const fineContext = this.gridContext(
+                'foot',
+                fineRasters,
+                fineBBox,
+                fineCell,
+                performance,
+                waterCapable,
+                isCancelled,
+                slopeAt,
+                waterPenalty,
+            );
+            fineContext.avoidWater = true;
+            fineContext.waterBufferM = WATER_BUFFER_M;
+
+            let fineResult = searchGrid(fineContext, a, b);
+            if (!fineResult && WATER_BUFFER_M > 0) {
+                // A very narrow beach may not have a 3 m dry strip. Keep the
+                // land-only guarantee but drop the extra clearance.
+                fineContext.waterBufferM = 0;
+                fineResult = searchGrid(fineContext, a, b);
+            }
+            if (!fineResult) {
+                continue;
+            }
+
+            const finePath = simplifyGridPath(fineContext, fineResult.path);
+            const fineSurface = (x: number, y: number): string => (
+                this.masks.surfaceAt(x, y, fineRasters)
+            );
+            const remainingWater = findWaterRuns(finePath, fineSurface, Math.max(5, fineCell))
+                .reduce((total, item) => total + item.waterDistance, 0);
+            if (remainingWater > Math.max(MAX_FOOT_WATER_SLIVER_M, fineCell)) {
+                continue;
+            }
+
+            const originalEta = this.pathEta(
+                { ...context, penaltyAt: undefined },
+                splitPath,
+                run.startIndex,
+                run.endIndex,
+            );
+            const replacementEta = this.pathEta(
+                { ...fineContext, penaltyAt: undefined, avoidWater: false },
+                finePath,
+                0,
+                Math.floor(finePath.length / 2) - 1,
+            );
+            const replacementDistance = pathLength(finePath);
+            const originalDistance = pathLength(splitPath, run.startIndex, run.endIndex);
+            if (!waterReplacementAcceptable(
+                originalEta,
+                replacementEta,
+                originalDistance,
+                replacementDistance,
+                run.waterDistance,
+            )) {
+                continue;
+            }
+
+            if (run.startIndex > cursor) {
+                chunks.push({
+                    points: splitPath.slice(cursor * 2, run.startIndex * 2 + 2),
+                    rasters: context.rasters,
+                    cell: context.cell,
+                });
+            }
+            chunks.push({ points: finePath, rasters: fineRasters, cell: fineCell });
+            cursor = run.endIndex;
+            repaired = true;
+            repairs += 1;
+        }
+
+        if (!repaired) {
+            return null;
+        }
+
+        if (cursor < count - 1) {
+            chunks.push({
+                points: splitPath.slice(cursor * 2),
+                rasters: context.rasters,
+                cell: context.cell,
+            });
+        }
+
+        return chunks;
+    }
+
+    /** Travel time of a path span using the search masks and speed model. */
+    private pathEta(
+        context: GridContext,
+        path: number[],
+        fromIndex: number,
+        toIndex: number,
+    ): number {
+        let eta = 0;
+        for (let index = fromIndex; index < toIndex; index += 1) {
+            eta += segmentCost(
+                context,
+                path[index * 2],
+                path[index * 2 + 1],
+                path[(index + 1) * 2],
+                path[(index + 1) * 2 + 1],
+            );
+        }
+        return eta;
+    }
+
+    /** Clamps a corridor box to the terrain, if its dimensions are known. */
+    private clampBounds(bounds: BBox): BBox {
+        const terrain = this.masks.getBounds();
+        if (!terrain) {
+            return bounds;
+        }
+        return [
+            Math.max(0, bounds[0]),
+            Math.max(0, bounds[1]),
+            Math.min(terrain.width, bounds[2]),
+            Math.min(terrain.height, bounds[3]),
+        ];
     }
 
     private planBoatPair(
@@ -1010,6 +1661,30 @@ export class RoutePlanner {
         return legs;
     }
 
+    /**
+     * Last-resort connector when the grid search fails: a straight off-road
+     * leg, but only when every sampled point is land and object-free. This keeps
+     * a mostly-good road route instead of discarding it for the whole grid.
+     */
+    private straightGroundFallback(
+        start: [number, number],
+        end: [number, number],
+        performance: VehiclePerformance | undefined,
+        rasters: RasterSet,
+    ): RouteLeg | null {
+        const distance = distanceBetween(start[0], start[1], end[0], end[1]);
+        const steps = Math.max(1, Math.ceil(distance / 10));
+        for (let step = 0; step <= steps; step += 1) {
+            const t = step / steps;
+            const x = start[0] + (end[0] - start[0]) * t;
+            const y = start[1] + (end[1] - start[1]) * t;
+            if (this.masks.landAt(x, y, rasters) === false) {
+                return null;
+            }
+        }
+        return this.straightLeg('ground', 'offroad', start, end, performance);
+    }
+
     private straightLeg(
         mode: TravelMode,
         kind: RouteLegKind,
@@ -1019,12 +1694,14 @@ export class RoutePlanner {
     ): RouteLeg {
         const distance = distanceBetween(start[0], start[1], end[0], end[1]);
         const speed = legSpeed(mode, kind, performance, mode !== 'ground');
+        const eta = speed > 0 ? distance / speed : 0;
         return {
             mode,
             kind,
+            surface: mode === 'ground' ? 'offroad' : undefined,
             points: [start[0], start[1], end[0], end[1]],
             distance,
-            eta: speed > 0 ? distance / speed : 0,
+            eta: mode === 'ground' ? limitGroundEta(distance, eta) : eta,
             source: 'planned',
         };
     }
@@ -1040,6 +1717,7 @@ export class RoutePlanner {
         cell = 10,
     ): RouteLeg[] {
         const legs: RouteLeg[] = [];
+        let previousLegSpeed = 0;
         let currentSurface: RouteSurface | null = null;
         let currentKind: RouteLegKind | null = null;
         let currentPoints: number[] = [];
@@ -1048,9 +1726,18 @@ export class RoutePlanner {
 
         const pushLeg = (): void => {
             if (currentKind && currentPoints.length >= 4) {
+                const impassable = mode === 'ground' && !waterCapable
+                    && currentSurface === 'water';
+                const limitedEta = impassable
+                    ? currentDistance / Math.max(0.5, legSpeed('foot', currentKind ?? 'water', undefined, false))
+                    : mode === 'ground'
+                        ? limitGroundEta(currentDistance, currentEta, previousLegSpeed)
+                        : currentEta;
                 legs.push({
                     mode,
                     kind: currentKind,
+                    surface: mode === 'ground' ? currentSurface ?? undefined : undefined,
+                    passable: impassable ? false : undefined,
                     points: this.simplifyLegPoints(
                         mode,
                         currentSurface,
@@ -1059,9 +1746,12 @@ export class RoutePlanner {
                         cell,
                     ),
                     distance: currentDistance,
-                    eta: currentEta,
+                    eta: limitedEta,
                     source: 'planned',
                 });
+                if (mode === 'ground' && limitedEta > 0) {
+                    previousLegSpeed = currentDistance / limitedEta;
+                }
             }
         };
 
@@ -1084,12 +1774,7 @@ export class RoutePlanner {
                 const t = sample / steps;
                 const x = sample === steps ? bx : ax + (bx - ax) * t;
                 const y = sample === steps ? by : ay + (by - ay) * t;
-                let surface = this.masks.surfaceAt(x, y, rasters);
-                if (mode === 'ground' && !waterCapable && surface === 'water') {
-                    // A non-amphibious A* path cannot cross water; a coastline
-                    // sample between two passable grid cells is land for display.
-                    surface = 'offroad';
-                }
+                const surface = this.masks.surfaceAt(x, y, rasters);
                 const kind = this.legKindFor(mode, surface);
 
                 if (currentSurface === null || lastX === null) {
@@ -1143,7 +1828,114 @@ export class RoutePlanner {
         }
 
         pushLeg();
-        return this.mergeTinyLegs(legs);
+        return this.mergeStraightGroundLegs(this.mergeTinyGroundTimeLegs(this.mergeTinyLegs(legs)));
+    }
+
+    /**
+     * Folds ground legs shorter than `maxSeconds` into the larger neighbouring
+     * leg. A grid path along a track produces one-cell road/forest fragments at
+     * raster boundaries; those are display noise, not useful route steps.
+     */
+    private mergeTinyGroundTimeLegs(legs: RouteLeg[], maxSeconds = 5): RouteLeg[] {
+        let changed = true;
+        while (changed) {
+            changed = false;
+            for (let index = 0; index < legs.length; index += 1) {
+                const leg = legs[index];
+                if (leg.mode !== 'ground' || leg.kind === 'water' || leg.eta >= maxSeconds
+                    || leg.passable === false) {
+                    continue;
+                }
+
+                const previous = legs[index - 1];
+                const next = legs[index + 1];
+                if (!previous && !next) {
+                    continue;
+                }
+
+                // Prefer the larger neighbour so a 1 s road cell does not
+                // consume a whole off-road/track leg.
+                let targetIndex = index - 1;
+                if (previous && next) {
+                    targetIndex = previous.eta >= next.eta ? index - 1 : index + 1;
+                } else if (!previous) {
+                    targetIndex = index + 1;
+                }
+                const target = legs[targetIndex];
+                if (!target || target.mode !== 'ground' || target.kind === 'water'
+                    || target.passable === false) {
+                    continue;
+                }
+
+                const points = targetIndex < index
+                    ? [...target.points, ...leg.points.slice(2)]
+                    : [...leg.points.slice(0, -2), ...target.points];
+                target.points = points;
+                target.distance += leg.distance;
+                target.eta += leg.eta;
+                legs.splice(index, 1);
+                changed = true;
+                break;
+            }
+        }
+        return legs;
+    }
+
+    /**
+     * Folds adjacent same-kind ground legs whose junction is almost straight.
+     * A grid/road boundary can otherwise split one straight off-road run into
+     * a strobe of 10–100 m legs purely because the raster surface alternates
+     * between forest and offroad.
+     */
+    private mergeStraightGroundLegs(legs: RouteLeg[]): RouteLeg[] {
+        let changed = true;
+        while (changed) {
+            changed = false;
+            for (let index = 0; index + 1 < legs.length; index += 1) {
+                const first = legs[index];
+                const second = legs[index + 1];
+                if (first.mode !== 'ground' || second.mode !== 'ground'
+                    || first.kind !== second.kind
+                    || first.passable === false || second.passable === false
+                    || first.points.length < 4 || second.points.length < 4
+                    || (first.roadKind !== second.roadKind)) {
+                    continue;
+                }
+
+                const ax = first.points[first.points.length - 4];
+                const ay = first.points[first.points.length - 3];
+                const bx = first.points[first.points.length - 2];
+                const by = first.points[first.points.length - 1];
+                const cx = second.points[0];
+                const cy = second.points[1];
+                const dx = second.points[2];
+                const dy = second.points[3];
+                const v1x = bx - ax;
+                const v1y = by - ay;
+                const v2x = dx - cx;
+                const v2y = dy - cy;
+                const l1 = Math.hypot(v1x, v1y);
+                const l2 = Math.hypot(v2x, v2y);
+                if (!(l1 > 0) || !(l2 > 0)) {
+                    continue;
+                }
+                const cosine = (v1x * v2x + v1y * v2y) / (l1 * l2);
+                if (cosine < Math.cos((8 * Math.PI) / 180)) {
+                    continue;
+                }
+
+                first.points = [...first.points, ...second.points.slice(2)];
+                first.distance += second.distance;
+                first.eta += second.eta;
+                if (first.surface !== second.surface) {
+                    first.surface = 'offroad';
+                }
+                legs.splice(index + 1, 1);
+                changed = true;
+                break;
+            }
+        }
+        return legs;
     }
 
     /**
@@ -1222,6 +2014,34 @@ export class RoutePlanner {
 
             for (let index = 0; index < legs.length; index += 1) {
                 const leg = legs[index];
+
+                // A foot path can end with a few metres of water where a
+                // coarse/fine raster boundary clips a beach. A real crossing is
+                // much wider; folding the sliver into the neighbouring walk leg
+                // keeps the route line and leg list swim-free.
+                if (leg.mode === 'foot' && leg.kind === 'water'
+                    && leg.distance < MAX_FOOT_WATER_SLIVER_M) {
+                    const targetIndex = index > 0 ? index - 1 : index + 1;
+                    const target = legs[targetIndex];
+                    if (target && target.mode === leg.mode && target.kind !== 'water') {
+                        const speed = target.distance > 0 && target.eta > 0
+                            ? target.distance / target.eta
+                            : 0;
+                        const distance = target.distance + leg.distance;
+                        const eta = speed > 0 ? distance / speed : target.eta + leg.eta;
+                        const points = targetIndex < index
+                            ? [...target.points, ...leg.points.slice(2)]
+                            : [...leg.points.slice(0, -2), ...target.points];
+
+                        target.points = points;
+                        target.distance = distance;
+                        target.eta = eta;
+                        legs.splice(index, 1);
+                        changed = true;
+                        break;
+                    }
+                }
+
                 if (!(leg.distance < minDistance)) {
                     continue;
                 }
@@ -1280,6 +2100,10 @@ export class RoutePlanner {
         slopeAt?: (x: number, y: number) => number | null,
         penaltyAt?: (x: number, y: number) => number,
     ): GridContext {
+        const effectivePenalty = mode === 'foot' && penaltyAt === undefined
+            ? this.waterEdgePenalty(rasters)
+            : penaltyAt;
+
         return {
             mode,
             masks: this.masks,
@@ -1290,7 +2114,7 @@ export class RoutePlanner {
             performance,
             isCancelled,
             slopeAt,
-            penaltyAt,
+            penaltyAt: effectivePenalty,
         };
     }
 }
@@ -1310,3 +2134,6 @@ function sanitizePoint(value: unknown): [number, number] | null {
 function samePoint(a: [number, number], b: [number, number]): boolean {
     return Math.abs(a[0] - b[0]) < 0.01 && Math.abs(a[1] - b[1]) < 0.01;
 }
+
+
+

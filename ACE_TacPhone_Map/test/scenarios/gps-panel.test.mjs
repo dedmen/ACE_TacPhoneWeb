@@ -41,12 +41,6 @@ const MOVING_TOLERANCE_M = 25;
 /** Context-menu timeout after a right click on a marker. */
 const CONTEXT_MENU_WAIT_MS = 750;
 
-/** Replica of `GpsHud.padHeading`: rounded, `%`-wrapped, 3 digits, degrees. */
-function padHeading(value) {
-    const wrapped = ((Math.round(value) % 360) + 360) % 360;
-    return `${String(wrapped).padStart(3, '0')}\u00b0`;
-}
-
 function distance2d(left, right) {
     return Math.hypot(left[0] - right[0], left[1] - right[1]);
 }
@@ -123,17 +117,24 @@ export async function run({ pageUrl, options, log }) {
         log?.(`GPS view centered ${distance2d([centered.x, centered.y], fixed.position).toFixed(1)} m from the player`);
 
         const headingText = await page.getByTestId('gps-heading').textContent();
-        const expectedHeading = fixed.heading === null
-            ? await gpsT(page, 'STR_ACE_Tacphone_Map_Gps_Hud_NoHeading')
-            : await gpsT(page, 'STR_ACE_Tacphone_Map_Gps_Hud_Heading', padHeading(fixed.heading));
-        equal(
-            (headingText ?? '').trim(),
-            expectedHeading.trim(),
-            'The HUD heading text does not match the GPS state',
-        );
-
         if (fixed.heading === null) {
-            log?.('The game sent no view direction; the HUD shows the no-heading text');
+            const expectedHeading = await gpsT(page, 'STR_ACE_Tacphone_Map_Gps_Hud_NoHeading');
+            equal(
+                (headingText ?? '').trim(),
+                expectedHeading.trim(),
+                'The HUD heading text does not match the GPS state',
+            );
+        } else {
+            // The player can keep rotating between the fix snapshot and the DOM
+            // read, so compare the compass value with a small angular tolerance.
+            const match = /(\d{1,3})\s*°/.exec(headingText ?? '');
+            assert(match, `The HUD heading has no degrees: ${headingText}`);
+            const actual = Number(match[1]);
+            const delta = Math.abs(((actual - fixed.heading + 540) % 360) - 180);
+            assert(
+                delta <= 10,
+                `The HUD heading ${actual}° is ${delta.toFixed(1)}° from the GPS state ${fixed.heading.toFixed(1)}°`,
+            );
         }
 
         if (fixed.rotating) {

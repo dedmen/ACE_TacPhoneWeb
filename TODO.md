@@ -213,6 +213,14 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
 - [ ] **[wontfix]** Marker creation failures stay invisible. `Map.tsx:311-316`
   closes the dialog immediately and only logs the error. This is deliberate: the
   dialog should not turn into an error UI. No action planned.
+- [ ] **[robustness]** Marker names can collide when two markers are created in
+  the same millisecond. `fnc_createMarker.sqf` builds
+  `_USER_DEFINED #<player>/ACE_TP<floor (diag_tickTime * 1000)>/<channel>`, so a
+  fast batch (or a script/test creating several in one tick) produces duplicate
+  names and makes `GetAllMarkers` lookups ambiguous. Add a monotonic counter
+  stored in `missionNamespace` (or a random suffix) to the generated name. The
+  `marker-protocol` test spaces its creates 50 ms apart as a temporary
+  workaround.
 - [ ] **[bug]** `MarkerLayer.destroy()` only unregisters handlers
   (`MarkerLayer.tsx:146-171`). In-flight `GetMarkerTypes`/`GetAllMarkers`/icon
   loads still run and mutate an unmounted layer. Add a `destroyed` flag checked
@@ -361,6 +369,12 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
   all resolve `undefined`.
 - [ ] **[decision]** `App.tsx:316-317` TODO: keep the mobile screen awake and add
   a fullscreen mode (Settings), relevant for the external-browser path.
+- [ ] **[feature]** Audio options in the Options panel: a configurable master
+  volume with a "play test sound" button so the user hears the new level, and a
+  choice of notification sounds per sound type (`message`, `alert`, `success`).
+  The engine already synthesises the presets in `Backend/Audio.ts`; expose the
+  selected volume/presets through `window.TacPhone.options` and the app-facing
+  `AudioApi`, localise the labels, and persist the choices with the layout.
 - [ ] **[decision]** Audio output device: `window.TacPhone.audio.setSinkId()` and
   `enumerateDevices()` already exist in `Backend/Audio.ts`, but the game cannot
   report Arma's selected output device, so the browser sink is not mapped to it.
@@ -399,6 +413,20 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
   host target chooser picks the Map instance. The Map renderer only supplies the
   preview, so Messenger can keep the card and offer the last known position when
   `focusMarker()` returns false.
+- [ ] **[feature]** GPS routing-event subscriptions for apps. The GPS service
+  currently exposes only method calls, so other apps cannot react to navigation
+  progress. Add a subscription API on the `gps` service (with an unsubscribe
+  handle, and no events while no GPS panel is registered) that publishes:
+  - `waypointReached` — waypoint index, remaining waypoints, route distance/ETA;
+  - `routeCompleted` — final distance/ETA and the completion timestamp;
+  - `routeReplanned` — reason (`offRoute`, `vehicleChange`, manual), old/new
+    distance and ETA;
+  - `junctionTaken` — the junction/leg just left, the next maneuver kind
+    (`left`/`right`/`straight`/road-offroad transition), and the distance and
+    estimated time to the next junction.
+  Events carry a route revision/id so consumers can ignore updates from a route
+  that was replaced, and should reuse the existing `window.TacPhone.interApp`
+  lifecycle rather than a new global.
 - [ ] **[decision]** Cross-app events/subscriptions beyond method calls (for
   example "markers changed" notifications).
 - [ ] **[cleanup]** `interApp.waitFor(service, predicate)` lifecycle helper, so
@@ -603,6 +631,34 @@ UI bundle.
 
 ## GPS / route planning
 
+- [ ] **[robustness]** The adaptive foot water-corridor pass is implemented: it
+  splits a foot path at the coast, replans each water run on a fine local raster
+  with a land-only A*, and only keeps the swim when the replacement is slower or
+  an absurd detour. `testRoom` now replans with zero water legs (9.3 km) instead
+  of the two avoidable coastal swims. The corridor margin (250–1500 m), fine
+  cell (5 m), 3 m water buffer, replacement caps (3× span + 5× water + 750 m,
+  1.1× ETA + 60 s), 10 m foot water-sliver fold, 10× weighted-water retry and
+  the 2x/alpha-8 mask supersample are first-pass constants; validate them on
+  more coastal and island fixtures. `gps-route` passes in Chrome and Firefox.
+  `ACE_TacPhone_Map/test/tools/replan-room.mjs --room <name>` is the repro tool.
+- [ ] **[feature]** Voice guidance is a test implementation: hardcoded English
+  cues once at 500 m and once at 100 m for each road junction, plus one cue per
+  road/off-road transition, all using the real distance. Add stringtable
+  keys/localization, a voice on/off option, and tune the cue thresholds and
+  cooldown against real driving before shipping.
+- [ ] **[feature]** Add a Map option to enable/disable the GPS text-to-speech
+  announcements. It must gate `GpsModule.speakGuidance()` (no speech, including
+  transition cues) while keeping the visual turn indicator and route guidance
+  unchanged, use the standard `window.TacPhone.options` mechanism, and default
+  to the current test behaviour until the final default is decided.
+- [ ] **[decision]** Research how production GPS devices and navigation apps
+  decide when to speak: speed-dependent announcement distances, junction vs.
+  road-curve detection, the number of cues per maneuver, the minimum gap
+  between utterances, how they handle several maneuvers close together, and
+  when they deliberately stay silent. Use the findings to tune
+  `GpsModule.speakGuidance` (currently one advance cue at 500 m and one final cue
+  at 100 m per junction, one cue per transition, 3 s global gap) and document
+  the resulting rule before this goes beyond the test implementation.
 - [ ] **[cleanup]** `GpsOverlay.tsx` now contains the HUD/route-editor UI plus
   the whole debug dialog, hover sampling, overlay-alpha state and debug effects.
   Move the debug-only JSX, state and listeners into a separate
@@ -635,7 +691,7 @@ UI bundle.
   light, high-power one, and a longer flatter road should win over a short
   steep one. The 32x32 search grid, 1 m validation spacing and peak
   prominence are tuning constants.
-- [ ] **[robustness]** Tune the route planner's grid size, water/road/forest costs and line-of-sight simplification against real maps; the first implementation is deliberately coarse. The road graph now uses a 0.5 m node grid, width-aware snapping capped at 30 m, crossing splits and nearby-node bridges; validate those constants on several maps.
+- [ ] **[robustness]** Tune the route planner's grid size, water/road/forest costs and line-of-sight simplification against real maps; the first implementation is deliberately coarse. The road graph now uses a 0.5 m node grid, width-aware snapping capped at 60 m to the closest point along a segment, crossing splits, dangling-node bridges and a flipped SVG Y; ground routing snaps up to 8000 m to the road graph, prefers main/road segments first and uses road-class search factors, then compares the unbiased graph route when it uses more road for a comparable ETA; the route panel `Fastest route` toggle compares the road and grid ETAs. Forest speed and the 3 m/s² entry-speed acceleration limit are first-pass constants; validate them on several maps.
 - [ ] **[robustness]** Tune waterResistanceCoef / waterSpeedCoef water speed for amphibious vehicles and the transport-mode advisor's follow delay, cooldown and 60 s / 20% saving threshold.
 - [ ] **[decision]** The transport-mode advisor runs only for shared routes. Explore enabling it for locally planned routes too.
 - [ ] **[cleanup]** Polyline edit currently moves existing vertices only; adding/removing points and sharing the full polyline geometry are follow-ups.

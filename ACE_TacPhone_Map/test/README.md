@@ -50,8 +50,10 @@ documented exception: it imports browser-free app modules through
   ```
 
   Override the channel with `TACPHONE_TEST_BROWSER` (or `PLAYWRIGHT_CHANNEL`),
-  for example `msedge`. A missing package or browser is reported as `SKIP`, so
-  the Node scenario and the manual checklist stay usable.
+  for example `msedge`. `firefox` uses Playwright's Firefox build
+  (`npx playwright install firefox`) and is the cross-engine check for terrain
+  rasterization and route strings. A missing package or browser is reported as
+  `SKIP`, so the Node scenario and the manual checklist stay usable.
 - Tests must not be run while another client is expected to be testing: the
   browser scenarios open a Map tab, create markers or polylines and delete them
   again; `marker-ui` leaves the Map panel open. `marker-channels` runs a
@@ -77,6 +79,8 @@ node ACE_TacPhone_Map/test/run-tests.mjs --scenario gps-shared --verbose
 node ACE_TacPhone_Map/test/run-tests.mjs --scenario gps-shared-messenger --slow
 node ACE_TacPhone_Map/test/run-tests.mjs --scenario map-view --slow
 node ACE_TacPhone_Map/test/run-unit-tests.mjs --only gps-advisor --verbose
+$env:TACPHONE_TEST_BROWSER = 'firefox'
+npm run test:map -- --scenario gps-route
 ```
 
 The interactive tier is separate and opt-in:
@@ -158,6 +162,39 @@ node ACE_TacPhone_Map/test/benchmark/map-terrain-live.mjs --headed --page-url ht
 Use it before changing `TERRAIN_TILE_SIZE` or the LOD cut-offs. It is opt-in
 (not in `test:map`/`test:all`) because it needs a running game with terrain data.
 
+## Replan a shared room route
+
+`test/tools/replan-room.mjs` is a diagnostic for user-reported routing cases. It
+reads the `map.gps_route` objects from a Messenger room through the real
+`messenger` inter-app service, feeds their origin and waypoint offsets into the
+live GPS panel, and prints the replanned distance, ETA and every leg:
+
+```powershell
+node ACE_TacPhone_Map/test/tools/replan-room.mjs --room testRoom
+node ACE_TacPhone_Map/test/tools/replan-room.mjs --room WaterLeg --points
+node ACE_TacPhone_Map/test/tools/replan-room.mjs --room testRoom --mode foot --json
+```
+
+It needs Arma, the web host, the dev page and a mounted Messenger panel (it
+opens one if needed). Ad-hoc routes work without Messenger:
+
+```powershell
+node ACE_TacPhone_Map/test/tools/replan-room.mjs --origin 11200,8710 `
+  --waypoint 277,2588 --waypoint 3780,7275
+```
+
+It is not part of `test:map` or `test:all`; it only changes the GPS waypoints and
+route.
+
+`test/tools/find-town.mjs` finds a village/town name in the terrain
+`townNames` layer and prints its world coordinates. Use it to describe a routing
+case by place name instead of guessing from the map:
+
+```powershell
+node ACE_TacPhone_Map/test/tools/find-town.mjs --name Neochori
+node ACE_TacPhone_Map/test/tools/find-town.mjs --name Katalaki --json
+```
+
 ## Layout
 
 ```text
@@ -173,11 +210,16 @@ test/
 │   ├── gps-splice.unit.mjs           # RouteSplice helpers + shared route codec
 │   ├── gps-advisor.unit.mjs          # TransportModeAdvisor state machine
 │   ├── gps-routing.unit.mjs          # route metrics, turns, deviation, road graph
+│   ├── gps-water-corridor.unit.mjs   # water runs, corridor bounds, detour guard
+│   ├── gps-leg-info.unit.mjs         # hover leg speed/time and next-waypoint span
 │   ├── gps-payload.unit.mjs          # map.gps_route contract + loader guard
 │   └── terrain-layer-priority.unit.mjs # terrain rank/LOD planning
 ├── benchmark/
 │   ├── tile-size.mjs                 # opt-in TERRAIN_TILE_SIZE crop benchmark
 │   └── map-terrain-live.mjs          # opt-in real-game terrain load/pan/zoom benchmark
+├── tools/
+│   ├── replan-room.mjs               # opt-in: replan a shared Messenger room route
+│   └── find-town.mjs                 # opt-in: townNames name -> world coordinates
 ├── scenarios/
 │   ├── marker-protocol.test.mjs      # types/channels, custom RGBA colors, text clamp
 │   ├── marker-channels.test.mjs      # multiplayer layer visibility + active dimming

@@ -39,11 +39,20 @@ interface Edge {
 /** Nodes are merged on a 0.5 m grid; enough for SVG export noise, small
  * enough that two nearby roads are not collapsed into one. */
 const NODE_GRID_M = 0.5;
-const MAX_SNAP_M = 30;
+const MAX_SNAP_M = 60;
 const MIN_SNAP_M = 4;
+/** Spatial cell for the junction lookup; must be at least the query radius. */
+const JUNCTION_CELL_M = 32;
+/** Minimally different branch bearings for a junction, degrees. */
+const JUNCTION_MIN_ANGLE_DEG = 25;
 
 function distance(ax: number, ay: number, bx: number, by: number): number {
     return Math.hypot(bx - ax, by - ay);
+}
+
+/** Smallest angle between two bearings, 0..180 degrees. */
+function angleDifference(a: number, b: number): number {
+    return Math.abs(((a - b + 540) % 360) - 180);
 }
 
 function nodeKey(point: [number, number]): string {
@@ -110,6 +119,8 @@ export class RoadNetwork {
     private readonly nodeIds = new Map<string, number>();
     private readonly adjacency = new Map<number, Edge[]>();
     private readonly segments: RawSegment[] = [];
+    /** Spatial index over node ids, for fast junction queries. */
+    private readonly nodeGrid = new Map<string, number[]>();
 
     public readonly polylineCount: number;
 
@@ -171,6 +182,33 @@ export class RoadNetwork {
         return best;
     }
 
+    /** Nearest endpoint of a segment whose class is in `kinds`, or null. */
+    public nearestNodeOnRoad(
+        point: [number, number],
+        maxDistance: number,
+        kinds: readonly RoadKind[],
+    ): number | null {
+        const allowed = new Set(kinds);
+        let best: number | null = null;
+        let bestDistance = maxDistance;
+
+        for (const segment of this.segments) {
+            if (!allowed.has(segment.kind)) {
+                continue;
+            }
+            for (const nodeIndex of [segment.a, segment.b]) {
+                const node = this.nodes[nodeIndex].point;
+                const current = distance(point[0], point[1], node[0], node[1]);
+                if (current <= bestDistance) {
+                    bestDistance = current;
+                    best = nodeIndex;
+                }
+            }
+        }
+
+        return best;
+    }
+
     public nodePoint(index: number): [number, number] | null {
         return this.nodes[index]?.point ?? null;
     }
@@ -178,6 +216,122 @@ export class RoadNetwork {
     /** All node positions, for debug/waypoint finding. */
     public nodePoints(): Array<[number, number]> {
         return this.nodes.map((node) => [node.point[0], node.point[1]]);
+    }
+
+    /**
+     * Position of the nearest real junction node within `radius`, or null.
+     *
+     * A junction has road branches in at least three different directions;
+     * that is a crossing/T-junction. A bend, two road ends meeting
+     * head-to-head, or an end joined to the interior of the same road (a split
+     * made by snapping) only has two directions.
+     *
+     * The node position is stable across fixes, so callers can use it as the
+     * identity of the junction.
+     */
+    public junctionPoint(point: [number, number], radius = 15): [number, number] | null {
+        let best: [number, number] | null = null;
+        let bestDistance = radius;
+
+        for (const index of this.nodesWithin(point, radius)) {
+            const origin = this.nodes[index].point;
+            const directions: number[] = [];
+
+            for (const edge of this.adjacency.get(index) ?? []) {
+                if (edge.length <= 0.1) {
+                    continue;
+                }
+                const target = this.nodes[edge.to].point;
+                const angle = (Math.atan2(target[1] - origin[1], target[0] - origin[0])
+                    * 180 / Math.PI + 360) % 360;
+                // Collapse duplicate/split edges that point the same way.
+                if (!directions.some((existing) => angleDifference(existing, angle) < JUNCTION_MIN_ANGLE_DEG)) {
+                    directions.push(angle);
+                }
+            }
+
+            if (directions.length < 3) {
+                continue;
+            }
+
+            const current = distance(point[0], point[1], origin[0], origin[1]);
+            if (current <= bestDistance) {
+                bestDistance = current;
+                best = [origin[0], origin[1]];
+            }
+        }
+
+        return best;
+    }
+
+    /** True when {@link junctionPoint} finds a junction within `radius`. */
+    public isJunction(point: [number, number], radius = 15): boolean {
+        return this.junctionPoint(point, radius) !== null;
+    }
+
+    /**
+     * Snaps a world point to the closest point **along a road segment**,
+     * splitting that segment so the graph can start/end there instead of at an
+     * arbitrary intersection. Returns the graph node, or null.
+     */
+    public snapToSegment(
+        point: [number, number],
+        maxDistance: number,
+        kinds?: readonly RoadKind[],
+    ): number | null {
+        const allowed = kinds ? new Set(kinds) : null;
+        let bestIndex = -1;
+        let bestProjection: ReturnType<typeof projectOnSegment> | null = null;
+
+        for (let index = 0; index < this.segments.length; index += 1) {
+            const segment = this.segments[index];
+            if (allowed && !allowed.has(segment.kind)) {
+                continue;
+            }
+            const a = this.nodes[segment.a].point;
+            const b = this.nodes[segment.b].point;
+            const projection = projectOnSegment(point, a, b);
+            if (projection.distance > maxDistance) {
+                continue;
+            }
+            if (bestProjection === null || projection.distance < bestProjection.distance) {
+                bestProjection = projection;
+                bestIndex = index;
+            }
+        }
+
+        if (bestProjection === null || bestIndex < 0) {
+            return null;
+        }
+
+        const segment = this.segments[bestIndex];
+        if (bestProjection.t <= 0.02) {
+            return segment.a;
+        }
+        if (bestProjection.t >= 0.98) {
+            return segment.b;
+        }
+
+        const split = this.nodeFor([bestProjection.x, bestProjection.y]);
+        const a = this.nodes[segment.a].point;
+        const b = this.nodes[segment.b].point;
+        const first = {
+            a: segment.a,
+            b: split,
+            kind: segment.kind,
+            width: segment.width,
+            length: distance(a[0], a[1], bestProjection.x, bestProjection.y),
+        };
+        const second = {
+            a: split,
+            b: segment.b,
+            kind: segment.kind,
+            width: segment.width,
+            length: distance(bestProjection.x, bestProjection.y, b[0], b[1]),
+        };
+        this.segments.splice(bestIndex, 1, first, second);
+        this.buildAdjacency();
+        return split;
     }
 
     /**
@@ -190,10 +344,25 @@ export class RoadNetwork {
         goal: [number, number],
         speed: (kind: RoadKind, a: [number, number], b: [number, number]) => number,
         cancelled?: () => boolean,
+        maxSnapM = 500,
     ): RoadPath | null {
-        const startNode = this.nearestNode(start, 500);
-        const goalNode = this.nearestNode(goal, 500);
+        const startNode = this.nearestNode(start, maxSnapM);
+        const goalNode = this.nearestNode(goal, maxSnapM);
         if (startNode === null || goalNode === null) {
+            return null;
+        }
+        return this.findPathNodes(startNode, goalNode, speed, cancelled);
+    }
+
+    /** A* between two graph nodes; the caller owns the snapping policy. */
+    public findPathNodes(
+        startNode: number,
+        goalNode: number,
+        speed: (kind: RoadKind, a: [number, number], b: [number, number]) => number,
+        cancelled?: () => boolean,
+    ): RoadPath | null {
+        const goalPoint = this.nodes[goalNode]?.point;
+        if (!goalPoint) {
             return null;
         }
 
@@ -221,7 +390,7 @@ export class RoadNetwork {
                 if (!point) {
                     return 0;
                 }
-                return distance(point[0], point[1], goal[0], goal[1]) / maxSpeed;
+                return distance(point[0], point[1], goalPoint[0], goalPoint[1]) / maxSpeed;
             },
         };
 
@@ -265,7 +434,37 @@ export class RoadNetwork {
         const id = this.nodes.length;
         this.nodes.push({ point: [point[0], point[1]] });
         this.nodeIds.set(key, id);
+        this.indexNode(id);
         return id;
+    }
+
+    private indexNode(index: number): void {
+        const point = this.nodes[index].point;
+        const key = `${Math.floor(point[0] / JUNCTION_CELL_M)},${Math.floor(point[1] / JUNCTION_CELL_M)}`;
+        const bucket = this.nodeGrid.get(key) ?? [];
+        bucket.push(index);
+        this.nodeGrid.set(key, bucket);
+    }
+
+    private nodesWithin(point: [number, number], radius: number): number[] {
+        const found: number[] = [];
+        const minX = Math.floor((point[0] - radius) / JUNCTION_CELL_M);
+        const maxX = Math.floor((point[0] + radius) / JUNCTION_CELL_M);
+        const minY = Math.floor((point[1] - radius) / JUNCTION_CELL_M);
+        const maxY = Math.floor((point[1] + radius) / JUNCTION_CELL_M);
+
+        for (let x = minX; x <= maxX; x += 1) {
+            for (let y = minY; y <= maxY; y += 1) {
+                for (const index of this.nodeGrid.get(`${x},${y}`) ?? []) {
+                    const node = this.nodes[index].point;
+                    if (distance(point[0], point[1], node[0], node[1]) <= radius) {
+                        found.push(index);
+                    }
+                }
+            }
+        }
+
+        return found;
     }
 
     private addSegment(a: number, b: number, kind: RoadKind, width: number): void {
@@ -488,7 +687,7 @@ export class RoadNetwork {
      * without inventing long shortcuts across open terrain.
      */
     private connectNearbyNodes(): void {
-        const maxDistance = 30;
+        const maxDistance = 60;
         const cellSize = maxDistance * 2;
         const grid = new Map<string, number[]>();
         const keyFor = (x: number, y: number): string =>
@@ -503,8 +702,11 @@ export class RoadNetwork {
         }
 
         const existing = new Set<string>();
+        const degree = new Uint16Array(this.nodes.length);
         for (const segment of this.segments) {
             existing.add(`${Math.min(segment.a, segment.b)}:${Math.max(segment.a, segment.b)}`);
+            degree[segment.a] += 1;
+            degree[segment.b] += 1;
         }
 
         for (let index = 0; index < this.nodes.length; index += 1) {
@@ -516,6 +718,12 @@ export class RoadNetwork {
                 for (let dy = -1; dy <= 1; dy += 1) {
                     for (const other of grid.get(`${cellX + dx},${cellY + dy}`) ?? []) {
                         if (other <= index) {
+                            continue;
+                        }
+                        // Only a dangling road end may bridge a gap. Joining two
+                        // interior nodes creates shortcuts between parallel
+                        // roads and makes the graph zigzag across lanes.
+                        if (degree[index] > 1 && degree[other] > 1) {
                             continue;
                         }
                         const pair = `${index}:${other}`;
@@ -549,3 +757,4 @@ export class RoadNetwork {
         }
     }
 }
+

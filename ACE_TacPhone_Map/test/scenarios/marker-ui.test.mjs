@@ -542,6 +542,14 @@ export async function run({ pageUrl, options, log }) {
         const customPressed = await page.locator(CUSTOM_SWATCH).getAttribute('aria-pressed');
         equal(customPressed, 'true', 'Applying a custom color did not mark the Custom swatch as selected');
 
+        // The popover stays open after choosing the color and can cover the
+        // create button; Escape closes only the popover, not the dialog.
+        if (await page.locator(CUSTOM_POPOVER).count() > 0) {
+            await page.keyboard.press('Escape');
+            await page.locator(CUSTOM_POPOVER).waitFor({ state: 'detached', timeout: 5000 })
+                .catch(() => {});
+        }
+
         // ---- channel menu (multiplayer only) ---------------------------
         if (await page.locator(CHANNEL_TRIGGER).count() > 0) {
             const beforeChannel = await measureDialog(page);

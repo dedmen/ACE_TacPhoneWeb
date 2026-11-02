@@ -12,12 +12,14 @@
 
 import { equal, ok, fail } from '../../../ACE_TacPhone_Main/test/lib/assertions.mjs';
 import {
+    accelerationLimitedSpeed,
     FOOT_MAX_RUN_SLOPE,
     FOOT_MIN_RUN_SLOPE,
     FOOT_SPEED,
     FOOT_WALK_SPEED,
     footSpeed,
     legSpeed,
+    limitGroundEta,
     MAX_GROUND_SLOPE,
 } from '../../src/routing/SpeedModel.ts';
 
@@ -348,7 +350,38 @@ export async function run() {
         );
     }
 
-    // 10. A `cost` key is never read (the planner owns costs, not the vehicle).
+    // 10. Short ground legs cannot reach top speed: 40 m at 3 m/s² is about
+    // 56 km/h, while a long leg keeps its nominal speed.
+    const fastRoad = 136 / 3.6;
+    approx(
+        accelerationLimitedSpeed(40, fastRoad),
+        Math.sqrt(2 * 3 * 40),
+        'a 40 m road leg is limited by acceleration distance',
+    );
+    approx(
+        accelerationLimitedSpeed(1000, fastRoad),
+        fastRoad,
+        'a long road leg reaches the nominal speed',
+    );
+    const shortEta = limitGroundEta(40, 40 / fastRoad);
+    approx(
+        shortEta,
+        40 / (Math.sqrt(2 * 3 * 40) / 2),
+        'from rest, a short leg ETA uses the average of the acceleration ramp',
+    );
+
+    const entrySpeed = 57 / 3.6;
+    const entryEta = limitGroundEta(40, 40 / fastRoad, entrySpeed);
+    const entryAverage = 40 / entryEta;
+    const expectedExit = Math.sqrt(entrySpeed * entrySpeed + 2 * 3 * 40);
+    approx(
+        entryAverage,
+        (entrySpeed + expectedExit) / 2,
+        'entering a short road from a moving track speeds it up, not down',
+    );
+    ok(entryAverage > entrySpeed, 'a short road after a track is faster than the track');
+
+    // 11. A `cost` key is never read (the planner owns costs, not the vehicle).
     const performance = {
         maxSpeedKmh: 90,
         enginePowerKw: 150,

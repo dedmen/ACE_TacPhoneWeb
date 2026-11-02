@@ -223,6 +223,7 @@ export async function runSuite(scenarios, context, options = {}) {
     const suiteStartedAt = Date.now();
     const failures = [];
     let passed = 0;
+    let skipped = 0;
 
     console.log(`\n${title}`);
     console.log(`${scenarios.length} scenario${scenarios.length === 1 ? '' : 's'} queued.\n`);
@@ -240,6 +241,11 @@ export async function runSuite(scenarios, context, options = {}) {
             passed += 1;
             console.log(`PASS ${label} (${Date.now() - startedAt} ms)`);
         } catch (error) {
+            if (error?.name === 'SkipError') {
+                skipped += 1;
+                console.log(`SKIP ${label}: ${error.message}`);
+                continue;
+            }
             failures.push({ label, error });
             console.log(`FAIL ${label} (${Date.now() - startedAt} ms)`);
             printFailure(error);
@@ -250,7 +256,7 @@ export async function runSuite(scenarios, context, options = {}) {
     const failed = failures.length;
 
     console.log(
-        `\n${passed} passed, ${failed} failed, ${scenarios.length} total (${duration} ms)`,
+        `\n${passed} passed, ${failed} failed, ${skipped} skipped, ${scenarios.length} total (${duration} ms)`,
     );
 
     if (failed > 0) {
@@ -260,5 +266,5 @@ export async function runSuite(scenarios, context, options = {}) {
         }
     }
 
-    return { passed, failed, total: scenarios.length, duration, failures };
+    return { passed, failed, skipped, total: scenarios.length, duration, failures };
 }

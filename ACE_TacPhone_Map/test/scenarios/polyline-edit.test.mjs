@@ -147,9 +147,9 @@ async function openContextMenu(page, x, y) {
 }
 
 /** Enters edit mode through the context menu and waits for the edit panel. */
-async function enterPolylineEdit(page, markerName, x, y, editingLabel) {
+async function enterPolylineEdit(page, markerName, x, y, menuLabel, panelLabel) {
     const menu = await openContextMenu(page, x, y);
-    const editItem = menu.getByRole('menuitem', { name: editingLabel });
+    const editItem = menu.getByRole('menuitem', { name: menuLabel });
     await editItem.waitFor({ state: 'visible', timeout: 5000 });
 
     // The menu ignores taps for a moment after opening, to avoid the tap that
@@ -163,7 +163,7 @@ async function enterPolylineEdit(page, markerName, x, y, editingLabel) {
         `polyline edit mode for ${markerName}`,
     );
 
-    const panel = page.getByRole('group', { name: editingLabel });
+    const panel = page.getByRole('group', { name: panelLabel });
     await panel.waitFor({ state: 'visible', timeout: 5000 });
 
     return panel;
@@ -202,7 +202,7 @@ export async function run({ pageUrl, options, log }) {
         const labels = {
             editPolyline: await t(page, 'STR_ACE_Tacphone_Map_ContextMenu_EditPolyline'),
             editing: await t(page, 'STR_ACE_Tacphone_Map_PolylineEdit_Editing'),
-            save: await t(page, 'STR_ACE_Tacphone_Map_PolylineEdit_Save'),
+            save: await t(page, 'str_3den_display3den_menubar_missionsave_text'),
             cancel: await t(page, 'STR_3DEN_Display3DEN_ControlsHint_Cancel'),
         };
 
@@ -236,6 +236,7 @@ export async function run({ pageUrl, options, log }) {
             box.x + pixels[1][0],
             box.y + pixels[1][1],
             labels.editPolyline,
+            labels.editing,
         );
         equal(
             await page.getByRole('menu').count(),

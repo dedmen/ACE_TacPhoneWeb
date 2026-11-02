@@ -1,13 +1,11 @@
 /**
- * Off-route detection, deviation zoom, waypoint progress and the auto-repath
- * trigger.
+ * Off-route detection, waypoint progress and the auto-repath trigger.
  *
  * The tracker owns only timers/counters and returns decisions; `GpsModule`
- * applies them to the OpenLayers view and the planner. This keeps the
- * thresholds testable without a map or a game.
+ * applies them to the planner. This keeps the thresholds testable without a
+ * map or a game.
  */
 
-import { distanceBetween } from '../MapGps/SharedRoute';
 import type { RouteMetrics } from './RouteMetrics';
 import { arrivalRadius } from './RouteMetrics';
 import type { TravelMode } from './RouteTypes';
@@ -15,27 +13,14 @@ import type { TravelMode } from './RouteTypes';
 export const OFF_ROUTE_THRESHOLD_M = 100;
 export const OFF_ROUTE_DELAY_MS = 4000;
 export const REPATH_COOLDOWN_MS = 15000;
-export const OFF_ROUTE_ZOOM_INTERVAL_MS = 1000;
-
-export interface DeviationView {
-    resolution: number;
-    maxResolution: number;
-    /** Shorter viewport side in pixels, already reduced for the HUD. */
-    viewportPixels: number;
-}
 
 export interface DeviationInput {
     now: number;
     metrics: RouteMetrics;
     mode: TravelMode;
-    speed: number;
     navigating: boolean;
-    following: boolean;
     autoRepath: boolean;
     waypointAlong: number[];
-    nextWaypoint: [number, number] | null;
-    position: [number, number] | null;
-    view: DeviationView | null;
 }
 
 export interface DeviationResult {
@@ -46,40 +31,12 @@ export interface DeviationResult {
     arrived: boolean;
     /** True when the caller must start an auto-repath now. */
     repath: boolean;
-    /** Target resolution when the caller should zoom out, else null. */
-    zoomResolution: number | null;
-}
-
-/**
- * Keeps the next waypoint and the player visible without fitting the whole
- * terrain: resolution is capped at 2.5x the current zoom and grows only
- * enough that the waypoint fits inside the viewport.
- */
-function fitNextWaypoint(
-    position: [number, number],
-    next: [number, number],
-    view: DeviationView,
-): number | null {
-    if (!(view.resolution > 0) || !(view.viewportPixels > 0) || !(view.maxResolution > 0)) {
-        return null;
-    }
-
-    const distanceToNext = distanceBetween(position[0], position[1], next[0], next[1]);
-    const fitResolution = (distanceToNext * 2.4) / view.viewportPixels;
-    const capped = Math.min(
-        view.maxResolution,
-        view.resolution * 2.5,
-        Math.max(view.resolution, fitResolution),
-    );
-
-    return capped > view.resolution * 1.02 ? capped : null;
 }
 
 export class DeviationTracker {
     private offRoute = false;
     private offRouteSince = 0;
     private lastRepathAt = Number.NEGATIVE_INFINITY;
-    private lastOffRouteZoomAt = Number.NEGATIVE_INFINITY;
     private waypointsReached = 0;
 
     public get isOffRoute(): boolean {
@@ -95,7 +52,6 @@ export class DeviationTracker {
         this.offRoute = false;
         this.offRouteSince = 0;
         this.lastRepathAt = Number.NEGATIVE_INFINITY;
-        this.lastOffRouteZoomAt = Number.NEGATIVE_INFINITY;
     }
 
     /** Resets only the waypoint counter (new route, new waypoint list). */
@@ -123,21 +79,6 @@ export class DeviationTracker {
             reachedWaypoint = true;
         }
 
-        let zoomResolution: number | null = null;
-        if (
-            offRoute
-            && input.following
-            && input.position
-            && input.nextWaypoint
-            && input.view
-            && input.now - this.lastOffRouteZoomAt > OFF_ROUTE_ZOOM_INTERVAL_MS
-        ) {
-            zoomResolution = fitNextWaypoint(input.position, input.nextWaypoint, input.view);
-            if (zoomResolution !== null) {
-                this.lastOffRouteZoomAt = input.now;
-            }
-        }
-
         let repath = false;
         if (
             offRoute
@@ -157,7 +98,6 @@ export class DeviationTracker {
             reachedWaypoint,
             arrived,
             repath,
-            zoomResolution,
         };
     }
 }

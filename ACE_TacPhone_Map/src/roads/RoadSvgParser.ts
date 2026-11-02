@@ -3,9 +3,10 @@
  *
  * The game's SVG export draws the road network as stroked paths. Filled
  * variants (`*Fill`) are the road surface, not the centerline, and are
- * skipped. Only the path commands used by the export are interpreted
- * (`M/m`, `L/l`, `H/h`, `V/v`, `Z/z`); a path with curves is kept up to the
- * first unsupported command.
+ * skipped. The parser flips the SVG top-down Y to the map's bottom-up world Y;
+ * missing that flip mirrors the whole road graph vertically. Only the path
+ * commands used by the export are interpreted (`M/m`, `L/l`, `H/h`, `V/v`,
+ * `Z/z`); a path with curves is kept up to the first unsupported command.
  */
 
 export type RoadKind = 'main' | 'road' | 'track' | 'rail' | 'trail';
@@ -165,6 +166,9 @@ export function parseRoadLayer(svg: string): RoadPolyline[] {
     }
 
     const result: RoadPolyline[] = [];
+    const root = document.documentElement;
+    const worldHeight = Number(root?.getAttribute('height') ?? Number.NaN);
+    const flipY = Number.isFinite(worldHeight) && worldHeight > 0;
 
     for (const element of Array.from(document.getElementsByTagName('path'))) {
         const paint = `${attribute(element, 'stroke')} ${element.getAttribute('id') ?? ''} ${element.getAttribute('class') ?? ''}`;
@@ -187,7 +191,11 @@ export function parseRoadLayer(svg: string): RoadPolyline[] {
                 continue;
             }
             result.push({
-                points,
+                // SVG Y is top-down; the map/world Y is bottom-up. Raster
+                // masks and map tiles flip it, so the road graph must too.
+                points: flipY
+                    ? points.map(([x, y]) => [x, worldHeight - y] as [number, number])
+                    : points,
                 strokeWidth,
                 width: Math.max(0, strokeWidth - 2),
                 kind: classifyRoad(paint, strokeWidth),

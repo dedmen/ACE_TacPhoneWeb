@@ -65,6 +65,7 @@ Options:
   --slow               Slow every Playwright action and show the browser (700 ms default)
   --slow-ms <ms>       Slow-motion delay in milliseconds; implies --slow and --headed
   --no-browser         Run only the Node scenarios
+  --no-node            Run only the browser scenarios
   --verbose            Log requests, replies and scenario progress
   --help               Show this help
 
@@ -72,7 +73,8 @@ Prerequisites:
   - Arma 3 is running a mission with the current TacPhone PBO loaded.
   - The TacPhone web host is listening on ${DEFAULT_URL}.
   - Browser scenarios: the TacPhone host page is reachable (TACPHONE_TEST_URL
-    or --page-url) and Playwright with an installed Chrome channel.
+    or --page-url) and Playwright with an installed Chrome channel, or set
+    TACPHONE_TEST_BROWSER=firefox after npx playwright install firefox.
   - The Node client needs Node to trust the local HTTPS certificate; set
     NODE_EXTRA_CA_CERTS instead of disabling verification.
   - The 256-character clamp assertion needs a PBO built after the SQF clamp was
@@ -92,6 +94,7 @@ function parseArgs(argv) {
         headed: false,
         slow: 0,
         noBrowser: false,
+        noNode: false,
         verbose: false,
         help: false,
     };
@@ -123,6 +126,8 @@ function parseArgs(argv) {
             options.slow = Number(argument.slice('--slow='.length));
         } else if (argument === '--no-browser') {
             options.noBrowser = true;
+        } else if (argument === '--no-node') {
+            options.noNode = true;
         } else if (argument === '--url') {
             options.url = nextValue();
         } else if (argument.startsWith('--url=')) {
@@ -242,6 +247,9 @@ async function main() {
 
     if (options.noBrowser) {
         scenarios = scenarios.filter((scenario) => scenario.kind !== 'browser');
+    }
+    if (options.noNode) {
+        scenarios = scenarios.filter((scenario) => scenario.kind !== 'node');
     }
 
     console.log(`TacPhone Map runtime tests (Node ${process.version})`);

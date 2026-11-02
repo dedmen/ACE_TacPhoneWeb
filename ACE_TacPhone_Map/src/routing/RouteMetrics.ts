@@ -6,7 +6,8 @@
  */
 
 import type { RouteGeometry } from '../MapGps/RouteSplice';
-import { bearingBetween, flatPointCount, projectPointToPolyline } from '../MapGps/SharedRoute';
+import { bearingBetween, projectPointToPolyline } from '../MapGps/SharedRoute';
+import { pointAtDistance } from './TurnInstructions';
 import type { TravelMode } from './RouteTypes';
 
 export interface RouteMetrics {
@@ -54,14 +55,13 @@ export function computeRouteMetrics(
         return null;
     }
 
-    const count = flatPointCount(geometry.points);
-    const nextIndex = Math.min(count - 1, projection.segment + 1);
-    const bearing = count >= 2
+    const ahead = pointAtDistance(geometry.points, projection.along + 20);
+    const bearing = ahead && geometry.total - projection.along > 1
         ? bearingBetween(
             position[0],
             position[1],
-            geometry.points[nextIndex * 2],
-            geometry.points[nextIndex * 2 + 1],
+            ahead[0],
+            ahead[1],
         )
         : null;
 

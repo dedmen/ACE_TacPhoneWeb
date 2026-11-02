@@ -282,7 +282,7 @@ export async function run({ pageUrl, options, log }) {
             mapBox2.y + mapBox2.height / 2,
             { button: 'right' },
         );
-        await page.getByRole('menu', { name: 'Marker' }).waitFor({ state: 'visible', timeout: 10000 });
+        await page.getByRole('menu', { name: 'Polyline' }).waitFor({ state: 'visible', timeout: 10000 });
         await page.getByRole('menuitem', { name: 'Share to Messenger' }).click();
 
         const polylineShareDialog = page.getByRole('dialog', { name: 'Share to Messenger' });

@@ -48,6 +48,16 @@ const MODULES = [
         file: path.join(APP_ROOT, 'test/unit/gps-routing.unit.mjs'),
     },
     {
+        name: 'gps-water-corridor',
+        description: 'water runs, dry endpoints, corridor bounds and detour guard',
+        file: path.join(APP_ROOT, 'test/unit/gps-water-corridor.unit.mjs'),
+    },
+    {
+        name: 'gps-leg-info',
+        description: 'route-leg hover speed/time and the span to the next waypoint',
+        file: path.join(APP_ROOT, 'test/unit/gps-leg-info.unit.mjs'),
+    },
+    {
         name: 'terrain-layer-priority',
         description: 'terrain layer rank/LOD planning',
         file: path.join(APP_ROOT, 'test/unit/terrain-layer-priority.unit.mjs'),

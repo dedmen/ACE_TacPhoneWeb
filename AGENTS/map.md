@@ -227,10 +227,13 @@ two-finger touch cannot rotate it.
 | `src/routing/RouteTypes.ts` | Pure travel-mode, vehicle-performance, route-leg, plan-request and debug-grid types. |
 | `src/routing/AStar.ts` | Dependency-free weighted A* and binary min-heap shared by the road graph and grid search. |
 | `src/routing/SpeedModel.ts` | Every speed/ETA formula: maxSpeed cap, force-balance climb, slope, surface, forest width/turning, boat water coefficients. |
-| `src/routing/TerrainGrid.ts` | 8-neighbor grid A*, line-of-sight simplification and the debug planning grid. |
+| `src/routing/TerrainGrid.ts` | 8-neighbor grid A*, line-of-sight simplification, the debug planning grid and the optional land-only/water-buffer search. |
+| `src/routing/WaterCorridor.ts` | Foot path coast splitting, water-run detection, corridor bounds and detour guard for the fine water-corridor re-plan. |
+| `src/routing/RouteLegInfo.ts` | Hover leg speed/time and the span from the previous waypoint or player to the next waypoint. |
 | `src/routing/RouteMetrics.ts` | Projection, remaining distance/ETA, bearing and the correct leg index for a flattened segment. |
+| `src/routing/FollowZoom.ts` | Follow zoom radius/resolution: one minute of travel ahead, at least a 200 m radius while stationary. |
 | `src/routing/TurnInstructions.ts` | Turn classification, next maneuver, point-at-distance, next waypoint. |
-| `src/routing/DeviationTracker.ts` | Off-route timer, deviation zoom target, waypoint progress, arrival and auto-repath trigger. |
+| `src/routing/DeviationTracker.ts` | Off-route timer, waypoint progress, arrival and auto-repath trigger. |
 | `src/routing/VehicleChange.ts` | `GPS.VehicleChanged` parsing and the 350 ms debouncer. |
 | `src/terrain/TerrainMasks.ts` | Lazy SVG parsing, raster masks, passability, water queries and planning bbox. |
 | `src/roads/RoadSvgParser.ts` | Parses the `roads` SVG layer into stroked polylines, skips `*Fill` paths and computes `width = strokeWidth - 2`. |
@@ -240,16 +243,51 @@ two-finger touch cannot rotate it.
 Ground routing first tries the road graph (snapped within 500 m, off-road
 connectors to/from the road) and falls back to the terrain grid. Forest and
 water masks are rasterized from the terrain layers; the roads mask uses the
-`lines` variant, not the filled surface. Road edges still use the vehicle
-force-balance model; they only skip `terrainCoef` and the forest penalty.
+`lines` variant, not the filled surface. Masks are rasterized with a 2x
+supersampled canvas and the maximum alpha in each 2x2 block (alpha cutoff 8), so
+a faint beach does not become water in Firefox while it stays land in Chrome.
+Road edges still use the vehicle force-balance model; they only skip
+`terrainCoef` and the forest penalty. Default ground routing snaps up to 1500 m
+to the road graph and biases road edges by `0.8×` in the search only; the route
+panel's `Fastest route` toggle instead plans both the road graph and the grid
+and keeps the lower real ETA. Forest off-road speed is strongly penalised, and
+short ground legs are acceleration-limited from the previous leg's average
+speed (`a ≈ 3 m/s²`), so a road entered from a track speeds up a little instead
+of becoming artificially slow. A non-amphibious ground route keeps water legs
+as `passable: false` (red/dashed, hover label `Not passable`) and prices them at
+the on-foot swim speed so the ETA remains showable.
 `TerrainHeights` builds a bounded 32x32 coarse height grid per plan (10 m
 minimum spacing, chunked requests, LRU + long-lived peak/ring cache) and both
-the road graph and the grid A* price the slope. Foot paths are validated at
+the road graph and the grid A* price the slope. `RoadSvgParser` flips the SVG
+top-down Y to world bottom-up Y; without that flip the road graph is mirrored
+vertically and routes draw over water. Foot paths are validated at
 1 m after the path exists and re-planned with a 25 m penalty around a failed
 section; fine samples are not cached. The debug overlay is only shown when
 `window.TacPhone.gameInfo.isDebug()`; it uses OpenLayers image layers at about
 35% alpha and can scan the current viewport even without a route. It is not
 part of the normal HUD.
+
+Foot routes get a second, bounded water-corridor pass: the path is split at the
+coast, each avoidable water run is re-planned on a local fine raster with
+`avoidWater` and a 3 m water buffer, and the swim is kept only when the land
+replacement is slower or an absurd detour. If water remains, the pair is
+searched again with water priced at 10× so it prefers the faster land route or
+the shortest swim; the displayed ETA still uses the real swim speed. While the
+route editor is open, hovering the planned/active route line shows the actual
+leg type (`Road`, `Track`, `Trail`, `Rail`, `Off-road`, `Forest`, `Swim`/`Land`),
+its average speed and ETA, and the span from the previous waypoint or the player
+(whichever is closer) to the next waypoint. Route hover uses the OpenLayers
+`map.on('pointermove')` event and projects the pointer onto the route geometry;
+a 20 px distance threshold replaces vector line hit-testing, which is
+unreliable for lines in Firefox at low zoom. The HUD target bearing uses a 20 m
+forward lookahead. Road-turn cues/voice announcements are limited to road-graph
+legs **and** to real junctions (three or more road branches); a bend in one road
+or two road ends meeting head-to-head is silent. A junction gets one advance cue
+when it first comes within 500 m and one final cue within 100 m; each cue is
+spoken at most once per junction, and the spoken distance is the real distance
+in 10 m steps (not a fixed 500 m bucket). Each surface transition is announced
+once within 500 m, and a transition at the same junction suppresses the
+duplicate turn cue.
 
 ## Map tests
 
@@ -262,13 +300,17 @@ the route metrics, turn instructions, deviation tracker, vehicle-change parsing
 and the road graph's 0.5 m node merge, `gps-payload` the `map.gps_route`
 contract plus the "do not import browser-only modules" guard, and
 `terrain-layer-priority` the layer rank/LOD table (exact/alias matching, unknown
-size classification, sort stability and the input array not being mutated). Run
-them with `npm run test:unit -- --verbose`.
+size classification, sort stability and the input array not being mutated),
+`gps-water-corridor` the foot coast split/water-run/corridor/detour helpers, and
+`gps-leg-info` the hovered leg speed/time and next-waypoint span. Run them with
+`npm run test:unit -- --verbose`.
 
 The live Node scenario is `marker-protocol` plus the GPS parts of `gps-protocol`;
 Playwright runs `marker-channels`, `marker-ui`, `polyline-draw`, `polyline-edit`,
 `map-view`, `map-tiles`, `gps-panel`, `gps-route`, `gps-shared` and
-`gps-shared-messenger`. Browser scenarios create a new flexlayout tab, open the
+`gps-shared-messenger`. Set `TACPHONE_TEST_BROWSER=firefox` (after
+`npx playwright install firefox`) to run the same browser scenarios against
+Firefox; terrain-mask/rasterization changes must pass both engines. Browser scenarios create a new flexlayout tab, open the
 Map or GPS through the app chooser and wait for a quiet terrain-tile period
 before asserting. `map-tiles` checks the priority order through
 `getViewState().tiles` (`priority`, `activatedAfterMs`), that heavy layers are
@@ -310,6 +352,13 @@ module as well:
   inspection: every leg point, the flattened geometry and leg starts, turn and
   deviation state, and the debug-grid metadata. Use it through the host's
   debug-only `window.__TACPHONE_DEBUG_EVAL__` when a route looks wrong.
+- `test/tools/find-town.mjs --name Neochori` reads the terrain `townNames`
+  layer and prints the matching world coordinates; use it to describe routing
+  fixtures around named places. It is not part of `test:map`.
+- `test/tools/replan-room.mjs --room <name>` replays a shared route from a
+  Messenger room through the real `messenger` service and prints the replanned
+  legs. It is the reusable diagnostic for user-reported routing cases (for
+  example `--room testRoom`); it is not part of `test:map`.
 - The debug dialog's cost/height overlays have an alpha slider and a hover
   readout. The readout samples the same grid (`Height`, `Cost`, `Surface`,
   `Passable`, `Slope`) under the pointer.
@@ -323,8 +372,8 @@ module as well:
 The browser helpers live in `test/lib/gps-page.mjs` (`openGpsPage`,
 `getGpsDebug`, `waitForGpsDebug`, `gpsCall`, `gpsT`, `gpsPixel`, `pointAt`,
 `distance`). `gps-panel` covers the HUD, the travel-mode reply, the options and
-the interest; `gps-route` covers waypoint clicks, per-mode planning, start/stop
-and follow; `gps-shared` drives the shared-route preview/discard/bad
+the interest; `gps-route` covers waypoint clicks, per-mode planning, route-leg
+hover, start/stop and follow; `gps-shared` drives the shared-route preview/discard/bad
 payload/start-join/replace-confirmation path through the `map` service;
 `gps-shared-messenger` walks the real `Share route` → Messenger card → preview →
 Start path (needs a `__A3_DEBUG__` game and skips otherwise). `gps-protocol`

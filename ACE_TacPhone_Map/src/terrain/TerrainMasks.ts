@@ -45,7 +45,14 @@ export interface RasterSet {
 export const MASK_MAX_DIMENSION = 700;
 export const MIN_CELL_SIZE = 5;
 export const MAX_CELL_SIZE = 150;
-const MASK_ALPHA_THRESHOLD = 32;
+/**
+ * Alpha cutoff for a painted cell. Kept low and combined with the max over a
+ * 2x2 subpixel block because Firefox and Chrome downscale SVG alpha
+ * differently; a faint beach edge must still count as land.
+ */
+const MASK_ALPHA_THRESHOLD = 8;
+/** Subpixels per raster cell; the max alpha keeps a narrow painted strip. */
+const MASK_SUPERSAMPLE = 2;
 
 const CONTAINER_TAGS = new Set(['svg', 'g', 'defs', 'clippath', 'mask', 'symbol', 'marker']);
 
@@ -604,10 +611,11 @@ export class TerrainMasks {
 
         const width = Math.max(1, Math.ceil((bbox[2] - bbox[0]) / cell) + 1);
         const height = Math.max(1, Math.ceil((bbox[3] - bbox[1]) / cell) + 1);
+        const supersample = MASK_SUPERSAMPLE;
 
         const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
+        canvas.width = width * supersample;
+        canvas.height = height * supersample;
         const context = canvas.getContext('2d', { willReadFrequently: true });
 
         if (!context) {
@@ -616,17 +624,30 @@ export class TerrainMasks {
         }
 
         context.setTransform(1, 0, 0, 1, 0, 0);
-        context.scale(1 / cell, 1 / cell);
+        context.scale(supersample / cell, supersample / cell);
         // SVG Y is top-down and map Y is bottom-up. Image row 0 must land on
         // maxY; the mask reader flips Y on lookup.
         context.translate(-bbox[0], bbox[3] - this.terrain.height);
         context.drawImage(image, 0, 0, this.terrain.width, this.terrain.height);
 
-        const pixels = context.getImageData(0, 0, width, height).data;
+        const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
         const data = new Uint8Array(width * height);
 
-        for (let index = 0; index < data.length; index += 1) {
-            data[index] = pixels[index * 4 + 3] > MASK_ALPHA_THRESHOLD ? 1 : 0;
+        for (let row = 0; row < height; row += 1) {
+            for (let column = 0; column < width; column += 1) {
+                let maxAlpha = 0;
+                for (let sy = 0; sy < supersample; sy += 1) {
+                    const pixelRow = row * supersample + sy;
+                    for (let sx = 0; sx < supersample; sx += 1) {
+                        const pixelColumn = column * supersample + sx;
+                        const alpha = pixels[(pixelRow * canvas.width + pixelColumn) * 4 + 3];
+                        if (alpha > maxAlpha) {
+                            maxAlpha = alpha;
+                        }
+                    }
+                }
+                data[row * width + column] = maxAlpha > MASK_ALPHA_THRESHOLD ? 1 : 0;
+            }
         }
 
         return { bbox, cell, width, height, data };
@@ -644,3 +665,6 @@ function sanitizePoint(value: unknown): [number, number] | null {
     }
     return [x, y];
 }
+
+
+

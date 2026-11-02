@@ -27,6 +27,7 @@ import {
     openGpsPage,
     pointAt,
     waitForGpsDebug,
+    waitForTerrainBounds,
 } from '../lib/gps-page.mjs';
 import { getMapView, waitForMapViewStable } from '../lib/map-page.mjs';
 
@@ -147,7 +148,7 @@ export async function run({ pageUrl, options, log }) {
     const card = page.getByTestId('gps-shared-card');
 
     try {
-        const bounds = await gpsCall(page, 'getTerrainBounds');
+        const bounds = await waitForTerrainBounds(page);
         assert(
             bounds && bounds.width > 200 && bounds.height > 200,
             `The GPS has no usable terrain bounds (${JSON.stringify(bounds)})`,

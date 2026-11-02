@@ -552,6 +552,20 @@ export interface AudioDeviceInfo {
     groupId?: string;
 }
 
+/** Optional speech settings for the Web Speech API. */
+export interface SpeechOptions {
+    /** Speech rate; 1 is normal. */
+    rate?: number;
+    /** Pitch; 1 is normal. */
+    pitch?: number;
+    /** Volume, 0..1. */
+    volume?: number;
+    /** BCP-47 language tag; browser default when omitted. */
+    lang?: string;
+    /** Cancel the current utterance before speaking this one (default true). */
+    interrupt?: boolean;
+}
+
 /** Built-in sound synthesis and output-device selection (`window.TacPhone.audio`). */
 export interface AudioApi {
     /** Plays one built-in preset. Silent before the first user gesture or without Web Audio. */
@@ -565,6 +579,12 @@ export interface AudioApi {
     setSinkId(deviceId: string): Promise<void>;
     /** The explicitly selected output device id, or undefined for the browser default. */
     getOutputDeviceId(): string | undefined;
+    /** Speaks text through the Web Speech API; silent before the first gesture or when unsupported. */
+    speak(text: string, options?: SpeechOptions): void;
+    /** Stops the current speech utterance. */
+    stopSpeaking(): void;
+    /** True when the browser exposes SpeechSynthesis. */
+    isSpeechAvailable(): boolean;
 }
 
 // ---------------------------------------------------------------------------

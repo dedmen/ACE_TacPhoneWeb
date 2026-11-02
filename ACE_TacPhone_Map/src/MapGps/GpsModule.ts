@@ -69,8 +69,19 @@ import type {
 import { createInitialGpsViewState, isTravelMode } from './GpsTypes';
 import { RoutePlanner, type WaterRouteWaypoints } from './RoutePlanner';
 import { legSpeed } from '../routing/SpeedModel';
-import { computeRouteMetrics, remainingEta } from '../routing/RouteMetrics';
-import { nextManeuver, nextWaypointAhead } from '../routing/TurnInstructions';
+import { computeRouteMetrics, findLegIndexForSegment, remainingEta } from '../routing/RouteMetrics';
+import { followResolution } from '../routing/FollowZoom';
+import { describeRouteLegHover, type RouteLegHoverInfo } from '../routing/RouteLegInfo';
+import {
+    nextManeuver,
+    nextSurfaceTransition,
+    isRoadLeg,
+    pointAtDistance,
+    spokenDistance,
+    guidanceCue,
+    GUIDANCE_FAR_CUE_M,
+    type Maneuver,
+} from '../routing/TurnInstructions';
 import { DeviationTracker } from '../routing/DeviationTracker';
 import { parseVehicleChange, VehicleChangeDebouncer } from '../routing/VehicleChange';
 import {
@@ -104,6 +115,9 @@ const FOLLOW_SUSPEND_MS = 5000;
 
 /** Player speed above which the advisor may offer an alternative. */
 const ADVISOR_MIN_SPEED = 1;
+
+/** How long the Arrived badge stays before the finished route is cleared. */
+const ARRIVAL_CLEAR_MS = 10_000;
 
 const PLAYER_ICON_SVG = [
     '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">',
@@ -236,6 +250,8 @@ export class GpsModule implements MapGpsTestProbe {
     private mode: TravelMode = 'foot';
     private detectedMode: TravelMode = 'foot';
     private waterCapable = false;
+    /** Ground routing preference controlled from the route panel. */
+    private groundFastest = false;
     private performance: VehiclePerformance = {};
     private manualMode = false;
 
@@ -259,9 +275,14 @@ export class GpsModule implements MapGpsTestProbe {
 
     private navigating = false;
     private arrived = false;
+    /** Pending auto-clear of the route after the Arrived badge. */
+    private arrivalTimer: number | null = null;
     private stale = false;
     private turn: 'left' | 'right' | 'straight' | null = null;
     private turnDistance: number | null = null;
+    /** Speech cues already delivered for the active route. */
+    private readonly spokenGuidance = new Set<string>();
+    private lastSpeechAt = 0;
     private offRoute = false;
     private readonly deviation = new DeviationTracker();
     private lastRouteDrawAlong = -1;
@@ -271,6 +292,9 @@ export class GpsModule implements MapGpsTestProbe {
     private status: GpsStatus | null = null;
 
     private sharedPreview: SharedRouteData | null = null;
+    /** True while the route panel is open and route hover should be tracked. */
+    private routeHoverEnabled = true;
+    private routeHover: RouteLegHoverInfo | null = null;
 
     private readonly advisor = new TransportModeAdvisor();
     private advisorPlanning = false;
@@ -368,9 +392,13 @@ export class GpsModule implements MapGpsTestProbe {
 
         this.map.on('singleclick', this.handleSingleClick);
         this.map.on('pointerdrag', this.handleUserPan);
+        this.map.on('pointermove', this.handleRoutePointerMove);
+        // OpenLayers only exposes pointermove/pointerdrag/singleclick publicly;
+        // the waypoint drag lifecycle (capture, cancel, leave) stays on the DOM.
         this.map.getViewport().addEventListener('wheel', this.handleUserPan, { passive: true });
         this.map.getViewport().addEventListener('pointerdown', this.handleWaypointPointerDown, true);
         this.map.getViewport().addEventListener('pointermove', this.handleWaypointPointerMove, true);
+        this.map.getViewport().addEventListener('pointerleave', this.handleRoutePointerLeave, true);
         this.map.getViewport().addEventListener('pointerup', this.handleWaypointPointerUp, true);
         this.map.getViewport().addEventListener('pointercancel', this.handleWaypointPointerUp, true);
 
@@ -398,6 +426,35 @@ export class GpsModule implements MapGpsTestProbe {
         return this.planner.getBounds();
     }
 
+    /**
+     * Enables route-leg hover sampling while the route panel is open.
+     * The listener itself stays installed; this only gates the work.
+     */
+    public setRouteHoverEnabled(enabled: boolean): void {
+        if (this.routeHoverEnabled === enabled) {
+            return;
+        }
+        this.routeHoverEnabled = enabled;
+        if (!enabled) {
+            this.setRouteHover(null);
+        }
+    }
+
+    /**
+     * Route-panel ground preference. `false` keeps the road bias; `true` lets a
+     * capable off-road vehicle take a faster shortcut.
+     */
+    public setGroundFastest(enabled: boolean): void {
+        if (this.groundFastest === enabled) {
+            return;
+        }
+        this.groundFastest = enabled;
+        this.emitState(true);
+        if (this.mode === 'ground' && this.waypoints.length > 0) {
+            void this.recalculate();
+        }
+    }
+
     /** Vehicle snapshot used for the shared payload's ETA comparison. */
     public getPerformanceSnapshot(): VehiclePerformance | undefined {
         if (this.detectedMode === 'foot') {
@@ -421,7 +478,9 @@ export class GpsModule implements MapGpsTestProbe {
             return;
         }
 
+        const hadRoads = this.planner.hasRoadLayer();
         this.planner.setTerrain(terrain);
+        const hasRoads = this.planner.hasRoadLayer();
         // A new terrain snapshot invalidates the debug grid's masks and heights.
         this.setDebugGrid(null);
         // The Map replaces its view when terrain arrives. Recenter immediately
@@ -465,6 +524,15 @@ export class GpsModule implements MapGpsTestProbe {
         this.generation += 1;
         this.calculating = false;
         this.emitState(true);
+
+        if (!hadRoads && hasRoads
+            && this.mode === 'ground'
+            && this.activeRoute?.source === 'planned'
+            && this.waypoints.length > 0) {
+            // The first plan ran before the roads layer arrived and became an
+            // off-road grid route. Replan once the road graph is available.
+            void this.recalculate();
+        }
     }
 
     /** Switches the planning mode; the player may override the detected mode. */
@@ -525,6 +593,7 @@ export class GpsModule implements MapGpsTestProbe {
     }
 
     public clearWaypoints(): void {
+        this.cancelArrivalClear();
         this.waypoints = [];
         if (this.previewTimer !== null) {
             window.clearTimeout(this.previewTimer);
@@ -613,6 +682,7 @@ export class GpsModule implements MapGpsTestProbe {
 
     public startNavigation(): void {
         if (this.activeRoute) {
+            this.cancelArrivalClear();
             this.navigating = true;
             this.arrived = false;
             this.planning = false;
@@ -634,6 +704,7 @@ export class GpsModule implements MapGpsTestProbe {
     }
 
     public stopNavigation(): void {
+        this.cancelArrivalClear();
         this.navigating = false;
         this.arrived = false;
         this.offRoute = false;
@@ -828,6 +899,7 @@ export class GpsModule implements MapGpsTestProbe {
         this.destroyed = true;
         this.generation += 1;
         this.advisorToken += 1;
+        this.cancelArrivalClear();
 
         unregisterGpsTestProbe(this);
 
@@ -839,10 +911,12 @@ export class GpsModule implements MapGpsTestProbe {
 
         this.map.un('singleclick', this.handleSingleClick);
         this.map.un('pointerdrag', this.handleUserPan);
+        this.map.un('pointermove', this.handleRoutePointerMove);
         const viewport = this.map.getViewport();
         viewport.removeEventListener('wheel', this.handleUserPan);
         viewport.removeEventListener('pointerdown', this.handleWaypointPointerDown, true);
         viewport.removeEventListener('pointermove', this.handleWaypointPointerMove, true);
+        viewport.removeEventListener('pointerleave', this.handleRoutePointerLeave, true);
         viewport.removeEventListener('pointerup', this.handleWaypointPointerUp, true);
         viewport.removeEventListener('pointercancel', this.handleWaypointPointerUp, true);
         if (this.previewTimer !== null) {
@@ -944,6 +1018,9 @@ export class GpsModule implements MapGpsTestProbe {
                     legs: this.activeRoute.legs.map((leg) => ({
                         mode: leg.mode,
                         kind: leg.kind,
+                        surface: leg.surface,
+                        roadKind: leg.roadKind,
+                        passable: leg.passable,
                         distance: leg.distance,
                         eta: leg.eta,
                         pointCount: flatPointCount(leg.points),
@@ -975,6 +1052,8 @@ export class GpsModule implements MapGpsTestProbe {
 
     /** Replaces the waypoint list with clamped copies of `points`. */
     public setWaypoints(points: Array<[number, number]>): void {
+        // New waypoints cancel a pending arrival auto-clear.
+        this.cancelArrivalClear();
         const next: Array<[number, number]> = [];
 
         for (const point of points) {
@@ -1237,6 +1316,9 @@ export class GpsModule implements MapGpsTestProbe {
                     legs: this.activeRoute.legs.map((leg) => ({
                         mode: leg.mode,
                         kind: leg.kind,
+                        surface: leg.surface,
+                        roadKind: leg.roadKind,
+                        passable: leg.passable,
                         distance: leg.distance,
                         eta: leg.eta,
                         source: leg.source,
@@ -1501,25 +1583,28 @@ export class GpsModule implements MapGpsTestProbe {
         this.playerIcon.setRotation(rotating ? 0 : ((this.heading ?? 0) * Math.PI) / 180);
     }
 
+    /**
+     * Keeps about one minute of travel visible ahead of the player, with a
+     * 200 m local radius while standing still. The target is eased so a speed
+     * change zooms smoothly instead of jumping.
+     */
     private applySpeedZoom(): void {
-        if (this.offRoute) {
-            return;
-        }
-
         const view = this.map.getView();
         const current = view.getResolution();
-        if (!isFiniteNumber(current)) {
+        const size = this.map.getSize();
+        if (!isFiniteNumber(current) || !size || size[0] <= 0 || size[1] <= 0) {
             return;
         }
 
-        const min = view.getMinResolution();
-        const max = view.getMaxResolution();
-        if (!(min > 0) || !(max > min)) {
+        const target = followResolution(
+            this.speed,
+            Math.min(size[0], size[1]),
+            view.getMinResolution(),
+            view.getMaxResolution(),
+        );
+        if (target === null) {
             return;
         }
-
-        const normalized = Math.min(1, this.speed / 30);
-        const target = Math.min(max, Math.max(min, min * 12 * (1 - 0.6 * normalized)));
 
         if (Math.abs(current - target) / target > 0.05) {
             view.setResolution(current * 0.9 + target * 0.1);
@@ -1553,6 +1638,77 @@ export class GpsModule implements MapGpsTestProbe {
 
         const index = feature?.get('waypointIndex');
         return typeof index === 'number' && Number.isInteger(index) ? index : null;
+    }
+
+    /**
+     * Hover readout for the planned/active route. Projects the pointer onto the
+     * full route geometry; a pixel-distance threshold replaces vector feature
+     * hit-testing, which is unreliable for lines in Firefox at low zoom.
+     */
+    private handleRoutePointerMove = (event: MapBrowserEvent): void => {
+        if (!this.routeHoverEnabled || !this.activeRoute || !this.routeGeometry) {
+            if (this.routeHover !== null) {
+                this.setRouteHover(null);
+            }
+            return;
+        }
+
+        if (this.waypointDrag) {
+            if (this.routeHover !== null) {
+                this.setRouteHover(null);
+            }
+            return;
+        }
+
+        const coordinate = event.coordinate;
+        const projection = projectPointToPolyline(
+            coordinate[0],
+            coordinate[1],
+            this.routeGeometry.points,
+        );
+        const resolution = this.map.getView().getResolution();
+        if (!projection || !isFiniteNumber(resolution) || resolution <= 0) {
+            this.setRouteHover(null);
+            return;
+        }
+
+        // Geometry-distance hover instead of vector feature hit-testing:
+        // Firefox's line hit-testing is unreliable at low zoom and would only
+        // answer on some route features.
+        if (projection.distance > Math.max(20 * resolution, 10)) {
+            if (this.routeHover !== null) {
+                this.setRouteHover(null);
+            }
+            return;
+        }
+        const legIndex = findLegIndexForSegment(this.routeGeometry.legStarts, projection.segment);
+        this.setRouteHover(describeRouteLegHover(
+            this.activeRoute.legs,
+            this.routeGeometry,
+            legIndex,
+            this.position,
+            this.activeRoute.waypoints,
+        ));
+    };
+
+    private handleRoutePointerLeave = (): void => {
+        this.setRouteHover(null);
+    };
+
+    private setRouteHover(info: RouteLegHoverInfo | null): void {
+        const current = this.routeHover;
+        if (current === info) {
+            return;
+        }
+        if (current && info
+            && current.legIndex === info.legIndex
+            && current.fromPlayer === info.fromPlayer
+            && current.nextWaypointIndex === info.nextWaypointIndex
+            && current.spanDistance === info.spanDistance) {
+            return;
+        }
+        this.routeHover = info;
+        this.emitState(true);
     }
 
     private handleWaypointPointerDown = (event: PointerEvent): void => {
@@ -1811,6 +1967,7 @@ export class GpsModule implements MapGpsTestProbe {
                 mode: this.mode,
                 waterCapable: this.effectiveWaterCapable(),
                 performance: this.effectivePerformance(),
+                groundFastest: this.groundFastest,
                 validate,
                 cancelled: isCancelled,
             });
@@ -1849,9 +2006,11 @@ export class GpsModule implements MapGpsTestProbe {
         start: [number, number],
         reason: 'manual' | 'auto' = 'manual',
     ): Promise<void> {
-        if (!this.activeRoute) {
+        if (!this.activeRoute || this.calculating) {
             return;
         }
+
+        const generation = this.generation;
 
         if (this.activeRoute.source === 'shared' && this.routeGeometry) {
             const projection = projectPointToPolyline(start[0], start[1], this.routeGeometry.points);
@@ -1866,6 +2025,10 @@ export class GpsModule implements MapGpsTestProbe {
                 : this.activeRoute.waypoints[this.activeRoute.waypoints.length - 1];
 
             const connector = await this.planConnector(start, target);
+            if (this.destroyed || generation !== this.generation) {
+                // A manual Recalculate (or a newer auto repath) owns the route.
+                return;
+            }
             if (!connector) {
                 this.status = { kind: 'route-failed' };
                 this.emitState(true);
@@ -1957,6 +2120,7 @@ export class GpsModule implements MapGpsTestProbe {
     }
 
     private setActiveRoute(route: ActiveRoute | null): void {
+        this.cancelArrivalClear();
         this.activeRoute = route;
         this.routeGeometry = route ? buildRouteGeometry(route.legs) : null;
         this.waypointAlong = route && this.routeGeometry
@@ -1969,6 +2133,8 @@ export class GpsModule implements MapGpsTestProbe {
         this.deviation.resetProgress();
         this.arrivalSoundPlayed = false;
         this.lastRouteDrawAlong = -1;
+        this.routeHover = null;
+        this.spokenGuidance.clear();
         this.clearAdvisorPrompt();
         this.drawRoute();
         this.emitState(true);
@@ -1979,6 +2145,8 @@ export class GpsModule implements MapGpsTestProbe {
         this.activeRoute = null;
         this.routeGeometry = null;
         this.waypointAlong = [];
+        this.routeHover = null;
+        this.spokenGuidance.clear();
         this.routeSource.clear();
         this.routeBehindSource.clear();
         this.advisorSource.clear();
@@ -2035,7 +2203,7 @@ export class GpsModule implements MapGpsTestProbe {
                     continue;
                 }
                 const feature = new Feature(new LineString(flattenToCoordinates(leg.points)));
-                feature.setStyle(this.routeStyle(leg.kind, leg.mode));
+                feature.setStyle(this.routeStyle(leg.kind, leg.mode, leg.passable !== false));
                 this.routeSource.addFeature(feature);
             }
             this.lastRouteDrawAlong = along;
@@ -2047,7 +2215,7 @@ export class GpsModule implements MapGpsTestProbe {
                 continue;
             }
             const feature = new Feature(new LineString(flattenToCoordinates(leg.points)));
-            feature.setStyle(this.routeStyle(leg.kind, leg.mode));
+            feature.setStyle(this.routeStyle(leg.kind, leg.mode, leg.passable !== false));
             this.routeSource.addFeature(feature);
         }
     }
@@ -2073,8 +2241,8 @@ export class GpsModule implements MapGpsTestProbe {
         }
     }
 
-    private routeStyle(kind: RouteLegKind, mode: TravelMode): Style {
-        const key = `${mode}:${kind}`;
+    private routeStyle(kind: RouteLegKind, mode: TravelMode, passable = true): Style {
+        const key = `${mode}:${kind}:${passable ? 'ok' : 'blocked'}`;
         const cached = this.legStyles.get(key);
         if (cached) {
             return cached;
@@ -2087,12 +2255,12 @@ export class GpsModule implements MapGpsTestProbe {
             water: '#3b82f6',
             air: '#a78bfa',
         };
-        const dashed = kind === 'walk' || kind === 'air';
+        const dashed = !passable || kind === 'walk' || kind === 'air';
 
         const style = new Style({
             stroke: new Stroke({
-                color: colors[kind],
-                width: mode === 'air' ? 2 : 4,
+                color: passable ? colors[kind] : '#ef4444',
+                width: passable ? (mode === 'air' ? 2 : 4) : 5,
                 lineDash: dashed ? [8, 6] : undefined,
             }),
         });
@@ -2121,39 +2289,38 @@ export class GpsModule implements MapGpsTestProbe {
             return;
         }
 
+        const legs = this.activeRoute?.legs ?? [];
+        const currentLeg = legs[metrics.legIndex];
+        const nextLeg = legs[metrics.legIndex + 1];
+        const transition = nextSurfaceTransition(
+            legs,
+            this.routeGeometry,
+            metrics.along,
+            metrics.legIndex,
+            550,
+        );
         const maneuver = nextManeuver(this.routeGeometry.points, metrics.along);
-        this.turn = maneuver.turn;
-        this.turnDistance = maneuver.distance;
+        const roadTurn = isRoadLeg(currentLeg)
+            && (nextLeg === undefined || isRoadLeg(nextLeg))
+            && this.isJunctionManeuver(maneuver, metrics.along);
+        this.turn = roadTurn ? maneuver.turn : null;
+        this.turnDistance = roadTurn ? maneuver.distance : null;
+
+        if (this.navigating) {
+            this.speakGuidance(metrics, currentLeg, transition);
+        }
 
         if (Math.abs(metrics.along - this.lastRouteDrawAlong) > 5) {
             this.drawRoute();
         }
 
-        const view = this.map.getView();
-        const size = this.map.getSize();
-        const resolution = view.getResolution();
-        const viewportPixels = size && size[0] > 0 && size[1] > 0
-            ? Math.max(1, Math.min(size[0], size[1]) - 160)
-            : 0;
-
         const decision = this.deviation.update({
             now: Date.now(),
             metrics,
             mode: this.mode,
-            speed: this.speed,
             navigating: this.navigating,
-            following: this.isFollowing,
             autoRepath: this.settings.autoRepath,
             waypointAlong: this.waypointAlong,
-            nextWaypoint: nextWaypointAhead(this.waypoints, this.waypointAlong, metrics.along),
-            position: this.position,
-            view: isFiniteNumber(resolution) && viewportPixels > 0
-                ? {
-                    resolution,
-                    maxResolution: view.getMaxResolution(),
-                    viewportPixels,
-                }
-                : null,
         });
 
         this.offRoute = decision.offRoute;
@@ -2162,15 +2329,7 @@ export class GpsModule implements MapGpsTestProbe {
             window.TacPhone.audio.play('message');
         }
 
-        if (decision.zoomResolution !== null && this.position) {
-            // Keep the player centered and zoom out only enough for the next
-            // waypoint to fit; never fit the whole terrain.
-            view.setCenter(this.position);
-            this.lastCenter = this.position;
-            view.setResolution(decision.zoomResolution);
-        }
-
-        if (decision.repath && this.position) {
+        if (decision.repath && this.position && !this.calculating) {
             void this.recalculateRemaining(this.position, 'auto');
         }
 
@@ -2190,6 +2349,127 @@ export class GpsModule implements MapGpsTestProbe {
         }
     }
 
+    /**
+     * Nearest real junction for a left/right maneuver, or null. The node
+     * position is stable, so it also identifies the junction for speech
+     * deduplication.
+     */
+    private maneuverJunction(maneuver: Maneuver, along: number): [number, number] | null {
+        if (
+            (maneuver.turn !== 'left' && maneuver.turn !== 'right')
+            || maneuver.distance === null
+            || !this.routeGeometry
+        ) {
+            return null;
+        }
+
+        const point = pointAtDistance(this.routeGeometry.points, along + maneuver.distance);
+        return point ? this.planner.roadJunction(point, 20) : null;
+    }
+
+    /**
+     * True when a maneuver happens at a real road junction. A bend in one
+     * road, or two road ends meeting head-to-head, has only two branches and
+     * must not produce a turn cue.
+     */
+    private isJunctionManeuver(maneuver: Maneuver, along: number): boolean {
+        if (maneuver.turn === null) {
+            return false;
+        }
+        if (maneuver.turn === 'straight') {
+            return true;
+        }
+        return this.maneuverJunction(maneuver, along) !== null;
+    }
+
+    /**
+     * Voice guidance for the next road turn or road/off-road transition.
+     *
+     * Each junction and each surface transition is announced once, when it
+     * first comes within 500 m; the spoken distance is the real distance, not
+     * a fixed bucket. Off-road turns are deliberately silent. English text is
+     * a test implementation and is not a stringtable key.
+     */
+    private speakGuidance(
+        metrics: { along: number },
+        currentLeg: RouteLeg | undefined,
+        transition: ReturnType<typeof nextSurfaceTransition>,
+    ): void {
+        const audio = window.TacPhone.audio;
+        if (typeof audio?.speak !== 'function') {
+            return;
+        }
+
+        const now = Date.now();
+        if (now - this.lastSpeechAt < 3000) {
+            return;
+        }
+
+        const speak = (key: string, text: string): void => {
+            this.spokenGuidance.add(key);
+            this.lastSpeechAt = now;
+            try {
+                audio.speak(text);
+            } catch {
+                // Voice guidance must never break navigation.
+            }
+        };
+
+        if (transition && transition.distance <= GUIDANCE_FAR_CUE_M) {
+            // The leg boundary is a route distance, so it stays stable while
+            // the player moves; it is a good identity for the transition.
+            const key = `transition:${Math.round(transition.boundaryAlong)}`;
+            if (!this.spokenGuidance.has(key)) {
+                const direction = transition.direction;
+                const meters = spokenDistance(transition.distance);
+                speak(
+                    key,
+                    transition.enteringRoad
+                        ? `in ${meters} meters, enter the road and continue ${direction === 'straight' ? 'straight' : `to the ${direction}`}`
+                        : `in ${meters} meters, leave the road${direction === 'straight' ? '' : ` to the ${direction}`} and continue offroad`,
+                );
+                return;
+            }
+        }
+
+        if (!isRoadLeg(currentLeg) || !this.routeGeometry) {
+            return;
+        }
+
+        const maneuver = nextManeuver(this.routeGeometry.points, metrics.along, 550);
+        if (maneuver.turn !== 'left' && maneuver.turn !== 'right') {
+            return;
+        }
+        const cue = maneuver.distance === null ? null : guidanceCue(maneuver.distance);
+        if (cue === null || maneuver.distance === null) {
+            return;
+        }
+
+        const junction = this.maneuverJunction(maneuver, metrics.along);
+        if (!junction) {
+            return;
+        }
+
+        // A surface transition at this junction already includes the
+        // direction; announcing the turn again would double the message.
+        if (
+            transition
+            && Math.abs(transition.boundaryAlong - (metrics.along + maneuver.distance)) < 80
+        ) {
+            return;
+        }
+
+        // The graph node identifies the junction even when the sampled turn
+        // distance drifts by a few metres between fixes. The far and near
+        // cues are separate, so approaching a junction gets exactly two
+        // announcements.
+        const key = `turn:${Math.round(junction[0])},${Math.round(junction[1])}:${cue}`;
+        if (this.spokenGuidance.has(key)) {
+            return;
+        }
+        speak(key, `turn ${maneuver.turn} in ${spokenDistance(maneuver.distance)} meters`);
+    }
+
     private completeArrival(): void {
         if (this.arrived) {
             return;
@@ -2201,6 +2481,26 @@ export class GpsModule implements MapGpsTestProbe {
         if (!this.arrivalSoundPlayed) {
             this.arrivalSoundPlayed = true;
             window.TacPhone.audio.play('success');
+        }
+
+        // Keep the Arrived badge visible, then drop the finished route and
+        // leave waypoint-planning mode.
+        this.cancelArrivalClear();
+        this.arrivalTimer = window.setTimeout(() => {
+            this.arrivalTimer = null;
+            if (this.destroyed) {
+                return;
+            }
+            this.planning = false;
+            this.clearWaypoints();
+        }, ARRIVAL_CLEAR_MS);
+    }
+
+    /** Cancels a pending post-arrival route clear. */
+    private cancelArrivalClear(): void {
+        if (this.arrivalTimer !== null) {
+            window.clearTimeout(this.arrivalTimer);
+            this.arrivalTimer = null;
         }
     }
 
@@ -2435,6 +2735,7 @@ export class GpsModule implements MapGpsTestProbe {
             mode: this.mode,
             detectedMode: this.detectedMode,
             waterCapable: this.waterCapable,
+            groundFastest: this.groundFastest,
             planning: this.planning,
             navigating: this.navigating,
             calculating: this.calculating,
@@ -2452,6 +2753,7 @@ export class GpsModule implements MapGpsTestProbe {
             status: this.status,
             shared,
             advisor: this.advisor.prompt,
+            routeHover: this.routeHover,
         };
 
         this.state = state;

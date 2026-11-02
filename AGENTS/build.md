@@ -207,15 +207,18 @@ is running.
   `npm run test:messaging-ui` (Playwright Messenger UI, including marker sharing
   and Map focus), and
   `npm run test:map` (see [`ACE_TacPhone_Map/test/README.md`](../ACE_TacPhone_Map/test/README.md);
-  its browser scenario uses Playwright with an installed Chrome channel).
+  its browser scenario uses Playwright with the installed browser channel).
   `npm run test:host-ui` is the host's own Playwright suite (audio unlock,
   keep-alive and the one pending sound); it takes the same prerequisites as the
   other browser suites. The host suite also has a browser checklist for the
   Options panel and Map settings. `npm run test:all` runs the host, Messenger,
-  Map and `unit` suites sequentially and prints one summary; use
-  `-- --suite unit,map`, `-- --no-browser` or `-- --fail-fast` to narrow it. Add
-  `-- --slow` to the browser suites (or `test:all`) to show the Playwright browser
-  and slow every action; `--slow-ms <ms>` changes the delay.
+  Map and `unit` suites sequentially and prints one summary. Browser suites run
+  once per available browser: Chrome plus Firefox when
+  `npx playwright install firefox` has been run, otherwise Firefox is reported
+  as skipped. Use `-- --browsers chrome` to force one engine, `-- --suite
+  unit,map`, `-- --no-browser` or `-- --fail-fast` to narrow it. Add `-- --slow`
+  to the browser suites (or `test:all`) to show the Playwright browser and slow
+  every action; `--slow-ms <ms>` changes the delay.
 - **`npm run test:gps-interactive` is opt-in only.** It needs a human inside a
   vehicle, so it is deliberately absent from `test:all`, `test:map` and every
   default listing; without `$env:TACPHONE_GPS_INTERACTIVE = '1'` (or `--opt-in`)

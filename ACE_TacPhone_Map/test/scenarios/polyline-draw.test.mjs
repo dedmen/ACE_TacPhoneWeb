@@ -247,7 +247,8 @@ export async function run({ pageUrl, options, log }) {
         log?.('Freehand mouse polyline created');
 
         // ---- path 4: freehand touch drag (optional, needs CDP) ---------
-        if (typeof context.newCDPSession === 'function') {
+        const browserName = page.context().browser()?.browserType().name();
+        if (browserName === 'chromium' && typeof context.newCDPSession === 'function') {
             const beforeTouchDrag = new Set((await getAllMarkers(page)).map((marker) => marker[0]));
             const cdp = await context.newCDPSession(page);
             const [touchX, touchY] = mapPoints(box)[1];
@@ -283,7 +284,7 @@ export async function run({ pageUrl, options, log }) {
 
             await cdp.detach();
         } else {
-            log?.('Skipping the touch freehand drag: this Playwright build has no CDP session support');
+            log?.(`Skipping the touch freehand drag: CDP is Chromium-only (${browserName ?? 'unknown browser'})`);
         }
 
         // Leave drawing mode again.

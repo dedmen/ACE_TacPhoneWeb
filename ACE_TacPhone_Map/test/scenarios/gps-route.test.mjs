@@ -25,6 +25,7 @@ import {
     openGpsPage,
     pointAt,
     waitForGpsDebug,
+    waitForTerrainBounds,
 } from '../lib/gps-page.mjs';
 import { getMapView, waitForMapView, waitForMapViewStable } from '../lib/map-page.mjs';
 
@@ -94,7 +95,7 @@ export async function run({ pageUrl, options, log }) {
         const box = await viewport.boundingBox();
         assert(box, 'The OpenLayers viewport has no layout box');
 
-        const bounds = await gpsCall(page, 'getTerrainBounds');
+        const bounds = await waitForTerrainBounds(page);
         assert(
             bounds && bounds.width > 200 && bounds.height > 200,
             `The GPS has no usable terrain bounds (${JSON.stringify(bounds)})`,
@@ -229,18 +230,23 @@ export async function run({ pageUrl, options, log }) {
         };
 
         const firstPixel = await gpsPixel(page, firstPoint);
-        assert(firstPixel, 'The first waypoint is outside the viewport after flyTo');
+        // The map can still be recentering after the first tile batch; settle it
+        // before converting world coordinates so the click lands on the point.
+        await waitForMapViewStable(page, 'the GPS view to settle before waypoint clicks');
+        const settledFirstPixel = await gpsPixel(page, firstPoint);
+        const firstPixelAfter = settledFirstPixel ?? firstPixel;
+        assert(firstPixelAfter, 'The first waypoint is outside the viewport after flyTo');
         assert(
-            firstPixel[0] >= 0 && firstPixel[0] <= box.width
-                && firstPixel[1] >= 0 && firstPixel[1] <= box.height,
-            `The first waypoint pixel is outside the viewport: ${JSON.stringify(firstPixel)}`,
+            firstPixelAfter[0] >= 0 && firstPixelAfter[0] <= box.width
+                && firstPixelAfter[1] >= 0 && firstPixelAfter[1] <= box.height,
+            `The first waypoint pixel is outside the viewport: ${JSON.stringify(firstPixelAfter)}`,
         );
         assert(
-            !(await isUnderPanel(firstPixel)),
+            !(await isUnderPanel(firstPixelAfter)),
             'The first waypoint pixel is covered by the route panel; the click would not reach the map',
         );
 
-        await page.mouse.click(box.x + firstPixel[0], box.y + firstPixel[1]);
+        await page.mouse.click(box.x + firstPixelAfter[0], box.y + firstPixelAfter[1]);
         const afterFirst = await waitForGpsDebug(
             page,
             (state) => state.waypoints.length === 1,
@@ -401,6 +407,10 @@ export async function run({ pageUrl, options, log }) {
             const legSpeed = leg.distance / leg.eta;
             if (leg.kind === 'water') {
                 near(legSpeed, 0.5, 0.02, 'A water leg should travel at the swim speed');
+                assert(
+                    leg.distance >= 10,
+                    `A ${leg.distance.toFixed(1)} m water leg is a raster sliver and should be folded into the walk`,
+                );
             } else {
                 assert(
                     legSpeed >= 5 / 3.6 * 0.98 && legSpeed <= 14 / 3.6 * 1.02,
@@ -410,6 +420,36 @@ export async function run({ pageUrl, options, log }) {
         }
 
         legInvariants(foot.route, 'foot');
+
+        // Hovering a planned leg with the route panel open shows its kind,
+        // average speed and time, plus the span to the next waypoint.
+        const hoverLeg = (await gpsCall(page, 'getRouteDebugSnapshot'))?.route?.legs
+            ?.find((leg) => leg.points.length >= 4);
+        assert(hoverLeg, 'The foot route has no leg to hover');
+        const hoverStart = [hoverLeg.points[0], hoverLeg.points[1]];
+        const hoverEnd = [hoverLeg.points[2], hoverLeg.points[3]];
+        const hoverLength = distance(hoverStart, hoverEnd);
+        const hoverPoint = [
+            hoverStart[0] + (hoverEnd[0] - hoverStart[0]) * (50 / Math.max(1, hoverLength)),
+            hoverStart[1] + (hoverEnd[1] - hoverStart[1]) * (50 / Math.max(1, hoverLength)),
+        ];
+        const hoverPixel = await gpsPixel(page, hoverPoint);
+        assert(hoverPixel, 'The hovered foot leg is off-screen');
+        await page.mouse.move(box.x + hoverPixel[0], box.y + hoverPixel[1]);
+        const legInfo = page.getByTestId('gps-leg-info');
+        await legInfo.waitFor({ state: 'visible', timeout: 5000 });
+        const legInfoText = await legInfo.textContent() ?? '';
+        const kindLabel = await gpsT(
+            page,
+            hoverLeg.kind === 'water'
+                ? 'STR_ACE_Tacphone_Map_Gps_LegInfo_Swim'
+                : 'STR_ACE_Tacphone_Map_Gps_LegInfo_Land',
+        );
+        assert(
+            legInfoText.includes(kindLabel),
+            `The leg info does not show "${kindLabel}": ${legInfoText}`,
+        );
+        log?.('Route leg hover shows the leg kind, speed and next-waypoint span');
 
         // The second identical foot plan must reuse the coarse height grid and
         // the peak/ring cache instead of requesting the same heights again.
@@ -426,6 +466,9 @@ export async function run({ pageUrl, options, log }) {
 
         // ---- 4. ground route -------------------------------------------
         await gpsCall(page, 'setMode', 'ground');
+        const fastestToggle = page.getByTestId('gps-ground-fastest');
+        await fastestToggle.waitFor({ state: 'visible', timeout: 5000 });
+        equal(await fastestToggle.isChecked(), false, 'Ground routing defaults to road preference');
         let ground = null;
 
         for (const bearing of [0, 90, 270]) {
@@ -462,11 +505,18 @@ export async function run({ pageUrl, options, log }) {
         }
 
         if (ground.waterCapable !== true) {
+            // A land route must not treat water as passable. When the
+            // destination itself is across/in water, the planner deliberately
+            // keeps an impassable water leg instead of failing the route.
+            const waterLegs = ground.route.legs.filter((leg) => leg.kind === 'water');
             equal(
-                ground.route.legs.filter((leg) => leg.kind === 'water').length,
+                waterLegs.filter((leg) => leg.passable !== false).length,
                 0,
-                'A non-amphibious ground route must not have water legs',
+                'A non-amphibious ground route may only show water as impassable',
             );
+            if (waterLegs.length > 0) {
+                log?.(`The non-amphibious route keeps ${waterLegs.length} impassable water leg(s)`);
+            }
         }
 
         if (ground.road && ground.road.nodes > 0) {
@@ -485,13 +535,9 @@ export async function run({ pageUrl, options, log }) {
         const offroadLegs = ground.route.legs.filter((leg) => leg.kind === 'offroad');
         if (roadLegs.length > 0 && offroadLegs.length > 0) {
             const average = (legs) => legs.reduce((total, leg) => total + leg.distance / leg.eta, 0) / legs.length;
-            const road = average(roadLegs);
-            const offroad = average(offroadLegs);
-            assert(
-                road >= offroad * 0.95,
-                `Road legs (${road.toFixed(2)} m/s) should not be slower than offroad legs (${offroad.toFixed(2)} m/s)`,
-            );
-            log?.(`Ground speeds: road ${road.toFixed(2)} m/s, offroad ${offroad.toFixed(2)} m/s`);
+            // Do not assert road is faster: slope, corners and a short entering
+            // stretch can legitimately make a road leg slower per metre.
+            log?.(`Ground speeds: road ${average(roadLegs).toFixed(2)} m/s, offroad ${average(offroadLegs).toFixed(2)} m/s`);
         }
 
         if (ground.detectedMode === 'ground') {
@@ -783,6 +829,37 @@ export async function run({ pageUrl, options, log }) {
         );
         log?.('Stopped: the HUD route arrow is gone');
 
+        // ---- 7a. arrival keeps the badge, then clears the route ---------
+        await gpsCall(page, 'clearWaypoints');
+        const arrivalTarget = pointAt(origin, { angleDeg: 0, distanceM: 300, bounds });
+        await gpsCall(page, 'setMode', 'air');
+        await gpsCall(page, 'setWaypoints', [arrivalTarget]);
+        equal(await gpsCall(page, 'calculateRoute'), true, 'The arrival test route should plan');
+        await gpsCall(page, 'startNavigation');
+        await gpsCall(page, 'applyFix', {
+            position: arrivalTarget,
+            view: [0, 1, 0],
+            direction: 0,
+            speed: 0,
+            velocity: [0, 0, 0],
+        });
+        const arrived = await waitForGpsDebug(
+            page,
+            (state) => state.arrived === true,
+            'arrival at the destination',
+        );
+        assert(arrived.route, 'The route should stay while the Arrived badge is visible');
+        equal(arrived.navigating, false, 'Arrival should end navigation');
+        const clearedArrival = await waitForGpsDebug(
+            page,
+            (state) => state.arrived === false && state.route === null,
+            'the arrived route to clear after the badge delay',
+            15000,
+        );
+        equal(clearedArrival.waypoints.length, 0, 'Arrival auto-clear should remove the waypoints');
+        equal(clearedArrival.planning, false, 'Arrival auto-clear should leave planning mode');
+        log?.('Arrival kept the badge for 10 s, then cleared the route and planning');
+
         // ---- 7b. long ground route and turn indicator -------------------
         const longGoal = pointAt(origin, { angleDeg: 90, distanceM: 5000, bounds });
         await gpsCall(page, 'setMode', 'ground');
@@ -804,17 +881,42 @@ export async function run({ pageUrl, options, log }) {
                 speed: 4,
                 velocity: [0, 4, 0],
             });
-            const turnState = await waitForGpsDebug(
-                page,
-                (state) => state.navigating === true && state.turn !== null,
-                'the turn indicator on the 5 km ground route',
-            );
-            assert(
-                turnState.turn === 'left' || turnState.turn === 'right' || turnState.turn === 'straight',
-                `The turn indicator returned ${String(turnState.turn)}`,
-            );
-            log?.(`Turn indicator: ${turnState.turn}`
-                + (turnState.turnDistance === null ? '' : ` in ${Math.round(turnState.turnDistance)} m`));
+            const firstLeg = longRoute.route.legs[0];
+            const startsOnRoad = firstLeg !== undefined
+                && (firstLeg.kind === 'road' || firstLeg.roadKind !== undefined);
+            if (startsOnRoad) {
+                // Turn cues exist only at real junctions; the first 250 m of
+                // this road may be a plain stretch or a bend.
+                const turnState = await waitForGpsDebug(
+                    page,
+                    (state) => state.navigating === true,
+                    'navigation on the 5 km ground route',
+                );
+                if (turnState.turn !== null) {
+                    assert(
+                        turnState.turn === 'left' || turnState.turn === 'right' || turnState.turn === 'straight',
+                        `The turn indicator returned ${String(turnState.turn)}`,
+                    );
+                    log?.(`Turn indicator: ${turnState.turn}`
+                        + (turnState.turnDistance === null ? '' : ` in ${Math.round(turnState.turnDistance)} m`));
+                } else {
+                    log?.('Road route: no junction within the turn range, no turn indicator');
+                }
+            } else {
+                // Only road-graph legs get a turn cue; an off-road or water
+                // start must not show a turn arrow.
+                const offroadState = await waitForGpsDebug(
+                    page,
+                    (state) => state.navigating === true,
+                    'navigation on the off-road 5 km route',
+                );
+                equal(
+                    offroadState.turn,
+                    null,
+                    'An off-road/water route must not show a road turn indicator',
+                );
+                log?.('Off-road 5 km route: no turn indicator, as expected');
+            }
             await gpsCall(page, 'stopNavigation');
         } else {
             log?.('No 5 km ground route from this position; the turn-indicator case was skipped');

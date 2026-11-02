@@ -184,6 +184,9 @@ export interface MapGpsLayersDebugState {
 export interface MapGpsLegDebugState {
     mode: TravelMode;
     kind: RouteLegKind;
+    surface?: 'water' | 'road' | 'forest' | 'offroad';
+    roadKind?: 'main' | 'road' | 'track' | 'rail' | 'trail';
+    passable?: boolean;
     distance: number;
     eta: number;
     pointCount: number;

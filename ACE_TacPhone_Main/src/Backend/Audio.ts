@@ -32,7 +32,7 @@
 // feature can mirror Arma's audio output device into the browser. The game cannot
 // report its device today (see TODO.md); nothing here discovers it.
 
-import type { AudioApi, AudioDeviceInfo, NotificationSound } from "./Types";
+import type { AudioApi, AudioDeviceInfo, NotificationSound, SpeechOptions } from "./Types";
 
 /** Minimum time between two sounds of the same preset, in milliseconds. */
 const PRESET_COOLDOWN_MS = 400;
@@ -302,6 +302,41 @@ export class AudioEngine implements AudioApi
     /** Explicitly selected output device, or undefined when the browser default is used. */
     getOutputDeviceId(): string | undefined {
         return this.outputDeviceId;
+    }
+
+    /** True when the browser exposes the Web Speech API. */
+    isSpeechAvailable(): boolean {
+        return typeof window !== "undefined"
+            && typeof window.speechSynthesis !== "undefined"
+            && typeof window.SpeechSynthesisUtterance !== "undefined";
+    }
+
+    /**
+     * Speaks text through the browser's SpeechSynthesis engine. Like `play()`,
+     * this stays silent before the first user gesture and when unsupported.
+     */
+    speak(text: string, options: SpeechOptions = {}): void {
+        const phrase = String(text ?? "").trim();
+        if (phrase === "" || !this.hasUserGesture || !this.isSpeechAvailable())
+            return;
+
+        const synth = window.speechSynthesis;
+        if (options.interrupt !== false)
+            synth.cancel();
+
+        const utterance = new SpeechSynthesisUtterance(phrase);
+        utterance.rate = Number.isFinite(options.rate) ? options.rate! : 1;
+        utterance.pitch = Number.isFinite(options.pitch) ? options.pitch! : 1;
+        utterance.volume = Number.isFinite(options.volume) ? options.volume! : 0.9;
+        if (options.lang)
+            utterance.lang = options.lang;
+        synth.speak(utterance);
+    }
+
+    /** Stops the current utterance, if any. */
+    stopSpeaking(): void {
+        if (typeof window !== "undefined" && typeof window.speechSynthesis !== "undefined")
+            window.speechSynthesis.cancel();
     }
 
     /**

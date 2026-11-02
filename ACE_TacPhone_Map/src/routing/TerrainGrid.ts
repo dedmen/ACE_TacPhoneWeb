@@ -44,11 +44,56 @@ export interface GridContext {
      * displayed leg ETA.
      */
     penaltyAt?: (x: number, y: number) => number;
+    /**
+     * Treat water as impassable even for foot. Used by the fine water-corridor
+     * pass to force a land-only search; the normal plan still allows swimming.
+     */
+    avoidWater?: boolean;
+    /**
+     * Keep the land-only search this many metres away from water. 0/undefined
+     * allows a path directly on the coastline.
+     */
+    waterBufferM?: number;
+}
+
+/** Cardinal and diagonal offsets used for the water-edge buffer. */
+const WATER_BUFFER_DIRECTIONS: ReadonlyArray<readonly [number, number]> = [
+    [1, 0], [-1, 0], [0, 1], [0, -1],
+    [1, 1], [1, -1], [-1, 1], [-1, -1],
+];
+
+/** True when the point is land and far enough from water for this context. */
+function isDryAt(context: GridContext, x: number, y: number): boolean {
+    const { masks, rasters } = context;
+    if (masks.landAt(x, y, rasters) === false) {
+        return false;
+    }
+
+    const buffer = context.waterBufferM ?? 0;
+    if (!(buffer > 0)) {
+        return true;
+    }
+
+    for (const [dx, dy] of WATER_BUFFER_DIRECTIONS) {
+        if (masks.landAt(x + dx * buffer, y + dy * buffer, rasters) === false) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/** Passability with the optional land-only rule applied. */
+function isPassableAt(context: GridContext, x: number, y: number): boolean {
+    const { mode, masks, rasters, waterCapable, avoidWater } = context;
+    if (avoidWater && !isDryAt(context, x, y)) {
+        return false;
+    }
+    return masks.isPassable(mode, x, y, rasters, waterCapable);
 }
 
 /** Nearest reachable grid cell for a world point, or null. */
 function nearestCell(context: GridContext, point: [number, number], columns: number, rows: number): number | null {
-    const { bbox, cell, mode, masks, rasters, waterCapable } = context;
+    const { bbox, cell } = context;
     const toCell = (x: number, y: number): number | null => {
         const column = Math.floor((x - bbox[0]) / cell);
         const row = Math.floor((y - bbox[1]) / cell);
@@ -58,18 +103,55 @@ function nearestCell(context: GridContext, point: [number, number], columns: num
         return row * columns + column;
     };
 
+    const centerOf = (index: number): [number, number] => {
+        const column = index % columns;
+        const row = Math.floor(index / columns);
+        return [bbox[0] + (column + 0.5) * cell, bbox[1] + (row + 0.5) * cell];
+    };
+
     const direct = toCell(point[0], point[1]);
     if (direct !== null) {
-        const column = direct % columns;
-        const row = Math.floor(direct / columns);
-        const centerX = bbox[0] + (column + 0.5) * cell;
-        const centerY = bbox[1] + (row + 0.5) * cell;
-        if (masks.isPassable(mode, centerX, centerY, rasters, waterCapable)) {
+        const center = centerOf(direct);
+        if (isPassableAt(context, center[0], center[1])) {
             return direct;
         }
     }
 
-    const nearest = masks.nearestPassable(mode, point, rasters, bbox, cell, waterCapable);
+    // A land-only search must not start on a water cell whose centre happens
+    // to lie just offshore; walk outward to the nearest dry cell instead.
+    if (context.avoidWater) {
+        const startColumn = Math.max(0, Math.min(columns - 1, Math.floor((point[0] - bbox[0]) / cell)));
+        const startRow = Math.max(0, Math.min(rows - 1, Math.floor((point[1] - bbox[1]) / cell)));
+        const maxRadius = Math.min(60, Math.max(columns, rows));
+
+        for (let radius = 1; radius <= maxRadius; radius += 1) {
+            for (let row = startRow - radius; row <= startRow + radius; row += 1) {
+                for (let column = startColumn - radius; column <= startColumn + radius; column += 1) {
+                    if (Math.max(Math.abs(row - startRow), Math.abs(column - startColumn)) !== radius) {
+                        continue;
+                    }
+                    if (row < 0 || column < 0 || row >= rows || column >= columns) {
+                        continue;
+                    }
+                    const center = centerOf(row * columns + column);
+                    if (isPassableAt(context, center[0], center[1])) {
+                        return row * columns + column;
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    const nearest = context.masks.nearestPassable(
+        context.mode,
+        point,
+        context.rasters,
+        bbox,
+        cell,
+        context.waterCapable,
+    );
     return nearest ? toCell(nearest[0], nearest[1]) : null;
 }
 
@@ -175,14 +257,14 @@ export function searchGrid(context: GridContext, start: [number, number], goal: 
                 const a = cellCenter(sideA);
                 const b = cellCenter(sideB);
                 if (
-                    !masks.isPassable(mode, a[0], a[1], rasters, waterCapable)
-                    || !masks.isPassable(mode, b[0], b[1], rasters, waterCapable)
+                    !isPassableAt(context, a[0], a[1])
+                    || !isPassableAt(context, b[0], b[1])
                 ) {
                     continue;
                 }
             }
 
-            if (!masks.isPassable(mode, nextCenter[0], nextCenter[1], rasters, waterCapable)) {
+            if (!isPassableAt(context, nextCenter[0], nextCenter[1])) {
                 continue;
             }
 
@@ -236,7 +318,6 @@ export function searchGrid(context: GridContext, start: [number, number], goal: 
 
 /** Greedy line-of-sight simplification against the passability masks. */
 export function simplifyGridPath(context: GridContext, path: number[]): number[] {
-    const { mode, masks, rasters, waterCapable, cell } = context;
     const count = Math.floor(path.length / 2);
     if (count <= 2) {
         return path.slice();
@@ -250,16 +331,11 @@ export function simplifyGridPath(context: GridContext, path: number[]): number[]
 
         for (let candidate = count - 1; candidate > anchor; candidate -= 1) {
             if (!segmentClear(
-                mode,
+                context,
                 path[anchor * 2],
                 path[anchor * 2 + 1],
                 path[candidate * 2],
                 path[candidate * 2 + 1],
-                masks,
-                rasters,
-                context.bbox,
-                cell,
-                waterCapable,
             )) {
                 continue;
             }
@@ -304,6 +380,9 @@ export function segmentCost(context: GridContext, ax: number, ay: number, bx: nu
         const x = ax + (bx - ax) * t;
         const y = ay + (by - ay) * t;
         const surface = masks.surfaceAt(x, y, rasters);
+        if (context.avoidWater && !isDryAt(context, x, y)) {
+            return Number.POSITIVE_INFINITY;
+        }
         const slope = context.slopeAt?.(x, y) ?? null;
         let speed = edgeSpeed(mode, surface, performance, waterCapable, slope);
         if (masks.sample(rasters.fences, x, y)) {
@@ -320,17 +399,13 @@ export function segmentCost(context: GridContext, ax: number, ay: number, bx: nu
 }
 
 function segmentClear(
-    mode: TravelMode,
+    context: GridContext,
     ax: number,
     ay: number,
     bx: number,
     by: number,
-    masks: TerrainMasks,
-    rasters: RasterSet,
-    bbox: BBox,
-    cell: number,
-    waterCapable: boolean,
 ): boolean {
+    const { bbox, cell } = context;
     const distance = distanceBetween(ax, ay, bx, by);
     const steps = Math.max(1, Math.ceil(distance / Math.max(1, cell * 0.5)));
 
@@ -341,7 +416,7 @@ function segmentClear(
         if (x < bbox[0] || y < bbox[1] || x > bbox[2] || y > bbox[3]) {
             continue;
         }
-        if (!masks.isPassable(mode, x, y, rasters, waterCapable)) {
+        if (!isPassableAt(context, x, y)) {
             return false;
         }
     }

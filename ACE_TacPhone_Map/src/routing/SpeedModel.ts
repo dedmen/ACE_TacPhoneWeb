@@ -52,6 +52,54 @@ export const ROLLING_RESISTANCE = 0.08;
 export const CRAWL_SPEED = 0.5;
 /** Steepest slope the model still considers drivable (about 35 degrees). */
 export const MAX_GROUND_SLOPE = 0.7;
+/** Typical ground-vehicle acceleration used to price short legs, m/s². */
+export const GROUND_ACCELERATION = 3;
+
+/**
+ * Caps a leg's average speed by the distance available to accelerate from
+ * rest. A 40 m road section cannot reach a 136 km/h top speed even when the
+ * surface and slope model allow it.
+ */
+export function accelerationLimitedSpeed(
+    distance: number,
+    speed: number,
+    acceleration = GROUND_ACCELERATION,
+): number {
+    if (!(distance > 0) || !(speed > 0) || !(acceleration > 0)) {
+        return speed;
+    }
+    return Math.min(speed, Math.sqrt(2 * acceleration * distance));
+}
+
+/**
+ * Recomputes a ground leg ETA with the acceleration distance limit.
+ *
+ * `entrySpeed` is the previous leg's average speed: a car entering a short
+ * road from an off-road section is already moving and accelerates from there,
+ * so the road never becomes slower than the track it just left.
+ */
+export function limitGroundEta(distance: number, eta: number, entrySpeed = 0): number {
+    if (!(distance > 0) || !(eta > 0)) {
+        return eta;
+    }
+
+    const speed = distance / eta;
+    const start = Math.max(0, Math.min(entrySpeed, speed));
+    const acceleration = GROUND_ACCELERATION;
+    const accelerationDistance = (speed * speed - start * start) / (2 * acceleration);
+
+    let averageLimit: number;
+    if (distance >= accelerationDistance) {
+        const accelerationTime = (speed - start) / acceleration;
+        const cruiseTime = (distance - accelerationDistance) / speed;
+        averageLimit = distance / Math.max(1e-6, accelerationTime + cruiseTime);
+    } else {
+        const exit = Math.sqrt(start * start + 2 * acceleration * distance);
+        averageLimit = (start + exit) / 2;
+    }
+
+    return averageLimit < speed ? Math.max(eta, distance / averageLimit) : eta;
+}
 
 /** Relative speed on each road class, before the vehicle model. */
 export function roadClassFactor(kind: RouteLegKind): number {
@@ -214,7 +262,7 @@ export function forestSpeedFactor(performance: VehiclePerformance | undefined): 
     const perf = performance ?? {};
     const width = isPositive(perf.widthM) ? perf.widthM : 2;
     // Woods are much slower than open ground, and wide vehicles suffer more.
-    const widthFactor = clamp(1.1 - width / 5, 0.25, 0.9);
+    const widthFactor = clamp(0.75 - width / 8, 0.15, 0.5);
     const armor = isPositive(perf.armor) ? perf.armor : 0;
     const bulldozer = perf.simulation === 'tankx' ? clamp(1 - armor / 4000, 0.8, 1) : 1;
     return widthFactor * bulldozer;

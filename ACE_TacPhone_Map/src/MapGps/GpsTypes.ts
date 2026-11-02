@@ -8,6 +8,7 @@
  */
 
 import type { TravelMode, VehiclePerformance } from '../routing/RouteTypes';
+import type { RouteLegHoverInfo } from '../routing/RouteLegInfo';
 
 export type {
     ActiveRoute,
@@ -21,6 +22,7 @@ export type {
     TravelMode,
     VehiclePerformance,
 } from '../routing/RouteTypes';
+export type { RouteLegHoverInfo } from '../routing/RouteLegInfo';
 export {
     ROUTE_DEBUG_FOREST,
     ROUTE_DEBUG_OFFROAD,
@@ -103,6 +105,8 @@ export interface GpsViewState {
     mode: TravelMode;
     detectedMode: TravelMode;
     waterCapable: boolean;
+    /** Ground routing: allow long off-road sections when they are faster. */
+    groundFastest: boolean;
     /** True while the user is placing waypoints. */
     planning: boolean;
     /** True while navigation is active. */
@@ -129,6 +133,8 @@ export interface GpsViewState {
     status: GpsStatus | null;
     shared: SharedPreviewInfo | null;
     advisor: AdvisorPrompt | null;
+    /** Leg under the pointer while the route panel is open; null otherwise. */
+    routeHover: RouteLegHoverInfo | null;
 }
 
 /** Fresh overlay state before the first GPS update arrives. */
@@ -141,6 +147,7 @@ export function createInitialGpsViewState(): GpsViewState {
         mode: 'foot',
         detectedMode: 'foot',
         waterCapable: false,
+        groundFastest: false,
         planning: false,
         navigating: false,
         calculating: false,
@@ -158,6 +165,7 @@ export function createInitialGpsViewState(): GpsViewState {
         status: null,
         shared: null,
         advisor: null,
+        routeHover: null,
     };
 }
 
