@@ -47,6 +47,11 @@ const MODULES = [
         description: 'route metrics, turn instructions, deviation and vehicle-change parsing',
         file: path.join(APP_ROOT, 'test/unit/gps-routing.unit.mjs'),
     },
+    {
+        name: 'terrain-layer-priority',
+        description: 'terrain layer rank/LOD planning',
+        file: path.join(APP_ROOT, 'test/unit/terrain-layer-priority.unit.mjs'),
+    },
 ];
 
 process.exitCode = await runUnitSuite({

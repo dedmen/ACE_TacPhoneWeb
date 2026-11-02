@@ -23,6 +23,7 @@ user-facing overview and development setup are in
 | Host shared modules (`window.TacPhone.modules`) | `src/Backend/SharedModules.ts` |
 | SHA-256 for the file manifest (JS fallback for non-secure contexts) | `src/Backend/Sha256.ts` |
 | Transport selection and request/response | `src/Backend/Networking.ts` |
+| Terrain request cache, SVG split/encode, progressive reply assembly | `src/Backend/TerrainCache.ts` |
 | In-game `window.A3API` shim | `src/Backend/A3API.ts` |
 | Game → app message routing | `src/Backend/AppMessaging.ts`, `src/Backend/MessageRouter.ts` |
 | Inter-app registry and routing | `src/Backend/InterApp.ts`, `src/Panels/TargetChooserDialog.tsx` |
@@ -189,8 +190,10 @@ The transport is chosen once at module load:
 - `IsArma()` is true when the page URL starts with `blob:` (the sandboxed in-game
   browser) → `NetworkingA3`.
 - Otherwise → `NetworkingWebsocket`, which connects to `wss://localhost:8001/ws`.
-  Requests are queued until open and time out after 30 seconds (60 seconds for
-  `LoadGameTerrain`, which streams multiple layer chunks).
+  Requests are queued until open and time out after 30 seconds. `LoadGameTerrain`
+  allows 120 seconds for the first frame and then a 60 second idle timeout that
+  every terrain chunk restarts, so a slow but progressing layer transfer is not
+  cut off by a fixed total timeout.
 
 In-game requests leave through `window.A3API.SendAlert`; the hidden background
 browser receives them as a `JSDialog` in
@@ -203,8 +206,8 @@ injects the sender as `s` on the extension side.
 `LoadGameFileText`, `LoadGameFileTexture`, and `LoadGameTerrain` use the game
 filesystem through the transport. The built-in `main` app
 (`src/MainApps/main.tsx`) handles game requests for terrain/texture. For terrain
-it only calls `networking.ReplyTerrainSVG(uid, config)`; the private helpers in
-`Backend/Networking.ts` split the SVG into standalone per-layer documents,
+it only calls `networking.ReplyTerrainSVG(uid, config)`; the helpers in
+`Backend/TerrainCache.ts` split the SVG into standalone per-layer documents,
 compress each layer and stream `ReplyRequestTerrainSVG` chunks back (with
 `part`/`parts` fragments when a layer is still too large). Textures reply with
 `ReplyRequestTexture` as the WebP data URL unchanged; they are already
@@ -212,15 +215,52 @@ compressed. `LoadGameTerrain` resolves to a `TerrainData`
 (`width`, `height`, `layers: [{ name, svg }]`); a legacy whole-SVG reply is still
 accepted by decompressing and splitting it locally. Identical terrain requests
 are coalesced in both transports: while one is in flight the next caller shares
-it, and a completed result is reused for 5 seconds. This absorbs React
-StrictMode's double mount without sending two `RequestTerrainSVG` frames. `ReplyTerrainSVG` is not
-implemented by the browser transport. A game add-on built with `__A3_DEBUG__`
-and the server/mission `allowDebug` CBA setting makes `gameInfo.isDebug()` true;
-`ReplyTerrainSVG` then logs each layer's raw SVG size, gzip size, base64 size,
-chunk count and compression ratio. The bundled in-game page is normally a release
-web build, so the diagnostic uses `console.warn` (release builds strip
-`console.log`). Release game builds or `allowDebug = false` skip it. The app
-contract version is `2`.
+it. The WebSocket transport never reuses a completed result, because the relay's
+game host can change without this socket reconnecting. The in-game transport
+keeps its completed result for the lifetime of its page instead (the page is
+recreated when the game terrain changes, so the config always describes the same
+terrain); this skips the `A3API` request and the ~700 ms `splitTerrainSVG()` on
+every Map reopen. That cache holds at most one config's `TerrainData`. This
+absorbs React StrictMode's double mount without sending two `RequestTerrainSVG`
+frames.
+`ReplyTerrainSVG` is not implemented by the browser transport. A game add-on
+built with `__A3_DEBUG__` and the server/mission `allowDebug` CBA setting makes
+`gameInfo.isDebug()` true; `ReplyTerrainSVG` then logs each layer's raw SVG size,
+gzip size, base64 size, chunk count and compression ratio. The bundled in-game
+page is normally a release web build, so the diagnostic uses `console.warn`
+(release builds strip `console.log`). Release game builds or `allowDebug = false`
+skip it. The app contract version is `2`.
+
+### Progressive terrain layers
+
+`Backend/TerrainCache.ts` owns the request cache, the SVG split, the send-side
+chunk encoder and the receive-side multi-frame assembler; `Networking.ts` only
+wires them to the two transports. `LoadGameTerrain(config, onLayer?)` accepts a
+layer callback. Every layer is handed over as soon as it can be rendered,
+instead of waiting for the whole reply:
+
+- the WebSocket transport decides a layer is complete when all of its parts have
+  arrived, decompresses it immediately (`DecompressionStream`, so the main thread
+  stays free) and calls `onLayer` with
+  `{ layer, index, count, width, height }`; the request resolves later with the
+  same layers already decoded, so nothing is decompressed twice.
+- the in-game transport receives one SVG document, splits it and then calls
+  `onLayer` for every layer before resolving; there is nothing to stream there.
+- a coalesced caller that attaches mid-transfer receives every layer that is
+  still in flight, and the resolved result always contains all of them.
+
+The WebSocket request allows 120 seconds for the first terrain frame and then a
+60 second idle timeout that every chunk restarts, so a slow map that still makes
+progress is not killed by a fixed total deadline.
+
+`splitTerrainSVG()` serializes the shared shell (root attributes plus `<defs>`)
+once and appends one serialized `<g>` per layer. It used to clone and re-serialize
+the whole `<defs>` for every layer, which dominated the split cost on large maps.
+
+The Map app is the only consumer: `Map.startTerrainLoad()` builds the view and
+`TerrainLayerPipeline` from the first callback (which carries the terrain size)
+and pushes each following layer into the pipeline. See
+[`map.md`](map.md#terrain-tile-loading).
 
 App bundles loaded through `LoadGameFileText` are not plain JavaScript:
 `Backend/AppDirectory.ts` unpacks the `TACPHONE-BUNDLE:<version>:<codec>:<base64>`

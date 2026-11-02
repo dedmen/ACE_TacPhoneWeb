@@ -2,11 +2,9 @@ import React, { createRef, type RefObject } from 'react'
 import styles from './styles.module.scss'
 
 import "ol/ol.css";
-import type { AppProps, TerrainData, TerrainLayer } from '@ace-tacphone/api';
-import Map from "ol/Map";
+import type { AppProps, TerrainData, TerrainLayer, TerrainLayerProgress } from '@ace-tacphone/api';
 import { View } from 'ol';
 import type { ViewOptions } from 'ol/View.js';
-import TileLayer from 'ol/layer/Tile';
 import VectorLayer from 'ol/layer/Vector';
 import VectorSource from 'ol/source/Vector';
 import Feature from 'ol/Feature';
@@ -22,7 +20,6 @@ import Zoom from 'ol/control/Zoom';
 import Projection from 'ol/proj/Projection';
 import { getTopLeft } from 'ol/extent.js';
 import TileGrid from 'ol/tilegrid/TileGrid.js';
-import ImageTileSource from 'ol/source/ImageTile';
 
 import { LayerSwitcher } from './LayerSwitcher';
 import { MarkerOverlay, type MarkerOverlayHandle } from './MapMarkers/MarkerOverlay';
@@ -50,8 +47,9 @@ import {
     unregisterMapViewTestProbe,
     type MapHighlightState,
     type MapViewDebugState,
-    type MapViewTileStats,
 } from './MapMarkers/MapTestHooks';
+import { PriorityMap } from './layers/PriorityMap';
+import { TerrainLayerPipeline, type TerrainTileSettings } from './layers/TerrainLayerPipeline';
 import { t } from './i18n';
 
 // The view's zoom-out limit must not depend on the user's tile size: a 512 px
@@ -84,22 +82,20 @@ class App extends React.Component<AppProps & { mode?: 'map' | 'gps' }, MapState>
     // Setup the ref for the map canvas container element
     private mapRef: RefObject<HTMLDivElement | null> = createRef();
     // Keep the map instance directly on the class instance
-    private map: Map | null = null;
-    private terrainLayers: TileLayer<ImageTileSource>[] = [];
+    private map: PriorityMap | null = null;
+    private terrainPipeline: TerrainLayerPipeline | null = null;
     private terrainLoadToken = 0;
     private terrainViewReady = false;
-    /** Per-layer tile load counters for the debug test hook. */
-    private terrainTileStats: MapViewTileStats[] = [];
     private lastTerrainTileEventAt = 0;
 
     private highlightSource: VectorSource | null = null;
     private highlightLayer: VectorLayer<VectorSource> | null = null;
     private highlightTimer: number | null = null;
     private highlightState: MapHighlightState | null = null;
-    /** Decoded terrain layers, kept so option changes can rebuild tiles without a game request. */
+    /** Terrain metadata, kept so option changes can rebuild tiles without a game request. */
     private terrainSource: {
         extent: [number, number, number, number];
-        layers: Array<{ name: string; image: HTMLImageElement }>;
+        layers: TerrainLayer[];
     } | null = null;
 
     /** Current tiling/rendering settings, refreshed when the host options change. */
@@ -221,7 +217,7 @@ class App extends React.Component<AppProps & { mode?: 'map' | 'gps' }, MapState>
             extent: INITIAL_TERRAIN_EXTENT
         });
 
-        const map = new Map({
+        const map = new PriorityMap({
             target: this.mapRef.current,
             layers: [],
             pixelRatio: this.renderSettings.pixelRatio,
@@ -269,10 +265,38 @@ class App extends React.Component<AppProps & { mode?: 'map' | 'gps' }, MapState>
             }
         });
 
+        this.startTerrainLoad();
+    }
+
+    /**
+     * Requests the terrain and renders every layer the host delivers, instead of
+     * waiting for the complete reply. Light layers arrive first, so the map
+     * becomes visible while the heavy SVG layers are still transferring.
+     */
+    private startTerrainLoad(): void {
+        const loadToken = ++this.terrainLoadToken;
+
         void window.TacPhone.networking
-            .LoadGameTerrain({ drawTreeObjects: false, layerMountains: true, simpleRoads: true })
-            .then((terrain) => this.applyTerrainLayers(terrain))
+            .LoadGameTerrain(
+                { drawTreeObjects: false, layerMountains: true, simpleRoads: true },
+                (progress) => {
+                    if (this.map && loadToken === this.terrainLoadToken) {
+                        this.receiveTerrainLayer(progress);
+                    }
+                },
+            )
+            .then((terrain) => {
+                if (!this.map || loadToken !== this.terrainLoadToken) {
+                    return;
+                }
+
+                this.applyTerrainLayers(terrain);
+            })
             .catch((error: unknown) => {
+                if (loadToken !== this.terrainLoadToken) {
+                    return;
+                }
+
                 console.error('Failed to load map terrain', error);
                 this.showTerrainError(error);
             });
@@ -519,14 +543,30 @@ class App extends React.Component<AppProps & { mode?: 'map' | 'gps' }, MapState>
      * and how many tiles each terrain layer has started/finished loading.
      */
     public getMapViewDebugState(): MapViewDebugState {
-        const tiles = this.terrainTileStats.map((stats) => ({ ...stats }));
+        const resolution = this.map?.getView().getResolution();
+        const viewResolution = typeof resolution === 'number' && Number.isFinite(resolution)
+            ? resolution
+            : null;
+        const mapSize = this.map?.getSize();
+        const mapTarget = this.map?.getTargetElement();
+        const tiles = this.terrainPipeline?.getStats(viewResolution) ?? [];
+        const pendingLayers = this.terrainPipeline?.getPendingLayerCount() ?? 0;
         const started = tiles.reduce((total, stats) => total + stats.started, 0);
         const finished = tiles.reduce((total, stats) => total + stats.finished, 0);
         const errored = tiles.reduce((total, stats) => total + stats.errored, 0);
         const loading = tiles.reduce((total, stats) => total + stats.loading, 0);
+        // The pipeline can settle from the streamed layers alone; the full reply
+        // is what gives the layer switcher and the GPS overlay their layer list.
+        const terrainDataReady = this.state.terrainData !== null;
 
         return {
             ready: this.terrainViewReady && this.map !== null,
+            resolution: viewResolution,
+            pendingLayers,
+            terrainDataReady,
+            terrainError: this.state.terrainError,
+            mapTargetConnected: mapTarget?.isConnected ?? false,
+            mapSize: mapSize ? [mapSize[0], mapSize[1]] : null,
             tiles,
             started,
             finished,
@@ -535,7 +575,10 @@ class App extends React.Component<AppProps & { mode?: 'map' | 'gps' }, MapState>
             quietForMs: this.lastTerrainTileEventAt === 0
                 ? 0
                 : Math.max(0, Date.now() - this.lastTerrainTileEventAt),
-            settled: started > 0 && loading === 0,
+            settled: started > 0
+                && loading === 0
+                && pendingLayers === 0
+                && terrainDataReady,
             highlight: this.highlightState
                 ? {
                     ...this.highlightState,
@@ -582,6 +625,10 @@ class App extends React.Component<AppProps & { mode?: 'map' | 'gps' }, MapState>
         this.terrainLoadToken += 1;
         this.terrainSource = null;
 
+        // Dispose the pipeline while the map is still attached: it has to
+        // remove the live layers and clear their renderers.
+        this.disposeTerrainPipeline();
+
         const map = this.map;
         this.map = null;
 
@@ -589,9 +636,6 @@ class App extends React.Component<AppProps & { mode?: 'map' | 'gps' }, MapState>
             // Detach the map from the DOM target
             map.setTarget(undefined);
         }
-
-        // this.map is already null, so this only disposes the tile sources.
-        this.disposeTerrainLayers();
     }
 
     private toggleLayerSwitcherMenu = (): void => {
@@ -618,104 +662,133 @@ class App extends React.Component<AppProps & { mode?: 'map' | 'gps' }, MapState>
         });
     }
 
-    private loadTerrainLayerImage(layer: TerrainLayer): Promise<{ name: string; image: HTMLImageElement }> {
-        return new Promise((resolve, reject) => {
-            const image = new Image();
-            const imageUrl = URL.createObjectURL(
-                new Blob([layer.svg], { type: "image/svg+xml;charset=utf-8" }),
-            );
+    private readTileSettings(): TerrainTileSettings {
+        const settings = this.getRenderSettings();
 
-            image.onload = () => {
-                // The browser no longer needs the blob URL once the image is decoded.
-                URL.revokeObjectURL(imageUrl);
-                resolve({ name: layer.name, image });
-            };
-
-            image.onerror = () => {
-                URL.revokeObjectURL(imageUrl);
-                reject(new Error(`Failed to load terrain layer "${layer.name}".`));
-            };
-
-            image.src = imageUrl;
-        });
-    }
-
-    private disposeTerrainLayers(): void {
-        this.terrainTileStats = [];
-        this.lastTerrainTileEventAt = 0;
-
-        const map = this.map;
-        const layers = this.terrainLayers;
-        this.terrainLayers = [];
-
-        for (const layer of layers) {
-            map?.removeLayer(layer);
-
-            // Do not call layer.dispose() here. It nulls the layer stored in the
-            // shared layer state, but Map.frameState_ keeps referencing that state
-            // until the next render. A pointermove in between makes
-            // forEachFeatureAtPixel() hit `null.hasRenderer()` and throw.
-            // Clearing the renderer and source releases the same resources
-            // without invalidating the last frame state.
-            layer.clearRenderer();
-
-            const source = layer.getSource();
-            layer.setSource(null);
-            source?.dispose();
-        }
-    }
-
-    private async applyTerrainLayers(terrain: TerrainData): Promise<void> {
-        const map = this.map;
-        if (!map) {
-            return;
-        }
-
-        const loadToken = ++this.terrainLoadToken;
-        this.setState({ terrainError: null, terrainData: terrain });
-
-        // Load every split SVG image first, so a failure cannot leave
-        // half-created tile sources behind.
-        const loadedLayers = await Promise.all(
-            terrain.layers.map((layer) => this.loadTerrainLayerImage(layer))
-        ).catch((error: unknown) => {
-            // Ignore failures from a load that has already been superseded.
-            if (this.map === map && loadToken === this.terrainLoadToken) {
-                throw error;
-            }
-
-            return null;
-        });
-
-        if (!loadedLayers || this.map !== map || loadToken !== this.terrainLoadToken) {
-            return;
-        }
-
-        // Keep the decoded layers so option changes can rebuild the tile sources
-        // without asking the game for the terrain again.
-        this.terrainSource = {
-            extent: [0, 0, terrain.width, terrain.height],
-            layers: loadedLayers,
+        return {
+            tileSize: settings.tileSize,
+            smoothScaling: settings.smoothScaling,
+            // GPS rotates in place; preload a ring beyond the viewport so the
+            // corners do not appear as black tiles while turning.
+            preload: this.isGps ? Math.max(2, settings.tilePreload) : settings.tilePreload,
+            cacheSize: settings.tileCacheSize,
         };
+    }
 
-        this.rebuildTerrainLayers();
+    private disposeTerrainPipeline(): void {
+        this.terrainPipeline?.dispose();
+        this.terrainPipeline = null;
+        this.lastTerrainTileEventAt = 0;
+    }
+
+    /** Shows the localized alert only when every terrain layer failed to decode. */
+    private maybeShowAllLayersFailedError(): void {
+        const error = this.terrainPipeline?.getAllFailedError() ?? null;
+        if (error && this.state.terrainError !== error) {
+            this.showTerrainError(error);
+        }
+    }
+
+    /** Renders one terrain layer that arrived before the reply was complete. */
+    private receiveTerrainLayer(progress: TerrainLayerProgress): void {
+        if (!this.map) {
+            return;
+        }
+
+        if (!this.terrainPipeline) {
+            // The first layer carries the terrain metadata. Build the view and
+            // the tile grid now; the remaining layers stream into the pipeline.
+            this.terrainSource = {
+                extent: [0, 0, progress.width, progress.height],
+                layers: [],
+            };
+
+            // A reload replaces the whole pipeline: the previous layers must not
+            // survive next to the new ones.
+            this.disposeTerrainPipeline();
+            if (!this.ensureTerrainPipeline()) {
+                return;
+            }
+        }
+
+        this.terrainPipeline?.pushLayer(progress.layer, {
+            index: progress.index,
+            count: progress.count,
+        });
     }
 
     /**
-     * Builds the terrain tile layers from the decoded images and the current
+     * Completes a terrain load. When the host could not stream (a coalesced
+     * cache hit, for example) this adds every layer at once.
+     */
+    private applyTerrainLayers(terrain: TerrainData): void {
+        if (!this.map) {
+            return;
+        }
+
+        this.setState({ terrainError: null, terrainData: terrain });
+
+        this.terrainSource = {
+            extent: [0, 0, terrain.width, terrain.height],
+            layers: terrain.layers,
+        };
+
+        if (!this.terrainPipeline) {
+            this.disposeTerrainPipeline();
+            if (!this.ensureTerrainPipeline()) {
+                return;
+            }
+        }
+
+        this.terrainPipeline?.finish(terrain.layers);
+    }
+
+    /** Creates the pipeline for the current terrain metadata and options. */
+    private ensureTerrainPipeline(): boolean {
+        const map = this.map;
+        if (!map) {
+            return false;
+        }
+
+        const tiling = this.rebuildTerrainView();
+        if (!tiling || this.map !== map) {
+            return false;
+        }
+
+        this.terrainPipeline = new TerrainLayerPipeline({
+            map,
+            projection: map.getView().getProjection(),
+            tileGrid: tiling.tileGrid,
+            resolutions: tiling.resolutions,
+            settings: this.readTileSettings(),
+            onTileActivity: () => {
+                this.lastTerrainTileEventAt = Date.now();
+            },
+            onStatsChanged: () => {
+                this.maybeShowAllLayersFailedError();
+            },
+        });
+
+        return true;
+    }
+
+    /**
+     * Builds the view constraints and tile grid for the current terrain size and
      * render settings. Used for the first load and whenever a tiling option
      * changes, without touching the game-side terrain data.
      */
-    private rebuildTerrainLayers(): void {
+    private rebuildTerrainView(): {
+        tileGrid: TileGrid;
+        resolutions: number[];
+    } | null {
         const map = this.map;
         const terrain = this.terrainSource;
         if (!map || !terrain) {
-            return;
+            return null;
         }
 
         const settings = this.getRenderSettings();
         const extent = terrain.extent;
-        const tileSize = settings.tileSize;
         const projection = map.getView().getProjection();
         projection.setExtent(extent);
 
@@ -730,118 +803,8 @@ class App extends React.Component<AppProps & { mode?: 'map' | 'gps' }, MapState>
         const tileGrid = new TileGrid({
             origin: getTopLeft(extent),
             resolutions,
-            tileSize,
+            tileSize: settings.tileSize,
         });
-
-        const newLayers: TileLayer<ImageTileSource>[] = [];
-        try {
-            for (const loadedLayer of terrain.layers) {
-                const tileImage = loadedLayer.image;
-
-                const svgTileSource = new ImageTileSource({
-                    tileGrid,
-                    projection,
-                    interpolate: settings.smoothScaling,
-                    // The loader function handles slicing on demand.
-                    loader: (z, x, y) => {
-                        return new Promise((resolve, reject) => {
-                            // Calculate how many raw coordinate map units fit inside this single screen slice
-                            const resolution = resolutions[z];
-                            const chunkWidth = tileSize * resolution;
-                            const chunkHeight = tileSize * resolution;
-
-                            // Pinpoint the exact viewport frame block context to isolate and crop
-                            const svgX = x * chunkWidth;
-                            const svgY = y * chunkHeight;
-
-                            // Draw the computed vector fragment text onto an offscreen canvas component
-                            const canvas = document.createElement('canvas');
-                            canvas.width = tileSize;
-                            canvas.height = tileSize;
-                            const ctx = canvas.getContext('2d');
-
-                            if (!ctx) {
-                                reject(new Error('Failed to create a 2D canvas context for the terrain tile.'));
-                                return;
-                            }
-
-                            ctx.imageSmoothingEnabled = settings.smoothScaling;
-
-                            // Instantaneous Blit/Crop: Sub-sections of the single pre-cached image are drawn directly
-                            ctx.drawImage(
-                                tileImage,
-                                svgX, svgY, chunkWidth, chunkHeight, // Bounding source box (Crop area on SVG)
-                                0, 0, tileSize, tileSize             // Target destination box
-                            );
-
-                            resolve(canvas);
-                        });
-                    },
-                });
-
-                newLayers.push(new TileLayer({
-                    properties: {title: loadedLayer.name},
-                    source: svgTileSource,
-                    // GPS rotates in place; preload a ring beyond the viewport so
-                    // the corners do not appear as black tiles while turning.
-                    preload: this.isGps ? Math.max(2, settings.tilePreload) : settings.tilePreload,
-                    // A phone-sized viewport only needs a few tiles per layer. The
-                    // default (512) keeps hundreds of MiB of canvases per layer alive.
-                    cacheSize: settings.tileCacheSize,
-                }));
-            }
-        } catch (error) {
-            newLayers.forEach((layer) => {
-                const source = layer.getSource();
-                layer.setSource(null);
-                source?.dispose();
-                layer.dispose();
-            });
-            throw error;
-        }
-
-        // Replace any previous terrain layers so repeated rebuilds cannot stack duplicates.
-        this.disposeTerrainLayers();
-
-        this.terrainTileStats = [];
-        this.lastTerrainTileEventAt = Date.now();
-
-        newLayers.forEach((layer) => {
-            map.addLayer(layer);
-
-            const source = layer.getSource();
-            const layerName = layer.get('title');
-            if (!source) {
-                return;
-            }
-
-            const stats: MapViewTileStats = {
-                name: typeof layerName === 'string' ? layerName : 'Terrain',
-                started: 0,
-                finished: 0,
-                errored: 0,
-                loading: 0,
-            };
-
-            source.on('tileloadstart', () => {
-                stats.started += 1;
-                stats.loading += 1;
-                this.lastTerrainTileEventAt = Date.now();
-            });
-            source.on('tileloadend', () => {
-                stats.finished += 1;
-                stats.loading = Math.max(0, stats.loading - 1);
-                this.lastTerrainTileEventAt = Date.now();
-            });
-            source.on('tileloaderror', () => {
-                stats.errored += 1;
-                stats.loading = Math.max(0, stats.loading - 1);
-                this.lastTerrainTileEventAt = Date.now();
-            });
-
-            this.terrainTileStats.push(stats);
-        });
-        this.terrainLayers = newLayers;
 
         // The view constraints depend on the actual terrain size, so they can only
         // be built now. Views have no setExtent(), hence the replacement view.
@@ -851,11 +814,12 @@ class App extends React.Component<AppProps & { mode?: 'map' | 'gps' }, MapState>
         this.terrainViewReady = true;
 
         // Keep the user's position on a rebuild; on the first load (or if the old
-        // position no longer fits the current profile) show the whole map.
+        // position no longer fits the current profile) show the whole map at once.
+        // Omitting `duration` applies the new state immediately; an animated fit
+        // throttles new tile loads and would also request intermediate zooms that
+        // are never displayed.
         if (!preserved) {
-            view.fit(extent, {
-                duration: 1000
-            });
+            view.fit(extent);
         }
 
         // A flyTo() that arrived before the terrain view existed must win over the
@@ -863,6 +827,25 @@ class App extends React.Component<AppProps & { mode?: 'map' | 'gps' }, MapState>
         if (this.pendingFlyTo) {
             this.applyPendingFlyTo();
         }
+
+        return { tileGrid, resolutions };
+    }
+
+    /**
+     * Rebuilds the terrain tile layers for the current render settings. The
+     * decoded layer images are reused, so no game request is needed.
+     */
+    private rebuildTerrainLayers(): void {
+        const tiling = this.rebuildTerrainView();
+        if (!tiling || !this.terrainPipeline) {
+            return;
+        }
+
+        this.terrainPipeline.restart(
+            this.readTileSettings(),
+            tiling.tileGrid,
+            tiling.resolutions,
+        );
     }
 
     /** Applies changed Options values to the live map. */

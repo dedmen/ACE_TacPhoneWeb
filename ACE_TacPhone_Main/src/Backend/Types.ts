@@ -55,6 +55,8 @@ export type {
     TargetPolicy,
     TerrainData,
     TerrainLayer,
+    TerrainLayerListener,
+    TerrainLayerProgress,
 } from "@ace-tacphone/api";
 
 export { TACPHONE_API_VERSION } from "@ace-tacphone/api";

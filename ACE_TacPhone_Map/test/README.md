@@ -12,6 +12,7 @@ Three tiers for `ACE_TacPhone_Map`:
 | `polyline-draw` | Playwright browser | Arma + host page + installed Chrome channel + touch-capable context |
 | `polyline-edit` | Playwright browser | Arma + host page + installed Chrome channel |
 | `map-view` | Playwright browser | Arma + host page + installed Chrome channel |
+| `map-tiles` | Playwright browser | Arma + host page + installed Chrome channel |
 | `gps-panel` | Playwright browser | Arma + host page + installed Chrome channel |
 | `gps-route` | Playwright browser | Arma + host page + installed Chrome channel |
 | `gps-shared` | Playwright browser | Arma + host page + installed Chrome channel |
@@ -117,6 +118,46 @@ for the terrain view and a quiet tile-loading period (750 ms without a tile
 start/end/error) before asserting anything. A map that is still painting
 therefore cannot make a marker or polyline assertion flaky.
 
+`map-tiles` additionally asserts that terrain layers are scheduled in priority
+order (terrain, roads, town names, airports, forests, rocks, mountains, unknown
+layers, then the heavy `objects` and `countlines`), that the heavy layers
+activate only after the complete reply and every light layer, and that they are
+LOD-hidden at a coarse view, so they start no tiles until the map is zoomed in.
+The check reads only `getViewState()` and skips the heavy-layer assertions on a
+terrain that has no `objects` / `countlines` layer.
+
+## Benchmark
+
+`test/benchmark/tile-size.mjs` is not a test and never runs as part of
+`test:map` or `test:all`. It measures the terrain tile crop in the installed
+Chrome with synthetic SVG layers and needs neither Arma nor the host page:
+
+```powershell
+node ACE_TacPhone_Map/test/benchmark/tile-size.mjs
+node ACE_TacPhone_Map/test/benchmark/tile-size.mjs --headed --runs 5 --sizes 128,256,512
+```
+
+It reports the SVG decode, the first tile crop and one full viewport of tiles per
+tile size. It does not measure the game protocol, so confirm a change to
+`TERRAIN_TILE_SIZE` on a real map with `map-tiles` and the `getViewState()`
+timings before shipping it.
+
+`test/benchmark/map-terrain-live.mjs` measures the real thing: it opens the Map
+through the host page, waits for the initial load, then pans and zooms and
+reports per-layer `activatedAfterMs`/`firstTileStartMs`, pan/zoom settle time,
+requested tile counts and long tasks. It needs Arma serving terrain plus the dev
+server, and it rewrites `TERRAIN_TILE_SIZE` per size and restores the source at
+the end:
+
+```powershell
+node ACE_TacPhone_Map/test/benchmark/map-terrain-live.mjs
+node ACE_TacPhone_Map/test/benchmark/map-terrain-live.mjs --sizes 128,256 --runs 2
+node ACE_TacPhone_Map/test/benchmark/map-terrain-live.mjs --headed --page-url http://localhost:5173/
+```
+
+Use it before changing `TERRAIN_TILE_SIZE` or the LOD cut-offs. It is opt-in
+(not in `test:map`/`test:all`) because it needs a running game with terrain data.
+
 ## Layout
 
 ```text
@@ -131,7 +172,12 @@ test/
 │   ├── gps-speed.unit.mjs            # legSpeed speed model
 │   ├── gps-splice.unit.mjs           # RouteSplice helpers + shared route codec
 │   ├── gps-advisor.unit.mjs          # TransportModeAdvisor state machine
-│   └── gps-payload.unit.mjs          # map.gps_route contract + loader guard
+│   ├── gps-routing.unit.mjs          # route metrics, turns, deviation, road graph
+│   ├── gps-payload.unit.mjs          # map.gps_route contract + loader guard
+│   └── terrain-layer-priority.unit.mjs # terrain rank/LOD planning
+├── benchmark/
+│   ├── tile-size.mjs                 # opt-in TERRAIN_TILE_SIZE crop benchmark
+│   └── map-terrain-live.mjs          # opt-in real-game terrain load/pan/zoom benchmark
 ├── scenarios/
 │   ├── marker-protocol.test.mjs      # types/channels, custom RGBA colors, text clamp
 │   ├── marker-channels.test.mjs      # multiplayer layer visibility + active dimming
@@ -139,6 +185,7 @@ test/
 │   ├── polyline-draw.test.mjs        # mouse clicks, touch taps, freehand strokes
 │   ├── polyline-edit.test.mjs        # vertex drag, save, cancel and the upsert guard
 │   ├── map-view.test.mjs             # zoom, pan, flyTo bbox and the temporary highlight
+│   ├── map-tiles.test.mjs            # terrain load priority and heavy-layer LOD
 │   ├── gps-panel.test.mjs            # HUD, fix, travel mode, options, interest, read-only markers
 │   ├── gps-route.test.mjs            # waypoint clicks, air/foot/ground/boat routes, follow, cleanup
 │   ├── gps-shared.test.mjs           # shared preview/discard/bad payload/start-join/replace

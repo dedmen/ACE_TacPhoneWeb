@@ -387,6 +387,27 @@ export interface TerrainData {
     layers: TerrainLayer[];
 }
 
+/** One terrain layer delivered before the whole terrain reply is complete. */
+export interface TerrainLayerProgress {
+    /** The decoded layer, ready to be rendered. */
+    layer: TerrainLayer;
+    /** Position of the layer in `TerrainData.layers`. */
+    index: number;
+    /** Total number of layers in the reply. */
+    count: number;
+    /** Terrain width in metres (identical for every layer). */
+    width: number;
+    /** Terrain height in metres (identical for every layer). */
+    height: number;
+}
+
+/**
+ * Receives each terrain layer as soon as it is available. Layers arrive in
+ * document order; the callback is optional and may be called again for a layer
+ * if a coalesced request attaches late.
+ */
+export type TerrainLayerListener = (progress: TerrainLayerProgress) => void;
+
 /** Transport between the page and the game. */
 export interface Networking {
     WhenReady(): Promise<void>;
@@ -404,8 +425,12 @@ export interface Networking {
     /**
      * Loads and preprocesses terrain data from the game filesystem, split into
      * standalone per-layer SVG documents.
+     *
+     * `onLayer` receives every layer as soon as it has been decoded, so a caller
+     * can render the cheap layers while the heavy ones are still transferring.
+     * The promise still resolves with the complete terrain.
      */
-    LoadGameTerrain(config: object): Promise<TerrainData>;
+    LoadGameTerrain(config: object, onLayer?: TerrainLayerListener): Promise<TerrainData>;
     /**
      * Loads the terrain and streams it back to the game as compressed layer
      * chunks. Host-internal producer path used by the built-in main app; only

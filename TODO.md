@@ -183,6 +183,25 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
   `CfgMarkerBrushes` pattern textures. `MarkerLayer.tsx` already stores `shape`
   and `brush` from `Marker.Upsert`.
 
+### Terrain tile loading
+
+- [ ] **[cleanup]** Major-GC pressure and the first-tile `drawImage`: Chromium
+  spends ~560 ms on the first `drawImage` from the multi-megabyte `objects` SVG
+  (the SVG layout pass; DevTools reports a forced reflow) and runs repeated major
+  GCs while tile canvases are allocated. Page JS cannot suspend V8 GC.
+  `transition: 0` on the terrain tile sources avoids rasterizing two zoom levels
+  during every zoom, and heavy decode now waits until the base tiles have
+  finished loading. Remaining: the first `drawImage` of the heavy SVG still costs
+  ~560 ms on the first deep zoom; pre-warming would move it, a raster pyramid
+  would remove it. Consider releasing layer SVG text once the GPS masks no longer
+  need it.
+- [ ] **[cleanup]** Tune `OBJECTS_LOD_MAX_RESOLUTION`,
+  `COUNTLINES_LOD_MAX_RESOLUTION` and `MOUNTAINS_LOD_MAX_RESOLUTION`
+  (`src/layers/TerrainLayerPriority.ts`) on several maps and screen sizes.
+  Expose them as Map options only if users need control.
+- [ ] **[feature]** Consider a layer-switcher hint ("zoom in to see this layer")
+  for LOD-hidden layers, with localization keys.
+
 ### Lifecycle and feedback
 
 - [x] **[decision]** Default marker color: the Web UI sends `color: "Default"`

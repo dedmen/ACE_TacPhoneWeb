@@ -85,6 +85,20 @@ export interface MapDebugPolylineState {
 /** One terrain tile layer's load counters (debug tests only). */
 export interface MapViewTileStats {
     name: string;
+    /** Loading rank; a lower value is decoded and added first. */
+    priority: number;
+    /** True until the layer image is decoded and the layer is added (or failed). */
+    pending: boolean;
+    /** True when the layer is user-visible and the view is below `maxResolution`. */
+    lodVisible: boolean;
+    /** LOD cut-off; `Infinity` means the layer is always visible. */
+    maxResolution: number;
+    /** Milliseconds from pipeline start to layer activation, or null. */
+    activatedAfterMs: number | null;
+    /** Milliseconds from pipeline start to the first tile start, or null. */
+    firstTileStartMs: number | null;
+    /** Decode error message, or null. */
+    error: string | null;
     started: number;
     finished: number;
     errored: number;
@@ -101,6 +115,18 @@ export interface MapHighlightState {
 /** Terrain view readiness and tile loading, used to wait for a fully drawn map. */
 export interface MapViewDebugState {
     ready: boolean;
+    /** Current view resolution, or null before the terrain view exists. */
+    resolution: number | null;
+    /** Layer images still decoding or not yet added. Zero when all are resolved. */
+    pendingLayers: number;
+    /** True once the complete terrain reply (and its layer list) arrived. */
+    terrainDataReady: boolean;
+    /** Terrain error shown by the app, or null. */
+    terrainError: string | null;
+    /** True while the map's render target is still connected to the document. */
+    mapTargetConnected: boolean;
+    /** Map viewport size in CSS pixels, or null before the map exists. */
+    mapSize: [number, number] | null;
     tiles: MapViewTileStats[];
     started: number;
     finished: number;
@@ -108,7 +134,7 @@ export interface MapViewDebugState {
     loading: number;
     /** Milliseconds since the last tile start/end/error. */
     quietForMs: number;
-    /** True once at least one tile started and no tile is still loading. */
+    /** True once a tile started, nothing is loading, every layer is resolved and the full terrain data arrived. */
     settled: boolean;
     /** Active fly-to highlight, or null when none is shown. */
     highlight: MapHighlightState | null;

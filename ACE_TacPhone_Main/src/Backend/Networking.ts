@@ -1,150 +1,43 @@
 import "./A3API";
 import { SendMessageToApp } from "./AppMessaging";
-import { compressAndToBase64, decompressFromBase64 } from "./Compression";
 import { decodeGameText, decodeGameTextDeep } from "./GameText";
-import type { Networking, TerrainData, TerrainLayer } from "./Types";
+import {
+    TERRAIN_CHUNK_IDLE_TIMEOUT_MS,
+    TERRAIN_INITIAL_TIMEOUT_MS,
+    TerrainRequestCache,
+    TerrainTransferAssembler,
+    encodeTerrainChunks,
+    notifyTerrainLayers,
+    readTerrainReply,
+    splitTerrainSVG,
+} from "./TerrainCache";
+import type {
+    Networking,
+    TerrainData,
+    TerrainLayerListener,
+    TerrainLayerProgress,
+} from "./Types";
 import { t } from "./i18n";
 
-/** Target maximum size of one terrain chunk's base64 payload. */
-const MAX_TERRAIN_CHUNK_CHARS = 6 * 1024 * 1024;
+/** Short description of a request for error logs; never includes large payloads. */
+function describeRequest(data: object): string {
+    const record = data as Record<string, unknown>;
+    const fields = ["a", "c", "uid", "index", "count", "part", "name"]
+        .filter((key) => record[key] !== undefined)
+        .map((key) => `${key}=${String(record[key])}`);
 
-/**
- * How long a completed terrain result is reused for the same config.
- *
- * StrictMode mounts the Map twice in development, so two identical requests
- * start back to back. Coalescing in-flight requests handles that; the short
- * completed TTL also catches the second request arriving just after the first
- * resolves. It is intentionally short so a mission/world change cannot serve
- * stale terrain for long.
- */
-const TERRAIN_CACHE_TTL_MS = 5000;
-/**
- * A pending request older than this is considered stuck and is not reused.
- * A3API has no cancellation, so a hung game reply would otherwise poison every
- * later terrain request for the rest of the page session.
- */
-const TERRAIN_PENDING_STALE_MS = 3000;
-
-interface TerrainCacheEntry {
-    promise: Promise<TerrainData>;
-    settled: boolean;
-    startedAt: number;
-    expiresAt: number;
-}
-
-/** Coalesces identical terrain requests and briefly caches the result. */
-function coalescedTerrainRequest(
-    cache: Map<string, TerrainCacheEntry>,
-    config: object,
-    load: () => Promise<TerrainData>,
-): Promise<TerrainData> {
-    const key = JSON.stringify(config);
-    const now = Date.now();
-    const existing = cache.get(key);
-    const reusable = existing && (existing.settled
-        ? now < existing.expiresAt
-        : now - existing.startedAt < TERRAIN_PENDING_STALE_MS);
-    if (reusable) {
-        return existing.promise;
-    }
-    if (existing) {
-        cache.delete(key);
+    if (typeof record.data === "string") {
+        fields.push(`dataChars=${record.data.length}`);
     }
 
-    const entry: TerrainCacheEntry = {
-        promise: load(),
-        settled: false,
-        startedAt: now,
-        expiresAt: 0,
-    };
-    cache.set(key, entry);
-
-    entry.promise.then(
-        () => {
-            entry.settled = true;
-            entry.expiresAt = Date.now() + TERRAIN_CACHE_TTL_MS;
-        },
-        () => {
-            if (cache.get(key) === entry) {
-                cache.delete(key);
-            }
-        },
-    );
-
-    return entry.promise;
-}
-
-/**
- * Splits a whole terrain SVG into standalone per-layer SVG documents.
- *
- * Host-internal producer helper: the game response is the only place that has
- * the DOM, so the layer split happens here instead of in an app.
- */
-function splitTerrainSVG(svgText: string): TerrainData {
-    const svgDoc = (new DOMParser()).parseFromString(svgText, "image/svg+xml");
-    const rootSvg = svgDoc.documentElement;
-
-    if (rootSvg.tagName.toLowerCase() !== "svg")
-        throw new Error("The terrain response is not a valid SVG document.");
-
-    // The terrain size lives on the root <svg>; the Map uses it for tiling/scaling.
-    const widthAttribute = rootSvg.getAttribute("width");
-    const heightAttribute = rootSvg.getAttribute("height");
-    const width = Number(widthAttribute);
-    const height = Number(heightAttribute);
-
-    if (
-        widthAttribute === null ||
-        heightAttribute === null ||
-        !Number.isFinite(width) ||
-        !Number.isFinite(height) ||
-        width <= 0 ||
-        height <= 0
-    ) {
-        throw new Error("The terrain SVG is missing a valid width or height.");
-    }
-
-    // <defs> is shared by every layer, so each standalone document gets its own copy.
-    const originalDefs = rootSvg.querySelector("defs");
-    if (!originalDefs)
-        throw new Error("The terrain SVG is missing its <defs> section.");
-
-    const layerElements = rootSvg.querySelectorAll("svg > g");
-    if (layerElements.length === 0)
-        throw new Error("The terrain SVG does not contain any layers.");
-
-    const serializer = new XMLSerializer();
-    const layers: TerrainLayer[] = [];
-
-    layerElements.forEach((layer, index) => {
-        // Shallow-clone the root so every document keeps the same attributes.
-        const newSvg = rootSvg.cloneNode(false);
-        newSvg.appendChild(originalDefs.cloneNode(true));
-        newSvg.appendChild(layer.cloneNode(true));
-
-        layers.push({
-            name: layer.id || `Layer ${index + 1}`,
-            svg: serializer.serializeToString(newSvg),
-        });
-    });
-
-    return { width, height, layers };
-}
-
-/** Splits a base64 string into fragments of at most `maxChars` characters. */
-function splitBase64(data: string, maxChars: number): string[] {
-    if (maxChars <= 0) throw new Error("The terrain chunk size must be positive.");
-
-    const parts: string[] = [];
-    for (let offset = 0; offset < data.length; offset += maxChars)
-        parts.push(data.slice(offset, offset + maxChars));
-
-    return parts;
+    return fields.length > 0 ? `(${fields.join(", ")})` : "(unknown request)";
 }
 
 class NetworkingA3 implements Networking {
     requestCounter: number = 0;
-    private readonly terrainCache = new Map<string, TerrainCacheEntry>();
+    // The in-game page is recreated when the game terrain changes, so one
+    // completed result remains valid for the page's whole lifetime.
+    private readonly terrainCache = new TerrainRequestCache(Number.POSITIVE_INFINITY, true);
     constructor() {
         console.log("NetworkStartup A3");
     };
@@ -168,7 +61,42 @@ class NetworkingA3 implements Networking {
                     // The engine base64-encodes SQF replies and we decode them with atob,
                     // which gives a byte string. Repair the UTF-8 before parsing so string
                     // values are not mojibake; ASCII payloads take the no-copy fast path.
-                    resolve: (resultData): void => { resolve(JSON.parse(decodeGameText(atob(resultData))))},
+                    resolve: (resultData): void => {
+                        let text: string;
+
+                        try {
+                            text = decodeGameText(atob(resultData));
+                        } catch (error) {
+                            // Do not let a decode failure escape into the game's ExecJS
+                            // callback: it would be an uncaught error and the promise
+                            // would hang forever.
+                            console.error(
+                                `[TacPhone] Could not base64-decode the game reply for "${reqKey}"`
+                                + ` (${typeof resultData === "string" ? resultData.length : -1} chars)`
+                                + ` to request ${describeRequest(data)}:`,
+                                error,
+                            );
+                            reject(error);
+                            return;
+                        }
+
+                        try {
+                            resolve(JSON.parse(text));
+                        } catch (error) {
+                            // Keep the payload: a malformed/truncated reply is otherwise
+                            // impossible to diagnose from the console alone.
+                            console.error(
+                                `[TacPhone] Invalid JSON reply from the game for "${reqKey}"`
+                                + ` to request ${describeRequest(data)}:`
+                                + ` ${text.length} chars, head="${text.slice(0, 200)}",`
+                                + ` tail="${text.slice(-200).replace(/\s+/g, " ")}"`,
+                                error,
+                            );
+                            reject(new Error(
+                                `The game sent an invalid JSON reply for request "${reqKey}".`,
+                            ));
+                        }
+                    },
                     reject 
                 }
                 ))
@@ -202,75 +130,46 @@ class NetworkingA3 implements Networking {
         return window.A3API.RequestTexture(path, maxSize);
     }
 
-    LoadGameTerrain(config: object): Promise<TerrainData> {
-        return coalescedTerrainRequest(
-            this.terrainCache,
+    LoadGameTerrain(config: object, onLayer?: TerrainLayerListener): Promise<TerrainData> {
+        return this.terrainCache.load(
             config,
-            () => this.loadGameTerrainUncached(config),
+            (notify) => this.loadGameTerrainUncached(config, notify),
+            onLayer,
         );
     }
 
-    private loadGameTerrainUncached(config: object): Promise<TerrainData> {
+    private loadGameTerrainUncached(
+        config: object,
+        notify: (progress: TerrainLayerProgress) => void,
+    ): Promise<TerrainData> {
         // The SVG is text (including location names), so it needs the UTF-8 repair.
         return window.A3API.RequestTerrainSVG(config)
             .then(decodeGameText)
-            .then(splitTerrainSVG);
+            .then((svgText) => {
+                const terrain = splitTerrainSVG(svgText);
+                // The in-game transport receives one document; hand over every
+                // layer now so the caller has a single code path for both
+                // transports (the remote one notifies layer by layer).
+                notifyTerrainLayers(terrain, notify);
+                return terrain;
+            });
     }
 
     async ReplyTerrainSVG(uid: string | number, config: object): Promise<void> {
         // Producer path for the built-in main app: split, compress and send one
-        // chunk per layer part. All chunk logic stays private to this module.
-        // The diagnostic follows the runtime game debug flag; the bundled
-        // in-game page is normally a release web build, so console.warn is used.
+        // chunk per layer part. `encodeTerrainChunks` bounds peak memory to one
+        // layer at a time; the diagnostic follows the runtime game debug flag.
         try {
-            const debug = window.TacPhone?.gameInfo?.isDebug() === true;
             const terrain = await this.LoadGameTerrain(config);
-            const count = terrain.layers.length;
+            const debug = window.TacPhone?.gameInfo?.isDebug() === true;
 
-            // Sequential to bound peak memory: one compressed layer at a time.
-            for (let index = 0; index < count; index++) {
-                const layer = terrain.layers[index];
-                const data = await compressAndToBase64(layer.svg);
-                const parts = splitBase64(data, MAX_TERRAIN_CHUNK_CHARS);
-
-                if (debug) {
-                    // Release builds strip console.log, so use console.warn for
-                    // the runtime diagnostic.
-                    const rawBytes = new TextEncoder().encode(layer.svg).byteLength;
-                    const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
-                    const compressedBytes = Math.max(
-                        0,
-                        Math.floor((data.length * 3) / 4) - padding,
-                    );
-                    const ratio = compressedBytes > 0 ? rawBytes / compressedBytes : 0;
-                    const saved = rawBytes > 0 ? (1 - compressedBytes / rawBytes) * 100 : 0;
-                    const message =
-                        `[TacPhone] Terrain layer ${index + 1}/${count} "${layer.name}": ` +
-                        `${rawBytes} B SVG -> ${compressedBytes} B gzip ` +
-                        `(${data.length} base64 chars, ${parts.length} chunk(s)), ` +
-                        `ratio ${ratio.toFixed(2)}x, ${saved.toFixed(1)}% saved`;
-
-                    console.warn(message);
-                }
-
-                for (let part = 0; part < parts.length; part++) {
-                    const last = index === count - 1 && part === parts.length - 1;
-
-                    await this.Request({
-                        a: "main",
-                        c: "ReplyRequestTerrainSVG",
-                        uid,
-                        index,
-                        count,
-                        part,
-                        parts: parts.length,
-                        name: layer.name,
-                        width: terrain.width,
-                        height: terrain.height,
-                        data: parts[part],
-                        last,
-                    });
-                }
+            for await (const chunk of encodeTerrainChunks(terrain, debug)) {
+                await this.Request({
+                    a: "main",
+                    c: "ReplyRequestTerrainSVG",
+                    uid,
+                    ...chunk,
+                });
             }
         } catch (error) {
             // Tell the requester instead of leaving it waiting for the timeout.
@@ -304,20 +203,6 @@ type PendingRequest = {
     timeout: ReturnType<typeof setTimeout>;
 };
 
-/** Layers of one in-flight multi-frame terrain reply, keyed by request key. */
-type TerrainTransferLayer = {
-    name: string;
-    expectedParts: number;
-    parts: string[];
-};
-
-type TerrainTransfer = {
-    count: number;
-    width: number;
-    height: number;
-    layers: TerrainTransferLayer[];
-};
-
 /** Pairing/connection state of the public relay page. */
 export type RemoteState = "need-pairing" | "attaching" | "connected" | "host-offline" | "rejected";
 
@@ -341,7 +226,10 @@ const DEVICE_STORAGE_PREFIX = "tacphone.device.";
 
 class NetworkingWebsocket implements Networking {
     requestCounter: number = 0;
-    private readonly terrainCache = new Map<string, TerrainCacheEntry>();
+    // A relay host can change without this socket reconnecting, and the new host
+    // can serve a different terrain. Completed results are therefore never
+    // reused; only a request that is still in flight is shared (StrictMode).
+    private readonly terrainCache = new TerrainRequestCache(0);
     socket!: WebSocket;
     readonly remoteApi: RemoteSessionApi | null = null;
 
@@ -365,8 +253,14 @@ class NetworkingWebsocket implements Networking {
     // We cannot use A3API's pendingRequests implementation, so we ship our own
     private pendingRequests: { [key: string]: PendingRequest[] } = {};
 
-    // Terrain replies arrive as several frames with the same request key; buffer them here.
-    private terrainTransfers: { [key: string]: TerrainTransfer } = {};
+    // Buffers the ReplyRequestTerrainSVG frames and decodes each layer as soon
+    // as its last part arrives.
+    private readonly terrainAssembler = new TerrainTransferAssembler({
+        isPending: (key) => Boolean(this.pendingRequests[key]),
+        onProgress: (key) => this.refreshRequestTimeout(key, TERRAIN_CHUNK_IDLE_TIMEOUT_MS),
+        onError: (key, error) => this.rejectRequest(key, error),
+        onComplete: (key, terrain) => this._response(key, terrain),
+    });
 
     private remoteState: RemoteState = "need-pairing";
     private remoteError = "";
@@ -376,7 +270,7 @@ class NetworkingWebsocket implements Networking {
     private hostId = "";
 
     private rejectRequest(key: string, reason: unknown): void {
-        delete this.terrainTransfers[key];
+        this.terrainAssembler.forget(key);
 
         const waiters = this.pendingRequests[key];
         if (!waiters) return;
@@ -387,6 +281,26 @@ class NetworkingWebsocket implements Networking {
         for (const waiter of waiters) {
             clearTimeout(waiter.timeout);
             waiter.reject(reason);
+        }
+    }
+
+    /**
+     * Restarts the timeout of a pending request. Used for a streamed reply: as
+     * long as frames keep arriving, the transfer is alive even if it takes
+     * longer than the initial timeout.
+     */
+    private refreshRequestTimeout(key: string, timeoutMs: number): void {
+        const waiters = this.pendingRequests[key];
+        if (!waiters) return;
+
+        for (const waiter of waiters) {
+            clearTimeout(waiter.timeout);
+            waiter.timeout = setTimeout(() => {
+                this.rejectRequest(
+                    key,
+                    new Error(`TacPhone websocket request "${key}" timed out after ${timeoutMs}ms without a reply`),
+                );
+            }, timeoutMs);
         }
     }
 
@@ -431,7 +345,7 @@ class NetworkingWebsocket implements Networking {
     }
 
     _response(key: string, content: object) {
-        delete this.terrainTransfers[key];
+        this.terrainAssembler.forget(key);
 
         const waiters = this.pendingRequests[key];
         if (!waiters) return; // Request doesn't exist
@@ -450,104 +364,7 @@ class NetworkingWebsocket implements Networking {
         return waiterList.length == 1; // First insert
     }
 
-    /**
-     * Buffers one terrain reply frame. Returns true when `data` was a terrain
-     * frame (consumed or rejected) so the caller does not treat it as a reply.
-     */
-    private handleTerrainChunk(key: unknown, data: unknown): boolean {
-        if (typeof key !== "string" || !data || typeof data !== "object") return false;
-
-        const d = data as Record<string, unknown>;
-        if (d.c !== "ReplyRequestTerrainSVG") return false;
-
-        // A transfer for a request that is no longer pending can never be consumed.
-        if (!this.pendingRequests[key]) return true;
-
-        if (typeof d.error === "string") {
-            delete this.terrainTransfers[key];
-            this.rejectRequest(key, new Error(d.error));
-            return true;
-        }
-
-        const fail = (message: string): true => {
-            delete this.terrainTransfers[key];
-            this.rejectRequest(key, new Error(message));
-            return true;
-        };
-
-        const { count, index, parts, part, name, width, height, data: chunk } = d;
-
-        if (!Number.isInteger(count) || (count as number) < 1 || (count as number) > 64)
-            return fail("The terrain reply has an invalid layer count.");
-
-        if (!Number.isInteger(index) || (index as number) < 0 || (index as number) >= (count as number))
-            return fail("The terrain reply has an invalid layer index.");
-
-        if (!Number.isInteger(parts) || (parts as number) < 1 || (parts as number) > 64)
-            return fail("The terrain reply has an invalid part count.");
-
-        if (!Number.isInteger(part) || (part as number) < 0 || (part as number) >= (parts as number))
-            return fail("The terrain reply has an invalid part index.");
-
-        if (typeof width !== "number" || !Number.isFinite(width) || width <= 0
-            || typeof height !== "number" || !Number.isFinite(height) || height <= 0)
-            return fail("The terrain reply has an invalid size.");
-
-        if (typeof chunk !== "string" || chunk.length === 0)
-            return fail("The terrain reply has an empty payload.");
-
-        let transfer = this.terrainTransfers[key];
-        if (!transfer) {
-            transfer = { count: count as number, width, height, layers: [] };
-            this.terrainTransfers[key] = transfer;
-        } else if (
-            transfer.count !== (count as number)
-            || transfer.width !== width
-            || transfer.height !== height
-        ) {
-            return fail("The terrain reply changed its layer count or size mid-transfer.");
-        }
-
-        const layerIndex = index as number;
-        const layerParts = parts as number;
-        const partIndex = part as number;
-        let layer = transfer.layers[layerIndex];
-
-        if (!layer) {
-            layer = {
-                name: typeof name === "string" ? name : `Layer ${layerIndex + 1}`,
-                expectedParts: layerParts,
-                parts: [],
-            };
-            transfer.layers[layerIndex] = layer;
-        } else if (layer.expectedParts !== layerParts) {
-            return fail("The terrain reply changed its part count mid-transfer.");
-        }
-
-        layer.parts[partIndex] = chunk;
-
-        // Complete only when every layer index and every part of every layer is present.
-        for (let i = 0; i < transfer.count; i++) {
-            const entry = transfer.layers[i];
-            if (!entry) return true;
-
-            for (let p = 0; p < entry.expectedParts; p++) {
-                if (typeof entry.parts[p] !== "string") return true;
-            }
-        }
-
-        const payload = {
-            width: transfer.width,
-            height: transfer.height,
-            layers: transfer.layers.map(entry => ({ name: entry.name, data: entry.parts.join("") })),
-        };
-
-        this._response(key, payload);
-        return true;
-    }
-
-
-    constructor(mode: TransportMode = "direct") {
+        constructor(mode: TransportMode = "direct") {
         this.mode = mode;
         console.log(`NetworkStartup ${mode === "remote" ? "Relay" : "WebSocket"}`);
 
@@ -707,6 +524,13 @@ class NetworkingWebsocket implements Networking {
                 const token: string | undefined = frame.deviceToken;
                 const hostId: string = frame.hostId ?? this.hostId ?? "";
 
+                // The relay can switch its game host without closing this socket;
+                // terrain cached for the old host must not survive that.
+                if (hostId !== this.hostId) {
+                    this.terrainCache.clear();
+                    this.terrainAssembler.clear();
+                }
+
                 if (token) {
                     this.hostId = hostId;
                     this.pendingAttach = { kind: "token", value: token, hostId };
@@ -784,6 +608,7 @@ class NetworkingWebsocket implements Networking {
             socket.onclose = () => {
                 this.isReady = false;
                 this.terrainCache.clear();
+                this.terrainAssembler.clear();
                 // Keep queued requests: they flush again after the next attach.
                 this.notifyConnectionChange(false);
 
@@ -830,6 +655,7 @@ class NetworkingWebsocket implements Networking {
 
         this.socket.onclose = (event) => {
             this.terrainCache.clear();
+            this.terrainAssembler.clear();
             if (event.wasClean) {
                 console.log(`[close] Connection closed cleanly, code=${event.code} reason=${event.reason}`);
             } else {
@@ -863,7 +689,9 @@ class NetworkingWebsocket implements Networking {
     };
 
     private handleSocketMessage(data: unknown): void {
-        console.log(`[message] Data received from server: ${String(data)}`);
+        // Never log the payload itself: a terrain chunk is several megabytes and
+        // the dev console would copy it on every message.
+        console.log(`[message] Data received from server (${String(data).length} chars)`);
 
         let text: string;
         if (typeof data === "string") {
@@ -891,7 +719,7 @@ class NetworkingWebsocket implements Networking {
             return;
         }
 
-        console.log("recv", jsonData);
+        console.log("recv", { k: jsonData?.k, c: jsonData?.d?.c });
 
         if (jsonData.k == "command") {
             // The game sent a command to us, not a reply
@@ -899,7 +727,7 @@ class NetworkingWebsocket implements Networking {
         }
 
         // Multi-frame terrain replies are buffered until complete.
-        if (this.handleTerrainChunk(jsonData.k, jsonData.d)) return;
+        if (this.terrainAssembler.handleChunk(jsonData.k, jsonData.d)) return;
 
         this._response(jsonData.k, jsonData.d);
     }
@@ -941,9 +769,14 @@ class NetworkingWebsocket implements Networking {
         return this.RequestWithTimeout(data, NetworkingWebsocket.RequestTimeoutMs);
     }
 
-    private RequestWithTimeout(data: object, timeoutMs: number): Promise<object> {
+    private RequestWithTimeout(
+        data: object,
+        timeoutMs: number,
+        onKey?: (key: string) => void,
+    ): Promise<object> {
         return new Promise((resolve, reject) => {
             const reqKey = this.GenerateRequestID();
+            onKey?.(reqKey);
             const timeout = setTimeout(() => {
                 this.rejectRequest(reqKey, new Error(`TacPhone websocket request "${reqKey}" timed out after ${timeoutMs}ms`));
             }, timeoutMs);
@@ -1003,53 +836,31 @@ class NetworkingWebsocket implements Networking {
             });
     }
 
-    LoadGameTerrain(config: object): Promise<TerrainData> {
-        return coalescedTerrainRequest(
-            this.terrainCache,
+    LoadGameTerrain(config: object, onLayer?: TerrainLayerListener): Promise<TerrainData> {
+        return this.terrainCache.load(
             config,
-            () => this.loadGameTerrainUncached(config),
+            (notify) => this.loadGameTerrainUncached(config, notify),
+            onLayer,
         );
     }
 
-    private async loadGameTerrainUncached(config: object): Promise<TerrainData> {
+    private async loadGameTerrainUncached(
+        config: object,
+        notify: (progress: TerrainLayerProgress) => void,
+    ): Promise<TerrainData> {
         // Terrain is the only request that may need more than the default timeout:
         // the game splits and compresses every layer before replying.
         const result: unknown = await this.RequestWithTimeout(
             { a: "main", c: "RequestTerrainSVG", config },
-            60_000,
+            TERRAIN_INITIAL_TIMEOUT_MS,
+            (key) => {
+                // Registered before the request is sent, so the first layer can
+                // be delivered as soon as its chunks arrive.
+                this.terrainAssembler.register(key, notify);
+            },
         );
 
-        // Legacy game host: one compressed whole-SVG string.
-        if (typeof result === "string")
-            return splitTerrainSVG(await decompressFromBase64(result));
-
-        if (result && typeof result === "object") {
-            const payload = result as { width?: unknown; height?: unknown; layers?: unknown };
-            const { width, height, layers } = payload;
-
-            if (
-                typeof width === "number" && Number.isFinite(width) && width > 0
-                && typeof height === "number" && Number.isFinite(height) && height > 0
-                && Array.isArray(layers)
-            ) {
-                const decoded: TerrainLayer[] = [];
-
-                for (const entry of layers) {
-                    if (!entry || typeof entry !== "object")
-                        throw new Error("The terrain reply contains an invalid layer.");
-
-                    const { name, data } = entry as { name?: unknown; data?: unknown };
-                    if (typeof name !== "string" || typeof data !== "string" || data.length === 0)
-                        throw new Error("The terrain reply contains an invalid layer payload.");
-
-                    decoded.push({ name, svg: await decompressFromBase64(data) });
-                }
-
-                return { width, height, layers: decoded };
-            }
-        }
-
-        throw new Error("The terrain reply has an unexpected format.");
+        return readTerrainReply(result, notify);
     }
 
     ReplyTerrainSVG(_uid: string | number, _config: object): Promise<void> {

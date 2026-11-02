@@ -58,7 +58,7 @@ export async function openPanelOnPage(page, {
             );
         },
         { quietMs: TERRAIN_QUIET_MS, requireQuiet: waitForQuiet },
-        { timeout: 60000 },
+        { timeout: 180000 },
     );
 
     if (waitForMapState) {

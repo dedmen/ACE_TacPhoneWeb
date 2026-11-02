@@ -27,7 +27,7 @@ consumed through the workspace's TypeScript build, not prebuilt `.d.ts` files.
 | `LocalizationApi` | `window.TacPhone.localization`: `t(key, ...args)`, `has`, `load`, `whenReady`, `loadStringtables`, `language`, `onDidChange`. Keys live in the add-on stringtable; see `AGENTS/localization.md`. |
 | `AppInfo` | Also carries `stringtable`: the app's own stringtable path, empty when it shares the host add-on's file. |
 | `Networking` | `WhenReady`, `Request`, `OnConnectionChange`, `LoadGameFileText`, `LoadGameFileTexture`, `LoadGameTerrain`, `ReplyTerrainSVG`, `OnMessageFromGame`. |
-| `TerrainData`, `TerrainLayer` | Return type of `LoadGameTerrain()`: terrain `width`/`height` and standalone per-layer SVG documents. |
+| `TerrainData`, `TerrainLayer`, `TerrainLayerListener`, `TerrainLayerProgress` | Return type of `LoadGameTerrain()`: terrain `width`/`height` and standalone per-layer SVG documents, plus the optional per-layer progress callback. |
 | `AppCatalog`, `AppInfo`, `PanelMeta` | Read-only app and panel catalog (`window.TacPhone.apps`). |
 | `PanelDirectoryApi`, `PanelInfo`, `PanelInstance`, `OpenPanelOptions`, `OpenPanelResult`, `PanelRect`, `PanelPlacement` | Panel enumeration and control. |
 | `InterAppRegistry`, `AppServiceInfo`, `InterAppRegistration`, `TargetOptions`, `TargetPolicy`, `TargetChooser` | Inter-app services and routing. |
@@ -53,10 +53,16 @@ entry in `window.TacPhone.apps.failedApps` with a clear message.
 
 ## Notes
 
-- `LoadGameTerrain()` resolves to a `TerrainData` (`width`, `height`, `layers`)
-  instead of a raw SVG string. The in-game transport splits the SVG into
-  standalone per-layer documents and streams compressed chunks; the browser
-  transport reassembles them (and still accepts the legacy whole-SVG reply).
+- `LoadGameTerrain(config, onLayer?)` resolves to a `TerrainData`
+  (`width`, `height`, `layers`) instead of a raw SVG string. The in-game
+  transport splits the SVG into standalone per-layer documents and streams
+  compressed chunks; the browser transport reassembles them (and still accepts
+  the legacy whole-SVG reply). The optional `onLayer` callback receives
+  `TerrainLayerProgress` (`layer`, `index`, `count`, `width`, `height`) as soon
+  as each layer is decoded, so an app can render cheap layers while heavy ones
+  are still transferring; the promise still resolves with all of them.
+- `TerrainLayer` is one standalone layer SVG; `TerrainLayerListener` and
+  `TerrainLayerProgress` are the progressive-delivery types.
 - `ReplyTerrainSVG(uid, config)` is the host-internal producer path used by the
   built-in main app; only the in-game transport implements it.
 - Apps should also expose their inter-app service types from `src/api.ts`; that is

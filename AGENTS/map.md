@@ -13,6 +13,10 @@ The full reference is [`ACE_TacPhone_Map/README.md`](../ACE_TacPhone_Map/README.
 | Entry and panels | `src/main.tsx` (`ACE_TacPhone_Map`, `ACE_TacPhone_Map_Placeholder`) |
 | Map view/OpenLayers, panel lifecycle, `map` service | `src/Map.tsx` |
 | Map options schema and render settings | `src/MapOptions.ts` |
+| Terrain layer priority, LOD constants and planning | `src/layers/TerrainLayerPriority.ts` |
+| Layer-prioritized OpenLayers map | `src/layers/PriorityMap.ts` |
+| Terrain image decode and tile source/layer construction | `src/layers/TerrainLayerSource.ts` |
+| Progressive terrain layer loader (phases, stats, restart) | `src/layers/TerrainLayerPipeline.ts` |
 | Marker map module (layers, interactions, polyline drawing) | `src/MapMarkers/MarkerModule.ts` |
 | Marker UI (dialog, context menu, polyline controls) | `src/MapMarkers/MarkerOverlay.tsx` |
 | Marker channel store shared with the layer switcher | `src/MapMarkers/MarkerChannelStore.ts` |
@@ -45,11 +49,54 @@ The map panel reads its live handle from `this.props.panel` and the host from
 and acquires the marker interest in its lifecycle; release the interest and
 unregister the service on unmount, including when map creation failed part-way.
 
-Terrain is loaded with `window.TacPhone.networking.LoadGameTerrain(...)`, which
-resolves to a `TerrainData` (`{ width, height, layers: [{ name, svg }] }`).
-`applyTerrainLayers()` uses `width`/`height` for the extent and tile resolutions
-and turns each layer's `svg` into a Blob URL/`Image`; the Map never parses or
-splits the raw terrain SVG itself (the host producer does that before sending).
+Terrain is loaded with `window.TacPhone.networking.LoadGameTerrain(config, onLayer?)`.
+The optional callback delivers each layer as soon as the host has decoded it; the
+promise still resolves to the complete `TerrainData`
+(`{ width, height, layers: [{ name, svg }] }`). `Map.startTerrainLoad()` builds
+the view and a `TerrainLayerPipeline` from the first layer (which carries
+`width`/`height`) and pushes every following layer into that pipeline; the final
+resolution calls `pipeline.finish(terrain.layers)`, which adds any layer a
+coalesced request missed. The Map never parses or splits the raw terrain SVG
+itself (the host producer does that before sending).
+
+### Terrain tile loading
+
+The view is built and fitted (`view.fit(extent)` with no `duration`, so the
+state applies immediately) as soon as the first layer arrives, before any layer
+image decodes. `TerrainLayerPipeline` then decodes and adds layers strictly in
+priority order:
+
+1. light layers, two decodes in flight:
+   `terrain`, `roads`, `townNames`, `airports`, `forests`, `rocks`, `mountains`;
+2. heavy layers, one at a time, after the reply is complete, every light layer
+   is on the map and every visible light layer's first tiles have finished
+   loading: `objects`, `countlines`. They are LOD-hidden at that view, so the
+   initial render never waits for their parse, but they are normally decoded
+   before the user zooms in.
+
+A layer that fails to decode is skipped; only an all-layer failure shows
+`STR_ACE_Tacphone_Map_TerrainError`. Waiting for the base tiles (rather than
+starting on an idle callback) keeps the multi-megabyte parse off the critical
+frame while still preparing the heavy layers early.
+
+`PriorityMap extends ol/Map` and adds the layer rank to `getTilePriority()`, so
+the single OpenLayers tile queue drains all tiles of a higher-ranked layer first.
+A source rank must be registered with `map.registerSource(source, rank)` **before**
+`map.addLayer(layer)`; the renderer keys queue entries by the source uid.
+
+`objects`, `countlines` and `mountains` use level-of-detail through
+`TileLayer.maxResolution` (hidden at `resolution >= maxResolution`, so they
+request no tiles). `mountains` is cheap to decode but its small labels are
+unreadable at a whole-map view. Tunable constants live in
+`src/layers/TerrainLayerPriority.ts`: `OBJECTS_LOD_MAX_RESOLUTION`,
+`COUNTLINES_LOD_MAX_RESOLUTION`, `MOUNTAINS_LOD_MAX_RESOLUTION`,
+`HEAVY_LAYER_SVG_CHARS` and `HEAVY_UNKNOWN_LOD_MAX_RESOLUTION`. An unknown layer
+at or above the SVG size threshold is treated as heavy; known light layers are
+never reclassified by size.
+
+Terrain layers use a fractional `zIndex` (`documentIndex * 0.01`): they keep
+their relative document order but stay below marker channel layers (1+), GPS
+layers (28-70) and the fly-to highlight (100).
 
 `MarkerOverlay` is mounted by `Map.tsx` and creates the `MarkerModule`; the
 module owns the marker layers, polyline drawing preview, measurement overlay and
@@ -212,15 +259,22 @@ climb, slope/crawl, water and surface costs), `gps-splice` the route
 geometry/splice helpers and the shared-route codec, `gps-advisor` the
 transport-mode advisor state machine (injected clock, no timers), `gps-routing`
 the route metrics, turn instructions, deviation tracker, vehicle-change parsing
-and the road graph's 0.5 m node merge, and `gps-payload` the `map.gps_route`
-contract plus the "do not import browser-only modules" guard. Run them with
-`npm run test:unit -- --verbose`.
+and the road graph's 0.5 m node merge, `gps-payload` the `map.gps_route`
+contract plus the "do not import browser-only modules" guard, and
+`terrain-layer-priority` the layer rank/LOD table (exact/alias matching, unknown
+size classification, sort stability and the input array not being mutated). Run
+them with `npm run test:unit -- --verbose`.
 
 The live Node scenario is `marker-protocol` plus the GPS parts of `gps-protocol`;
 Playwright runs `marker-channels`, `marker-ui`, `polyline-draw`, `polyline-edit`,
-`map-view`, `gps-panel`, `gps-route`, `gps-shared` and `gps-shared-messenger`.
-Browser scenarios create a new flexlayout tab, open the Map or GPS through the app
-chooser and wait for a quiet terrain-tile period before asserting. `marker-channels`
+`map-view`, `map-tiles`, `gps-panel`, `gps-route`, `gps-shared` and
+`gps-shared-messenger`. Browser scenarios create a new flexlayout tab, open the
+Map or GPS through the app chooser and wait for a quiet terrain-tile period
+before asserting. `map-tiles` checks the priority order through
+`getViewState().tiles` (`priority`, `activatedAfterMs`), that heavy layers are
+LOD-hidden at coarse zoom and still load after zooming in, and that every
+terrain row appears once in the layer switcher; it skips heavy-layer checks when
+the test map does not export them. `marker-channels`
 checks the singleplayer Group layer and custom colors in any session, and logs
 that the multiplayer-only checks (second channel, active-channel radio and
 inactive-channel dimming) were skipped when Arma reports singleplayer. In
@@ -471,6 +525,7 @@ The Map registers its schema from `init()` and reads it through
 | Key | Type | Default | Effect |
 | --- | --- | --- | --- |
 | `terrainQuality` | select `low`/`balanced`/`high` | `balanced` | maxZoom/minResolution: 4/0.5, 5/0.2, 6/0.1 |
+| `tileSize` | select 256/512/1024 | 256 mobile, 512 desktop | terrain tile edge and tile-grid size |
 | `tileCacheSize` | select 16/48/128 | 48 | per-layer tile cache |
 | `pixelRatio` | select `device`/`1.5`/`1` | `device` | `Map.setPixelRatio()` cap |
 | `tilePreload` | select 0/1/2 | 0 | `TileLayer.preload` |
@@ -479,15 +534,39 @@ The Map registers its schema from `init()` and reads it through
 Presets `weak`, `balanced` and `desktop` are stateless shortcuts rendered as
 buttons; they call `options.apply()` and write the individual values.
 
-`Map.tsx` keeps the decoded terrain layers in `terrainSource` and builds tile
-layers in `rebuildTerrainLayers()`. Terrain tiles are fixed at 128 px; a larger
-tile delays the first visible terrain and does not pay for itself. GPS mode
-forces `preload >= 2` even when the user option is 0, because rotating in place
-otherwise exposes unloaded corner tiles as black squares. Changing a
-tiling option disposes and rebuilds only the tile sources; the terrain SVG is not
-requested from the game again. `pixelRatio` is applied live with
-`Map.setPixelRatio()`. The view's zoom-out limit uses a fixed 256 px reference,
-so it stays independent of the fixed tile size.
+`Map.tsx` keeps only the terrain metadata in `terrainSource`;
+`TerrainLayerPipeline` owns the decoded images, tile layers and per-layer
+statistics, and `rebuildTerrainLayers()` restarts it with a new tile grid while
+reusing cached images. `getViewState()` reports `ready`, `resolution`,
+`pendingLayers`, `terrainDataReady`, `terrainError`, the aggregate tile counters,
+`quietForMs`, `settled` (which now also requires `pendingLayers === 0` and the
+complete terrain data) and, per layer, `name`, `priority`, `pending`,
+`lodVisible`, `maxResolution`, `activatedAfterMs`, `firstTileStartMs`, `error`
+and the tile counters.
+
+The terrain tile size is the `tileSize` Map option: 256, 512 or 1024 px. The
+default is 256 on a mobile device and 512 otherwise; `isMobileDevice()` uses a
+coarse pointer, or a small screen with touch. 1024 is never selected
+automatically: there is no reliable "performant computer" signal in the browser.
+A larger tile reduces the per-tile SVG replays but delays the first visible
+terrain and multiplies canvas memory; `test/benchmark/tile-size.mjs` measures the
+tradeoff (a 1280x900 viewport: ~98 ms at 128 px, ~35 ms at 256 px, ~16 ms at
+512 px, with the first tile crop within 1.3-2.2 ms for all three). On a real
+10-layer map, `map-terrain-live.mjs` measured 256 px ahead of 128 px (open 6.2 s
+vs 6.5-8.0 s, deep zoom 0.93-0.99 s vs 1.29-1.41 s) while a 512 px run stalled
+without completing. With the in-game terrain cache active, a repeated load opened
+in 3.47 s and the heavy layers were decoded at ~2.2 s, after the base tiles had
+finished. `effectiveTileCacheSize()` scales the `tileCacheSize` option by
+`(128 / tileSize)²` (floor 8) so changing the tile size keeps the memory
+footprint roughly flat. Terrain tile sources use `transition: 0`: a cross-fade
+would keep and rasterize both zoom levels during every zoom, doubling the tile
+canvases and the allocation/GC pressure. GPS mode forces `preload >= 2` even
+when the user option is 0, because rotating in place otherwise exposes unloaded
+corner tiles as black squares. Changing a tiling option disposes and rebuilds
+only the tile layers; the terrain SVG is not requested from the game again, and
+hidden layers stay hidden.
+`pixelRatio` is applied live with `Map.setPixelRatio()`. The view's zoom-out
+limit uses a fixed 256 px reference, so it stays independent of the tile size.
 
 ## Data interest
 
@@ -570,4 +649,8 @@ that the single-file plugin inlines. See
   the layer in the shared layer state, but `Map.frameState_` still references that
   state until the next render, so a pointer event crashes
   `forEachFeatureAtPixel()` on `null.hasRenderer()`. Clear the renderer and dispose
-  the source instead (see `disposeTerrainLayers()`).
+  the source instead (see `TerrainLayerPipeline.disposeLayers()`).
+- Register a terrain tile source's rank **before** `map.addLayer(layer)`. The
+  canvas tile renderer snapshots the source uid when it enqueues tiles.
+- Keep terrain `zIndex` fractional (`documentIndex * 0.01`). Using the raw
+  document index would put terrain above marker channel layers at `zIndex: 1`.

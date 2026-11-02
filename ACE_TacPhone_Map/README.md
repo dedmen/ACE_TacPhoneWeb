@@ -7,7 +7,10 @@ Messenger.
 ## Features
 
 - Terrain rendering from the game's map data, with configurable quality and tile
-  caching for weak phones.
+  caching for weak phones. Terrain and roads appear first; the heavy object and
+  contour layers load last and are hidden while zoomed out.
+- The first map load jumps straight to the fitted view instead of animating the
+  whole zoom range.
 - Icon markers created from the map, with searchable marker types, color
   classes, custom RGBA colors, direction, scale and channel.
 - Player-created markers can be dragged, edited and deleted from the phone.
@@ -114,6 +117,7 @@ Open the host **Options** panel (app chooser → Options → Map). Presets are
 | Option | Default | Effect |
 | --- | --- | --- |
 | Terrain detail | Balanced | Zoom depth/finest resolution: Low 4/0.5, Balanced 5/0.2, High 6/0.1 |
+| Terrain tile size | 256 mobile, 512 desktop | 256/512/1024 px; larger renders faster but uses more memory |
 | Tile cache | 48 tiles | Tiles kept per SVG layer; the main memory knob |
 | Pixel ratio | Device | Caps the render pixel ratio; 1x is fastest |
 | Tile preload | 0 | How many extra tile levels to preload |
@@ -121,8 +125,26 @@ Open the host **Options** panel (app chooser → Options → Map). Presets are
 | GPS: rotate map with view direction | on | Rotate the map instead of the player arrow |
 | GPS: automatically recalculate route | off | Recalculate after deviating |
 
-Terrain tiles are fixed at 128 px. Changing a tiling option rebuilds the tile
-sources from the already-decoded terrain, without asking the game again.
+Changing the tile size or another tiling option rebuilds the tile layers from
+the already-decoded terrain, without asking the game again; layer visibility
+choices survive the rebuild. 1024 px is a manual choice for high-end desktops.
+
+Layers are loaded and scheduled in priority order: terrain, roads, town names,
+airports, forests, rocks and mountains first, then the element-heavy objects and
+contour lines once the base terrain tiles have finished loading. They are
+prepared in the background and are normally ready by the time you zoom in.
+
+Objects, contour lines and mountains use level-of-detail: they are not drawn at
+coarse zoom levels where their detail would be sub-pixel or their labels
+unreadable, and appear automatically when you zoom in. Their cut-off resolutions
+are the exported `OBJECTS_LOD_MAX_RESOLUTION`,
+`COUNTLINES_LOD_MAX_RESOLUTION` and `MOUNTAINS_LOD_MAX_RESOLUTION` constants in
+`src/layers/TerrainLayerPriority.ts`. The layer switcher lists the layers in this
+priority order, so terrain is the first row.
+
+The tile cache is expressed in 128 px tiles; because the tile size is 256 px,
+the cache is scaled by `(128 / 256)²` so the memory footprint stays roughly what
+it was when tiles were smaller.
 
 ## Development
 
@@ -207,6 +229,9 @@ scenarios.
   `_USER_DEFINED` markers can be moved or deleted.
 - Terrain detail is limited by the data the game can generate and send; very
   large maps benefit from the lower detail presets.
+- Object and contour-line detail is intentionally not drawn at very coarse zoom
+  levels (level-of-detail). Toggling such a layer on while zoomed out shows
+  nothing until you zoom in.
 
 ## Related documentation
 
