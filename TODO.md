@@ -25,7 +25,11 @@ needs a product decision before coding, **[wontfix]** deliberately left as is.
   the whole envelope `{ ...layout, options }`; SQF treats it as opaque text, so
   it already round-trips unknown top-level keys such as `options`.
 
-## Native extension (`WebServerExtension`)
+## Native extension (`WebServerExtension`, debug only)
+
+This extension is the debug LAN/dev host. Release builds neither install it nor
+start it; the production relay uses the native SQF `webRequest` WebSocket. The
+items below are therefore debug-only cleanup unless stated otherwise.
 
 ### Critical: silent failure and process kill
 
@@ -67,7 +71,8 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
   `WebServer.cs:189-221`: concurrent GETs share a `TaskCompletionSource`, and the
   first waiter calls `TrySetCanceled()` on it. Give each request its own timeout,
   never cancel the shared source, and pass `context.RequestAborted`.
-- [x] **[robustness]** `SendTo` takes multiple targets, returns `OK <delivered> <requested>`, `"*"` broadcasts remotely, and unknown ids are logged.
+- [x] **[robustness]** `SendTo` takes one JSON payload `{targets, data}`, returns
+  `OK <delivered> <requested>`, `"*"` broadcasts, and unknown ids are logged.
 - [ ] **[robustness]** 30 MB per-connection message limit with no auth or rate
   limit (`WebServer.cs:352`) is a LAN memory DoS. Lower the limit for control
   frames and reject early.
@@ -132,20 +137,13 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
 
 ## SQF <-> web protocol
 
-- [ ] **[bug]** Terrain/texture round trip leaks requests.
-  `fnc_processBrowserRequest.sqf`: `_success` from `sendCommandToPhone` is
-  computed then ignored (`:62-64`, `:110-112`), `deleteAt` results are used
-  without a null check (`:81`, `:130`), and failed requests never resolve their
-  promise. Reply with an error, clean up on failure, and consider a timeout.
-- [ ] **[bug]** Request-ID collisions: `hashValue [systemTime, ...]` (`:52`,
-  `:99`) has second resolution, so two identical requests in the same second
-  overwrite each other's promise. Combine a counter with the config hash.
-- [ ] **[cleanup]** Terrain and texture promises share one map
-  (`GVAR(pendingTerrainRequest)`), keyed only by ID. Split them or rename.
-- [ ] **[bug]** `systemChat` spam on every file request
-  (`XEH_postInit.sqf:41, 43, 52`), and `:48` passes an array to `systemChat`,
-  which expects a string, so 404s raise a script error instead of logging. Gate
-  behind a debug flag and use `diag_log`/`str`.
+- [x] **[cleanup]** Obsolete: SQF no longer proxies terrain/texture. The
+  in-game hub (`RelayManager`) produces terrain chunks and texture replies
+  directly, so the old promise/leak, ID-collision and shared-map issues in
+  `fnc_processBrowserRequest.sqf` are gone with the removed code.
+- [x] **[cleanup]** Obsolete: `systemChat` file-request spam was removed with the
+  rewritten `XEH_postInit.sqf`; the remaining `systemChat` only reports a failed
+  debug webhost start.
 - [x] **[cleanup]** Removed the temporary interest `systemChat` logging from
   `fnc_interestSet.sqf`; both transitions now log to `diag_log` only in
   `__A3_DEBUG__`. `Debug.GetInterests` exposes the live interest snapshot.
@@ -327,6 +325,16 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
   so it treats markers as non-player markers and can notify the local player's own
   marker; obtaining the ID without a MarkerLayerManager is deferred.
 
+## UI style system (military field terminal)
+
+- [ ] **[feature]** Redesign the host shell, host panels, Map/GPS, Messenger and
+  SampleApp to one military field-terminal visual language, and export the
+  tokens + React primitives through `window.TacPhone.theme` and
+  `window.TacPhone.components`. The design, file map and phases are in
+  [`PLAN_MILITARY_UI.md`](PLAN_MILITARY_UI.md). Settled up front: the game's
+  browser frame supplies the bezel (the page draws no bezel and no outer
+  padding) and only system fonts are used (no embedded WOFF/TTF, ever).
+
 ## Host (`ACE_TacPhone_Main`)
 
 - [x] **[feature]** Extract the custom select menu into a reusable host
@@ -342,8 +350,9 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
 - [ ] **[bug]** `NetworkingA3.Request` has no timeout (`Networking.ts:306-346`),
   so a promise the game never resolves hangs the in-game UI forever. Add the same
   timeout the WebSocket path uses.
-- [ ] **[bug]** `main.tsx` terrain/texture proxying only logs failures; the game
-  is never told the request failed and the browser waits for its timeout.
+- [x] **[cleanup]** Obsolete: the SQF terrain/texture proxy was removed. Remote
+  clients are handled by `RelayManager`, which reports failures to the client
+  directly; the old `main.tsx` proxy handler is no longer reached from SQF.
 - [ ] **[robustness]** `AppDirectory.fetchExternalModule` leaks blob URLs
   (`AppDirectory.ts:59`) and has a TODO to log unknown app names (`:192`).
 - [ ] **[robustness]** `MessageRouter.routeMessage` warns when no subscriber
@@ -511,6 +520,12 @@ Remaining work:
 - [ ] **[decision]** Cross-device presence: the in-game client is `"local"` and
   its presence is derived from the TacPhone display mode by the game, so
   `setClientPresence` from the page is informational only for that client.
+- [ ] **[decision]** Messenger presence/`SetClientPresence` cannot distinguish
+  relay clients; SQF sees all requests as `"local"`. Do not attempt per-client
+  presence for relay clients until a sender identity is reintroduced.
+- [ ] **[decision]** Scoped Messenger pushes (`_client`) are also broadcast to
+  every web client because the sender identity is gone. Clients cannot filter
+  them; revisit together with the presence identity work.
 - [x] Presence live-tested: HUD/DIALOG available, CLOSED/HIDDEN minimized when
   no other client is visible, external page visible/hidden, and fake players.
   The suite now refuses to run if another remote phone/tablet/dev page is
@@ -575,22 +590,40 @@ Remaining work:
   readable and they are public; access is gated by pairing codes/share links.
 - [ ] **[cleanup]** Relay traffic is plaintext at the server (TLS ends in nginx).
   Documented; app-level encryption is not planned.
-- [ ] **[robustness]** `RemoteAccessService` reconnects with 2/4/8/16/30 s
-  backoff. Verify a long offline period does not produce unbounded tasks.
+- [ ] **[robustness]** The in-game hub reconnects with 1–30 s backoff. Verify a
+  long offline period does not produce unbounded tasks and that `Stop` cancels
+  the timer.
 - [ ] **[cleanup]** The relay server is a separate deployable
   (`RemoteServer/`); it is not built or packaged by the add-on. Copy
   `ACE_TacPhone_Main/dist/index.html` into its `wwwroot/` before publishing.
 - [ ] **[robustness]** The relay sends `{"t":"ping"}` every 30 s and drops peers
-  idle for `IdleTimeoutSeconds` (120 s). The extension and the host page answer
-  with `pong`; keep that intact when changing either transport.
+  idle for `IdleTimeoutSeconds` (120 s). The hub and the host page answer with
+  `pong`; keep that intact when changing either transport.
 - [ ] **[cleanup]** The server stores only the share key hash, so a reconnecting
-  game cannot recover the share URL. The extension keeps its own key across
-  reconnects until the expiry/Stop; do not clear it on disconnect.
+  game cannot recover the share URL. The hub keeps its own key across reconnects
+  until the expiry/Stop; do not clear it on disconnect.
 - [ ] **[decision]** Attach rate limiting is per IP (10/min) and counts
   successful attaches, so several devices behind one NAT share the budget.
   Revisit if a household hits it.
 - [ ] **[deploy]** `RemoteServer/wwwroot/index.html` is generated: copy
   `ACE_TacPhone_Main/dist/index.html` there after every host change.
+- [ ] **[tests]** Native relay verification: connect and `auth` succeed from a
+  release build without the DLL; forced drop reconnects with backoff and
+  re-sends `auth`/`files`; a save/load leaves `localNamespace` handle null, the
+  next `Forward` reports lost and the hub clears/reconnects (or returns to idle
+  after `Stop`).
+- [ ] **[tests]** `OPTIONS /ws` with `Origin: arma://ACE_TacPhone` echoes the
+  origin and returns `GET, OPTIONS, UPGRADE, CONNECT`, `*` headers, max-age 600.
+- [ ] **[tests]** A large terrain chunk travels through the hub
+  (`LoadGameTerrain` → `encodeTerrainChunks` → `ReplyRequestTerrainSVG`) without
+  flooding the page→SQF bridge, and the client assembles it.
+- [ ] **[tests]** Every game→web message is broadcast to all relay and LAN
+  clients, and no `targets` field is read or written in SQF.
+- [ ] **[tests]** Debug LAN: `WEBHOST_DISCONNECT:LOCAL_…` removes the client, drops
+  its interests and its pending requests.
+- [ ] **[tests]** Messenger presence/`SetClientPresence` and scoped `_client`
+  pushes cannot distinguish relay clients (see the Messenger [decision] items
+  above); do not add per-client identity until a sender identity exists.
 
 ## React-free host base (spike)
 
@@ -765,3 +798,59 @@ UI bundle.
 - [x] **[robustness]** `TerrainMasks.findLayer` prefers exact role names (`terrain`/`land`, `roads`/`road`, `forests`/`forest`, `objects`/`object`) and only then falls back to a substring match. `filterByPaint` now resolves inherited `fill`/`stroke` through parent `<g>` elements (an explicit `fill="none"` still wins). Verify the real terrain SVGs on several maps when adding new terrain data.
 - [ ] **[decision]** `GetInMan`/`GetOutMan` are installed on the player object when the GPS interest activates. Before adding a `EntityRespawned`/player-change re-arm path, test whether the engine transfers unit event handlers to the new player automatically on respawn. Only add re-arming if that test shows the handlers are lost; otherwise the extra path is unnecessary.
 - [ ] **[robustness]** Verify the GPS with Arma running: travel-mode detection, vehicle changes, route calculation with slope/fine validation, the debug viewport scan, shared-route start/join, auto-repath, polyline edit save/cancel and the first-click audio unlock. (`gps-panel`, `gps-route`, `gps-shared`, `gps-protocol` and the opt-in `gps-interactive` now cover most of this automatically; the audio unlock, the viewport scan and a real drive still need a manual pass.)
+
+## Planned work (design docs, not started)
+
+Nothing in this section exists in code. Behavior, file maps, phases and open
+questions belong to the plan files; [`AGENTS/plans.md`](AGENTS/plans.md) holds the
+rules and the fixed panel ids, addon names and interests. This list exists so a
+plan cannot be forgotten, not as a second copy of its checklist.
+
+- [ ] **[feature]** TFAR radio control app — [`PLAN_RADIO.md`](PLAN_RADIO.md).
+  `ACE_TacPhone_Radio` plus `addons/tacphone/apps/radio` (`ace_tacphone_radio`).
+  No panel, bundle, interest or config class exists yet.
+  - Resolve first: the TFAR channel-base mismatch (`get*Channel` is 0-based,
+    `set*Channel`/`do*Transmit` are called 1-based by TacControl's web layer and
+    0-based by its own tangent handler). Phase 1 records the truth with
+    `Radio.Debug.State` on a real SR and LR radio; no UI may depend on the
+    internal base before that.
+- [ ] **[feature]** Vehicle controls and Air HUD —
+  [`PLAN_VEHICLE_AIRHUD.md`](PLAN_VEHICLE_AIRHUD.md). `ACE_TacPhone_Vehicle` plus
+  `addons/tacphone/apps/vehicle` (`ace_tacphone_vehicle`), two panels
+  (`ACE_TacPhone_Vehicle`, `ACE_TacPhone_Vehicle_Hud`) and two interests
+  (`ACE_TacPhone_Vehicle.anim` 5 Hz, `ACE_TacPhone_Vehicle.state` 20 Hz).
+  - Resolve first: which control actions are safe to expose per vehicle class
+    (`LandGear`/`autoHover`/`ActiveSensors*` exist only on some airframes), and
+    whether the 20 Hz state stream fits the relay's push budget on a full phone
+    layout.
+- [ ] **[feature]** ACE explosives remote detonation —
+  [`PLAN_EXPLOSIVES.md`](PLAN_EXPLOSIVES.md). `ACE_TacPhone_Explosives` plus
+  `addons/tacphone/apps/explosives` (`ace_tacphone_explosives`), interest
+  `ACE_TacPhone_Explosives.charges`. The game side must store each charge's
+  position (ATL/ASL/AGL/dir/class/trigger/detector) and refresh it at 1 Hz;
+  detonation validates ids server-side and calls
+  `ace_explosives_fnc_detonateExplosive`. TacControl's
+  `ACE_explosives_fnc_detonateExplosiveAll` does not exist and must not be called.
+  - Resolve first: clacker entries carry no world position, so the registry has
+    to be built from `ace_explosives_fnc_getPlacedExplosives` plus the
+    `ace_explosives_place`/`_defuse`/`_explodeOnDefuse` events; verify on a real
+    ACE version that a defused or moved charge cannot be detonated by a stale id.
+- [ ] **[feature]** Messenger personal notes room —
+  [`PLAN_MESSENGER_NOTES.md`](PLAN_MESSENGER_NOTES.md). No new app or addon: a
+  pinned one-participant `Messaging` room whose blob lives in `profileNamespace`
+  under `ace_tacphone_notes_<uid>`, plus `PersonalNotes.Load`/`Save`/`Clear`/
+  `Flush` handled locally in
+  `apps/messaging/functions/fnc_processBrowserRequest.sqf` before
+  `relayToServer`.
+  - Resolve first: the `PersonalNotes.*` branches must never reach the relay (a
+    branch placed after `relayToServer` would upload private notes); add the
+    regression test before the first save path lands.
+  - Also still open: the `map.position` rich object is already a separate item in
+    the Messenger section above; the notes room does not cover it. Server-side
+    persistence and message retention stay there too.
+- [ ] **[decision]** Live GPS tracker entities — scope only, do not design or
+  implement yet: [`PLAN_GPS_TRACKERS.md`](PLAN_GPS_TRACKERS.md).
+- [ ] **[decision]** Map completeness (RECTANGLE/ELLIPSE markers, marker
+  import/export using TacControl's exact schema, per-channel solo, cursor grid
+  readout and live-rendered grid, marker owner on hover) — scope only, do not
+  design or implement yet: [`PLAN_MAP_COMPLETENESS.md`](PLAN_MAP_COMPLETENESS.md).

@@ -98,3 +98,5 @@ WebServerExtension/bin/
 WebServerExtension/obj/
 
 RemoteServer/src/TacPhone.RemoteServer/wwwroot/index.html
+
+RemoteServer/.vs/

@@ -177,8 +177,13 @@ target?.api.doSomething();
 - Versioning is major-version matching; without `version`, the highest wins.
 - Services are page-local, never reachable from the game, and have no permission
   model: the whole UI is one trust domain.
-- Only the selected tab is mounted, so a background panel has no live API;
-  that is why routing goes through `resolveAsync()`.
+- Every tab of a tabset stays mounted, background ones included, so a background
+  panel keeps its live API. `resolveAsync()` is still the routing path: it also
+  brings the panel to the front and can open one that is not open at all.
+- A background tab is hidden with `display: none`, not unmounted. An app that
+  runs continuous work (animation, polling, a follow loop) should read
+  `panel.getInfo().isVisible` / `.isSelected` and pause while its tab is in the
+  background; subscribe with `window.TacPhone.panels.onDidChange()` to react.
 
 An app's service types live in `src/api.ts` and are bundled into
 `dist/<name>.d.ts` by `tacphone-build bundle-api-types`. Never import host code

@@ -523,7 +523,8 @@ resolve `gps` for route commands (and map commands on the same panel), or
 
 Coordinates are world/map units, not latitude/longitude. Consumers should
 `resolveAsync({ service: 'map', ... })` or `resolveAsync({ service: 'gps', ... })`
-because a background panel has no live registration. The generated
+so the panel is opened if needed and brought to the front; a background tab is
+live but hidden. The generated
 `dist/ace_tacphone_map.d.ts` exports `MapApi`, `GpsApi`, `MapViewState`,
 `MapFlyToOptions`, `MapBoundingBox`, `MapFocusMarkerOptions`,
 `GpsStartRouteOptions`, `MAP_SERVICE`, `MAP_SERVICE_VERSION`, `GPS_SERVICE`, and
@@ -692,8 +693,8 @@ that the single-file plugin inlines. See
   loaded from a blob URL.
 - StrictMode double-mounts panels. Marker layers, interests, services, and
   request queues must tolerate mount → unmount → mount.
-- A background Map panel is not mounted, so its marker state is not live; routing
-  must activate it through `interApp.resolveAsync()`.
+- A background Map panel stays mounted, so its marker state stays live; routing
+  still goes through `interApp.resolveAsync()` to bring it to the front.
 - Never `layer.dispose()` a layer that was just removed from a live map. It nulls
   the layer in the shared layer state, but `Map.frameState_` still references that
   state until the next render, so a pointer event crashes

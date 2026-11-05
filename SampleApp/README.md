@@ -250,9 +250,9 @@ console.log(api?.getCount());
 ```
 
 Service APIs are page-local, never reachable from the game, and have no
-permission model: the whole UI is one trust domain. A panel that is not mounted
-(background tab, closed popup) has no live registration, which is what
-`resolveAsync()` is for.
+permission model: the whole UI is one trust domain. A background tab stays
+mounted and keeps its registration; a closed popup or an app that was never
+opened has no live registration, which is what `resolveAsync()` is for.
 
 ## Creating a new TacPhone app
 

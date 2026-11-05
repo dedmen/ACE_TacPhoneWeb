@@ -23,6 +23,7 @@ user-facing overview and development setup are in
 | Host shared modules (`window.TacPhone.modules`) | `src/Backend/SharedModules.ts` |
 | SHA-256 for the file manifest (JS fallback for non-secure contexts) | `src/Backend/Sha256.ts` |
 | Transport selection and request/response | `src/Backend/Networking.ts` |
+| In-game relay hub: control frames, peers, requests, terrain/texture, LAN | `src/Backend/RelayManager.ts` |
 | Terrain request cache, SVG split/encode, progressive reply assembly | `src/Backend/TerrainCache.ts` |
 | In-game `window.A3API` shim | `src/Backend/A3API.ts` |
 | Game → app message routing | `src/Backend/AppMessaging.ts`, `src/Backend/MessageRouter.ts` |
@@ -148,14 +149,20 @@ Declaration and authoring rules are in
   canvas apps such as the Map's freehand drawing. Scrolling belongs inside a
   panel.
 - flexlayout drives the tabs/tabsets. `src/App.tsx` is the shell; `PanelHost.tsx`
-  creates one `PanelInstance` per mounted tab and disposes it on close/switch.
+  creates one `PanelInstance` per open tab and disposes it when the tab is
+  closed.
 - `PanelDirectory` (`window.TacPhone.panels`) is the source of truth for
   `list/get/find/focused/largest/activate/open/onDidChange`. `open()` defaults to
   a floating in-layout popup (`placement: 'tab'` docks a tab); native window
   popouts need `window.open` and are unsupported in-game.
-- Only the selected tab of a tabset is mounted. A background tab has no
-  `instanceId` and no registered app API; `interApp.resolveAsync()` activates it
-  and waits for registration.
+- Every tab of a tabset stays mounted; `App.tsx` sets the model attribute
+  `tabEnableRenderOnDemand: false` on every model it builds (so an old saved
+  layout cannot turn it back on) and flexlayout only hides inactive tab content
+  with `display: none`. A background tab therefore keeps its `instanceId`,
+  registered app API, canvas and state; switching back is instant instead of
+  rebuilding an app such as the Map. `interApp.resolveAsync()` still activates
+  the panel, which brings it to the front, and remains the routing path for a
+  panel that is not open at all or lives in a collapsed border.
 - Unassigned tabs render `AppChooserPanel`: a phone-style icon grid of every
   registered panel. Clients with a precise pointer (`(hover: hover) and
   (pointer: fine)`, i.e. desktop browsers) also get a sticky search field that
@@ -189,8 +196,9 @@ The transport is chosen once at module load:
 
 - `IsArma()` is true when the page URL starts with `blob:` (the sandboxed in-game
   browser) → `NetworkingA3`.
-- Otherwise → `NetworkingWebsocket`, which connects to `wss://localhost:8001/ws`.
-  Requests are queued until open and time out after 30 seconds. `LoadGameTerrain`
+- Otherwise → `NetworkingWebsocket`, which connects to `wss://localhost:8001/ws`
+  (served by the debug-only LAN extension). Requests are queued until open and
+  time out after 30 seconds. `LoadGameTerrain`
   allows 120 seconds for the first frame and then a 60 second idle timeout that
   every terrain chunk restarts, so a slow but progressing layer transfer is not
   cut off by a fixed total timeout.
@@ -200,18 +208,54 @@ browser receives them as a `JSDialog` in
 [`fnc_loadPhoneBackground.sqf`](../../functions/fnc_loadPhoneBackground.sqf) and
 replies through `A3API._response`. Pushed messages reach the target app's
 `OnMessageFromGame` (in-game via an `ExecJS` call, over the WebSocket as
-`{k:"command", d:...}`). The WebSocket path uses `{k, d}` JSON for replies and
-injects the sender as `s` on the extension side.
+`{k:"command", d:...}`).
+
+### Relay hub (`Backend/RelayManager.ts`)
+
+`NetworkingA3` constructs one `RelayManager` and owns the only app-facing
+transport. The hub is the single place that knows about remote clients:
+
+- **Transport input.** SQF calls
+  `window.TacPhone.networking.OnTransportMessage(raw)` with an already encoded
+  string: `RELAY:` + base64 (control JSON or `<peerId>\n<payload>`),
+  `WEBHOST:` + base64 (`{s,k,d}` LAN request), or `WEBHOST_DISCONNECT:<id>`.
+  `OnRelayEvent('established' | 'lost')` reports the native socket lifecycle.
+- **Relay session.** Opens/closes through SQF `RemoteAccess.Start`/`Stop`,
+  sends `auth` after `established`, stores a new secret through
+  `GetAuthIdentity`/`SetAuthIdentity`, and sends the file manifest with
+  `{t:"files", files}`. It handles `auth-ok`, `peer-joined`, `peer-left`,
+  `code`, `code-used`, `share`, `share-revoked`, `error`, `ping`, `pong` and
+  `send-result`. Reconnect uses 1–30 s backoff and clears peers; `Stop` cancels
+  the timer.
+- **Request rewrite.** A remote request is forwarded with a fresh A3API key and
+  recorded in `pendingRemoteRequests` (`transport`, `clientId`, `originalKey`).
+  SQF receives a normal request without `__client`/`__requestKey`/`__silent`;
+  the hub correlates the reply by the local key and answers the originating
+  relay/LAN client with the original key. Timeouts and disconnects drop the
+  entry.
+- **Terrain and texture.** `RequestTerrainSVG` is produced in the hub via
+  `LoadGameTerrain` + `encodeTerrainChunks` and streamed as
+  `ReplyRequestTerrainSVG` frames; `RequestTexture` uses `LoadGameFileTexture`.
+  Client `Reply*` frames are ignored.
+- **Interests.** The hub aggregates per-client interests and only ever sends SQF
+  `"local"`. It uses `Interest.Set` with `active:false` (not `Interest.Clear`,
+  which would clear every interest of that client). Peer/client removal clears
+  the client from all sets.
+- **Fan-out.** Every `OnMessageFromGame` is displayed locally and broadcast to
+  all relay clients (`{t:"send", targets:["*"], data}`) and LAN clients
+  (`WebHost.Send`, debug only). No target filtering.
+- **Panel commands.** `RemoteAccess.Start`/`Stop`/`CopyToClipboard` go to SQF;
+  `Status`/`NewCode`/`ShareCreate`/`ShareRevoke`/`Kick` are answered by the hub;
+  `GetAuthIdentity`/`SetAuthIdentity`/`Forward` are hub-internal SQF calls.
+  `Debug.RemoteAccess` is handled here in JS, gated by `gameInfo.debug`.
 
 `LoadGameFileText`, `LoadGameFileTexture`, and `LoadGameTerrain` use the game
-filesystem through the transport. The built-in `main` app
-(`src/MainApps/main.tsx`) handles game requests for terrain/texture. For terrain
-it only calls `networking.ReplyTerrainSVG(uid, config)`; the helpers in
-`Backend/TerrainCache.ts` split the SVG into standalone per-layer documents,
-compress each layer and stream `ReplyRequestTerrainSVG` chunks back (with
-`part`/`parts` fragments when a layer is still too large). Textures reply with
-`ReplyRequestTexture` as the WebP data URL unchanged; they are already
-compressed. `LoadGameTerrain` resolves to a `TerrainData`
+filesystem through the transport. The in-game Map's own terrain uses
+`LoadGameTerrain` (A3API). The built-in `main` app still contains the legacy
+`RequestTerrainSVG`/`RequestTexture` producer handlers, but the native relay hub
+does not use them. `RelayManager` calls
+`LoadGameTerrain`/`LoadGameFileTexture` itself and sends the chunk/texture frames
+straight to the relay/LAN client. `LoadGameTerrain` resolves to a `TerrainData`
 (`width`, `height`, `layers: [{ name, svg }]`); a legacy whole-SVG reply is still
 accepted by decompressing and splitting it locally. Identical terrain requests
 are coalesced in both transports: while one is in flight the next caller shares
@@ -328,8 +372,9 @@ Panel routing (`window.TacPhone.panels`):
 `{a:"main", c:"Interest.Set", interest, active:true}`; the last sends
 `active:false`. On transport reconnect the registry clears its announced set and
 re-announces every held interest. A `pagehide` handler sends one best-effort
-`Interest.Clear` for the in-game browser. Invalid names are rejected with a
-warning; nothing throws.
+`Interest.Clear` for the in-game browser. Remote interests are intercepted by
+`RelayManager` before they reach SQF, so SQF only sees the aggregated `"local"`
+state. Invalid names are rejected with a warning; nothing throws.
 
 ## Notifications (`Backend/Notifications.ts`)
 

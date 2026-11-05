@@ -13,8 +13,9 @@ flexlayout model, and the Remote Access relay.
 
 - Arma 3 is running a mission with the current TacPhone PBO loaded.
 - The TacPhone web host is listening on `wss://localhost:8001/ws`.
-- Node trusts the local HTTPS certificate. If not, point `NODE_EXTRA_CA_CERTS`
-  at the certificate PEM; never disable certificate verification.
+- The live runners export and trust the local HTTPS certificate automatically.
+  They print the PEM path; for manual Node runs, point `NODE_EXTRA_CA_CERTS` at
+  that path. Never disable certificate verification.
 - **Close the in-game TacPhone page** before running the layout scenario, or use
   a scratch mission. An open page can save its own layout during the round trip.
   The scenario always restores the previous layout, even after a failure.
@@ -27,24 +28,31 @@ flexlayout model, and the Remote Access relay.
   states and restores `CLOSED` at the end. It also needs an `__A3_DEBUG__` build
   with **Allow debug mode**.
 
-### Trusting the local certificate
+### Local certificate
 
-The web host uses a self-signed certificate. Export the certificate the running
-host presents and point Node at it (never disable verification):
+The web host uses a self-signed certificate. Every live runner calls the shared
+`test/lib/certificate.mjs` helper before connecting. It reads the certificate
+the running host presents (or the newest valid `CN=localhost` dev certificate
+from the Windows store), writes it to:
 
-```powershell
-$out = Join-Path $env:TEMP 'tacphone-localhost.pem'
-$tcp = [System.Net.Sockets.TcpClient]::new('localhost', 8001)
-$ssl = [System.Net.Security.SslStream]::new($tcp.GetStream(), $false, { param($s, $c, $ch, $e) $true })
-$ssl.AuthenticateAsClient('localhost')
-$cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($ssl.RemoteCertificate)
-[IO.File]::WriteAllText($out, "-----BEGIN CERTIFICATE-----`n" + [Convert]::ToBase64String($cert.RawData, 'InsertLineBreaks') + "`n-----END CERTIFICATE-----`n")
-$env:NODE_EXTRA_CA_CERTS = $out
+```text
+%LOCALAPPDATA%\TacPhone\localhost-test-ca.pem
 ```
 
-The certificate changes when the web host regenerates it, so re-export it if the
-suites report `self-signed certificate`. Run all suites in the same PowerShell
-session, or set `NODE_EXTRA_CA_CERTS` permanently for the user.
+and installs it for that Node process without disabling verification. The PEM
+path is printed on every run:
+
+```text
+[TacPhone tests] Local HTTPS certificate: C:\Users\...\AppData\Local\TacPhone\localhost-test-ca.pem
+[TacPhone tests] If you start Node directly, set:
+  $env:NODE_EXTRA_CA_CERTS = "C:\Users\...\AppData\Local\TacPhone\localhost-test-ca.pem"
+```
+
+The file is refreshed automatically when the web host regenerates its
+certificate, so the suites do not need a manual export step. If the host is not
+running yet, the helper falls back to the developer certificate and, when none
+exists, creates one with `dotnet dev-certs https`; restart Arma afterwards so the
+web host picks it up.
 
 ## Run
 
@@ -60,9 +68,9 @@ node ACE_TacPhone_Main/test/run-browser-tests.mjs --scenario audio --slow
 
 `npm run test:all` runs this suite together with the Messenger and Map suites
 and prints one summary; `-- --suite host` (or `-- --suite host-ui`) narrows it.
-`test:host-ui` is the host's Playwright suite (currently the audio unlock
-scenario) and uses the same prerequisites as the other browser suites: the game
-web host and the host dev page.
+`test:host-ui` is the host's Playwright suite (the audio unlock scenario and the
+background-tab mounting scenario) and uses the same prerequisites as the other
+browser suites: the game web host and the host dev page.
 
 Useful options:
 
@@ -97,7 +105,8 @@ test/
 │   ├── layout-options.test.mjs      # options envelope survives SaveLayout/GetLayout
 │   ├── remote-access.test.mjs       # relay start, share link, remote clients, dead-peer cleanup
 │   ├── display-mode.test.mjs        # Debug.SetLocalDisplayMode CLOSED/HUD/DIALOG/HIDDEN
-│   └── audio.test.mjs               # Playwright: first-gesture unlock, keep-alive, pending sound
+│   ├── audio.test.mjs               # Playwright: first-gesture unlock, keep-alive, pending sound
+│   └── background-tabs.test.mjs     # Playwright: a background tab keeps its panel instance
 └── browser/
     └── options-checklist.md         # manual Options panel / Map settings checks
 ```

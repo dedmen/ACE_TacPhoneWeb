@@ -25,9 +25,10 @@ type PanelBindingProps = {
 /**
  * Owns the PanelInstance of one tab and provides it to the tab content.
  *
- * flexlayout mounts only the selected tab of a tabset, so one binding exists per
- * mounted tab. The directory guarantees one instance per tab; a second binding
- * for the same tab would replace the first one with a warning.
+ * flexlayout keeps every tab of a tabset mounted (the host disables
+ * render-on-demand in App.tsx), so one binding exists per open tab, including
+ * the background ones. The directory guarantees one instance per tab; a second
+ * binding for the same tab would replace the first one with a warning.
  */
 export class PanelBinding extends React.Component<PanelBindingProps> {
     /** Live handle of the rendered tab; replaced only when the tab id changes. */

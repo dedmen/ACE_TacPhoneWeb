@@ -102,8 +102,9 @@ protocol, state model, persistence status and debug commands are documented in
   `MAX_ENCODED_MESSAGE_CHARS` (the size helper `ChatStore.sendMessage()` uses to
   reject oversized objects). No game, no browser, no Arma.
 - **Live, game needed:** the Node WebSocket suite needs a running
-  `__A3_DEBUG__` game with the TacPhone host on port 8001 and Node trusting the
-  local HTTPS certificate (`NODE_EXTRA_CA_CERTS`). It exercises rooms, messages,
+  `__A3_DEBUG__` game with the TacPhone host on port 8001. The shared test
+  runner exports and trusts the local HTTPS certificate automatically and prints
+  its PEM path; `NODE_EXTRA_CA_CERTS` is only for manual Node runs. It exercises rooms, messages,
   forwarding, invites, groups, group events, AI groups, leave, presence, side
   filtering, reconnect sync and map-marker sharing through fake players; see
   [`../MessagingApp/test/README.md`](../MessagingApp/test/README.md). It is not part

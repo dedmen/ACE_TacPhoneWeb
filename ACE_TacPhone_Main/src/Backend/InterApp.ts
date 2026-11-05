@@ -180,8 +180,9 @@ export class InterAppRegistry {
     /**
      * Synchronous lookup of an already registered service.
      *
-     * Only mounted panels are considered, so this returns undefined for an app
-     * that is open in a background tab. Policy "ask" cannot wait for a user, so it
+     * Only mounted panels are considered. Every tab of a tabset stays mounted,
+     * so a background tab is found, but an app that is not open at all (or sits
+     * in a collapsed border) is not. Policy "ask" cannot wait for a user, so it
      * falls back to "auto" (with one warning). Never throws.
      */
     resolve(target: string | TargetOptions): AppServiceInfo | undefined {
@@ -280,7 +281,7 @@ export class InterAppRegistry {
                 return undefined;
             }
 
-            // 2. Candidates include background tabs; step 5 mounts them on demand.
+            // 2. Candidates include tabs that are currently in the background.
             let candidates = this.candidatePanels(service, target.version, target.panelId);
 
             // 3. Open a missing app (a floating popup by default) and wait for it.
@@ -353,8 +354,8 @@ export class InterAppRegistry {
 
     /**
      * Convenience wrapper around resolve(): the API of a mounted service, or
-     * undefined. Use resolveAsync() when the panel may be in the background or not
-     * open yet.
+     * undefined. Use resolveAsync() when the panel may not be open yet or should
+     * be brought to the front.
      */
     getApi<T>(service: string, options?: TargetOptions): T | undefined {
         const info = this.resolve({ ...options, service });
@@ -481,8 +482,8 @@ export class InterAppRegistry {
     }
 
     /**
-     * Open panels that can provide the service, including background tabs that are
-     * not mounted (and therefore not registered) yet.
+     * Open panels that can provide the service. Background tabs are already
+     * mounted, so they are included and registered.
      */
     private candidatePanels(service: string, version: number | undefined, panelId: string | undefined): PanelInfo[] {
         const panels = panelDirectory.list();

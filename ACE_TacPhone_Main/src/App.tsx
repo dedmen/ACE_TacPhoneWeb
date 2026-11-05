@@ -19,6 +19,20 @@ const LAYOUT_SAVE_INTERVAL_MS = 5000;
 /** Option changes may come from a slider drag; save them sooner than a layout. */
 const OPTIONS_SAVE_INTERVAL_MS = 300;
 
+/**
+ * Host-wide flexlayout model attributes, merged into every model the host
+ * builds (default and restored) so an old saved layout cannot override them.
+ *
+ * `tabEnableRenderOnDemand: false` keeps the content of every tab mounted while
+ * it is in the background; flexlayout then only sets the inactive tab content
+ * to `display: none`. With the flexlayout default, switching a tab unmounts its
+ * content, disposes the panel instance and forces an app such as the Map to
+ * rebuild its whole canvas, layers and terrain state when the user comes back.
+ */
+const HOST_MODEL_ATTRIBUTES: NonNullable<IJsonModel["global"]> = {
+    tabEnableRenderOnDemand: false,
+};
+
 // localStorage is unavailable in the sandboxed in-game browser, so probe it before using it.
 function getLayoutStorage(): Storage | undefined {
     try {
@@ -75,7 +89,10 @@ function createModelFromLayout(layout: IJsonModel | undefined): Model | undefine
         return undefined;
 
     try {
-        return Model.fromJson(layout);
+        return Model.fromJson({
+            ...layout,
+            global: { ...layout.global, ...HOST_MODEL_ATTRIBUTES },
+        });
     } catch (error) {
         console.warn("TacPhone layout is invalid, using the default layout.", error);
         return undefined;
@@ -84,7 +101,7 @@ function createModelFromLayout(layout: IJsonModel | undefined): Model | undefine
 
 function defaultLayout(): IJsonModel {
     return {
-        global: {tabEnablePopoutFloatIcon: true, tabEnablePopout: false},
+        global: {tabEnablePopoutFloatIcon: true, tabEnablePopout: false, ...HOST_MODEL_ATTRIBUTES},
         borders: [],
         layout: {
             type: "row",

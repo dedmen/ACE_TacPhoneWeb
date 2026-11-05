@@ -17,10 +17,12 @@
 
 import { DEFAULT_PAGE_URL } from './lib/browser.mjs';
 import { SkipError } from './lib/skip.mjs';
+import { ensureLocalCertificate } from './lib/certificate.mjs';
 
 import * as audio from './scenarios/audio.test.mjs';
+import * as backgroundTabs from './scenarios/background-tabs.test.mjs';
 
-const ALL_SCENARIOS = [audio];
+const ALL_SCENARIOS = [audio, backgroundTabs];
 
 function printHelp() {
     console.log(`TacPhone host Playwright tests
@@ -209,4 +211,5 @@ async function main() {
     process.exitCode = failed > 0 ? 1 : 0;
 }
 
+await ensureLocalCertificate();
 await main();

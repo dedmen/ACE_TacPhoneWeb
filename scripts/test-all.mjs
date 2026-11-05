@@ -11,8 +11,9 @@
  *
  * Prerequisites are the same as the individual suites: Arma is running a
  * mission with the current TacPhone PBO loaded, the TacPhone web host listens
- * on port 8001, Node trusts the local HTTPS certificate, and the browser
- * scenarios can launch the installed Chrome channel and, when present, Firefox.
+ * on port 8001, the shared runner exports and trusts the local HTTPS certificate
+ * automatically, and the browser scenarios can launch the installed Chrome
+ * channel and, when present, Firefox.
  * Browser suites run once per detected engine; a missing Firefox is skipped.
  *
  * Usage (from `websource`):
@@ -46,7 +47,7 @@ const SUITES = [
     {
         name: 'host-ui',
         script: 'ACE_TacPhone_Main/test/run-browser-tests.mjs',
-        description: 'Host page Playwright: audio unlock, keep-alive, pending sound',
+        description: 'Host page Playwright: audio unlock, keep-alive, pending sound, background tabs',
         accepts: ['page-url', 'verbose', 'headed', 'slow', 'slow-ms', 'no-browser'],
         browser: true,
     },
@@ -101,7 +102,8 @@ Options:
 Prerequisites:
   - Arma 3 is running a mission with the current TacPhone PBO loaded.
   - The TacPhone web host is listening on port 8001.
-  - Node trusts the local HTTPS certificate (NODE_EXTRA_CA_CERTS).
+  - The shared runner exports and trusts the local HTTPS certificate automatically
+    and prints its PEM path; set NODE_EXTRA_CA_CERTS only for manual Node runs.
   - Browser scenarios: Playwright with an installed Chrome channel, or Firefox
     via \`npx playwright install firefox\`. Missing Firefox is skipped.`);
 }

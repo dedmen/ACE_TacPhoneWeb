@@ -21,6 +21,7 @@ import {
 } from '../../ACE_TacPhone_Main/test/lib/ws-client.mjs';
 import { FakePlayers } from './lib/fake-players.mjs';
 import { runSuite } from '../../ACE_TacPhone_Main/test/lib/assertions.mjs';
+import { ensureLocalCertificate } from '../../ACE_TacPhone_Main/test/lib/certificate.mjs';
 
 import * as connection from './scenarios/connection.test.mjs';
 import * as rooms from './scenarios/rooms.test.mjs';
@@ -69,7 +70,8 @@ Options:
   --help               Show this help
 
 The game must run an __A3_DEBUG__ build with the TacPhone web host on port 8001.
-Node must trust the local HTTPS certificate; set NODE_EXTRA_CA_CERTS if needed.`);
+The runner exports and trusts the local HTTPS certificate automatically and
+prints its PEM path; set NODE_EXTRA_CA_CERTS only for manual Node runs.`);
 }
 
 function parseArgs(argv) {
@@ -198,8 +200,9 @@ Prerequisites:
   - Arma 3 is running a mission with the TacPhone add-on loaded.
   - The TacPhone web host is listening on port 8001.
   - The game add-on was built with __A3_DEBUG__ (Messaging.Debug.Status must be available).
-  - Node trusts the local HTTPS certificate. If not, point NODE_EXTRA_CA_CERTS at the
-    certificate PEM file; do not disable certificate verification.
+  - The runner exports and trusts the local HTTPS certificate automatically and
+    prints its PEM path. If you run Node manually, point NODE_EXTRA_CA_CERTS at
+    that path; do not disable certificate verification.
   - Use a current Node release: the suite sends the WebSocket Origin header through
     Node's built-in WebSocket init object.`);
 }
@@ -320,4 +323,5 @@ async function main() {
     }
 }
 
+await ensureLocalCertificate();
 await main();

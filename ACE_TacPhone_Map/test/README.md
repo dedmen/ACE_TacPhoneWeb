@@ -29,8 +29,9 @@ documented exception: it imports browser-free app modules through
 
 - Arma 3 is running a mission with the current TacPhone PBO loaded.
 - The TacPhone web host listens on `wss://localhost:8001/ws`.
-- Node trusts the local HTTPS certificate. Point `NODE_EXTRA_CA_CERTS` at the
-  certificate PEM; never disable certificate verification.
+- The live runners export and trust the local HTTPS certificate automatically.
+  They print the PEM path; for manual Node runs, point `NODE_EXTRA_CA_CERTS` at
+  that path. Never disable certificate verification.
 - The game must serve the Map app (`GetAvailableApps` contains
   `ACE_TacPhone_Map`). An older PBO without it makes `marker-protocol` skip.
 - The 256-character clamp assertion needs a PBO rebuilt after the

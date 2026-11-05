@@ -20,6 +20,7 @@
 import { DEFAULT_PAGE_URL, browserChannel } from '../../ACE_TacPhone_Main/test/lib/browser.mjs';
 import { DEFAULT_URL, WsClient } from '../../ACE_TacPhone_Main/test/lib/ws-client.mjs';
 import { SkipError } from '../../ACE_TacPhone_Main/test/lib/skip.mjs';
+import { ensureLocalCertificate } from '../../ACE_TacPhone_Main/test/lib/certificate.mjs';
 
 import * as markerProtocol from './scenarios/marker-protocol.test.mjs';
 import * as markerChannels from './scenarios/marker-channels.test.mjs';
@@ -75,8 +76,9 @@ Prerequisites:
   - Browser scenarios: the TacPhone host page is reachable (TACPHONE_TEST_URL
     or --page-url) and Playwright with an installed Chrome channel, or set
     TACPHONE_TEST_BROWSER=firefox after npx playwright install firefox.
-  - The Node client needs Node to trust the local HTTPS certificate; set
-    NODE_EXTRA_CA_CERTS instead of disabling verification.
+  - The Node client exports and trusts the local HTTPS certificate automatically
+    and prints its PEM path. Set NODE_EXTRA_CA_CERTS only for manual Node runs;
+    never disable certificate verification.
   - The 256-character clamp assertion needs a PBO built after the SQF clamp was
     added.
   - gps-shared-messenger and the Messenger half of gps-protocol need a game built
@@ -208,7 +210,8 @@ function printConnectionHelp(url, error) {
 Prerequisites:
   - Arma 3 is running a mission with the current TacPhone PBO loaded.
   - The TacPhone web host is listening on port 8001.
-  - Node trusts the local HTTPS certificate (NODE_EXTRA_CA_CERTS).`);
+  - The runner exports and trusts the local HTTPS certificate automatically; the
+    PEM path is printed at startup (use it for NODE_EXTRA_CA_CERTS on manual runs).`);
 }
 
 async function main() {
@@ -337,4 +340,5 @@ async function main() {
     }
 }
 
+await ensureLocalCertificate();
 await main();

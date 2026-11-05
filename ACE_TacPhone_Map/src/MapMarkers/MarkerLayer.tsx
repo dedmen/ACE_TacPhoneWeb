@@ -1100,7 +1100,7 @@ export class MarkerLayerManager {
 
         // Everything we can dynamically solve here, is slower (updated every render, instead of once at marker creation), but we don't fill the style cache with lots of crap
 
-        const rotationInRadians = (feature.get('dir') || 0) * (Math.PI / 180); 
+        const rotationInRadians = (feature.get('dir') || 0) * (Math.PI / 180);
         const rawAlpha = feature.get('alpha') as number | undefined;
         const markerAlpha = (Number.isFinite(rawAlpha) ? rawAlpha as number : 1)
             * this.getChannelDim(feature.get('channel'));

@@ -12,6 +12,9 @@ namespace TacPhone.RemoteServer.Realtime;
 /// </summary>
 public sealed class RelaySocket
 {
+    /// <summary>Prefix of every text frame the relay sends to the game socket.</summary>
+    public const string GameTextPrefix = "RELAY:";
+
     private const int OutboundQueueCapacity = 16;
     private static readonly TimeSpan CloseTimeout = TimeSpan.FromSeconds(4);
     private static readonly TimeSpan CloseHandshakeTimeout = TimeSpan.FromSeconds(2);
@@ -27,6 +30,7 @@ public sealed class RelaySocket
     private long _lastPingUnixSeconds;
     private int _started;
     private int _closing;
+    private volatile bool _gameText;
 
     public RelaySocket(WebSocket socket, string? userAgent, TimeProvider time, ILogger logger)
     {
@@ -54,6 +58,17 @@ public sealed class RelaySocket
 
     public TimeSpan IdleFor => _time.GetUtcNow() - LastActivity;
 
+    /// <summary>
+    /// Switches the socket to the game text framing: every text frame is sent as
+    /// <see cref="GameTextPrefix"/> + base64(UTF-8). Browser sockets stay raw and
+    /// unencoded. Called once the first control frame identifies the game.
+    /// </summary>
+    public void UseGameTextFraming() => _gameText = true;
+
+    /// <summary>Wraps a game-bound text frame in the <c>RELAY:</c> base64 form.</summary>
+    public static string EncodeGameText(string text) =>
+        GameTextPrefix + Convert.ToBase64String(Encoding.UTF8.GetBytes(text));
+
     /// <summary>Starts the writer task. Must be called exactly once, before enqueueing.</summary>
     public void Start()
     {
@@ -68,10 +83,23 @@ public sealed class RelaySocket
         Interlocked.Exchange(ref _lastActivityUnixSeconds, _time.GetUtcNow().ToUnixTimeSeconds());
 
     public bool TryEnqueueText(string text) =>
-        TryEnqueue(new OutboundMessage(OutboundKind.Text, Encoding.UTF8.GetBytes(text), null));
+        TryEnqueue(new OutboundMessage(
+            OutboundKind.Text,
+            Encoding.UTF8.GetBytes(_gameText ? EncodeGameText(text) : text),
+            null));
 
-    public bool TryEnqueueBinary(ReadOnlyMemory<byte> payload) =>
-        TryEnqueue(new OutboundMessage(OutboundKind.Binary, payload, null));
+    public bool TryEnqueueBinary(ReadOnlyMemory<byte> payload)
+    {
+        // The game socket is text only; a binary frame would be a programming
+        // error, not something to send.
+        if (_gameText)
+        {
+            _logger.LogWarning("Refusing a binary frame for the text-only game socket");
+            return false;
+        }
+
+        return TryEnqueue(new OutboundMessage(OutboundKind.Binary, payload, null));
+    }
 
     /// <summary>
     /// True (at most once per <paramref name="interval"/>) when the peer has been

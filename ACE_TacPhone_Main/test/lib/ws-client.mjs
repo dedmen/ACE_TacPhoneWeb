@@ -23,6 +23,8 @@ import { EventEmitter } from 'node:events';
 import http from 'node:http';
 import https from 'node:https';
 
+import { getTestCertificateAuthority } from './certificate.mjs';
+
 export const DEFAULT_URL = 'wss://localhost:8001/ws';
 export const MAIN_APP = 'main';
 
@@ -315,11 +317,13 @@ export class WsClient {
                 );
             }, this.connectTimeout);
 
+            const ca = secure ? getTestCertificateAuthority() : null;
             const request = requestImpl.request({
                 host: parsed.hostname,
                 port: parsed.port || (secure ? 443 : 80),
                 path: `${parsed.pathname}${parsed.search}`,
                 method: 'GET',
+                ...(ca ? { ca } : {}),
                 headers: {
                     Connection: 'Upgrade',
                     Upgrade: 'websocket',

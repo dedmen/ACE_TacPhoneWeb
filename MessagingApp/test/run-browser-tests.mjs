@@ -14,6 +14,7 @@
 
 import { SkipError } from '../../ACE_TacPhone_Main/test/lib/skip.mjs';
 import { DEFAULT_PAGE_URL } from '../../ACE_TacPhone_Main/test/lib/browser.mjs';
+import { ensureLocalCertificate } from '../../ACE_TacPhone_Main/test/lib/certificate.mjs';
 import * as browserUi from './scenarios/browser-ui.test.mjs';
 import * as layoutScrollbars from './scenarios/layout-scrollbars.test.mjs';
 import * as audioNotifications from './scenarios/audio-notifications.test.mjs';
@@ -196,4 +197,5 @@ async function main() {
     process.exitCode = failed > 0 ? 1 : 0;
 }
 
+await ensureLocalCertificate();
 await main();

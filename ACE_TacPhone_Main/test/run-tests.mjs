@@ -14,6 +14,7 @@
 
 import { DEFAULT_URL, WsClient, openClient } from './lib/ws-client.mjs';
 import { runSuite } from './lib/assertions.mjs';
+import { ensureLocalCertificate } from './lib/certificate.mjs';
 
 import * as apps from './scenarios/apps.test.mjs';
 import * as layoutOptions from './scenarios/layout-options.test.mjs';
@@ -46,7 +47,8 @@ Options:
 Prerequisites:
   - Arma 3 is running a mission with the current TacPhone PBO loaded.
   - The TacPhone web host is listening on port 8001.
-  - Node trusts the local HTTPS certificate; set NODE_EXTRA_CA_CERTS if needed.
+  - The runner exports and trusts the local HTTPS certificate automatically and
+    prints its PEM path. Set NODE_EXTRA_CA_CERTS only for manual Node runs.
   - Close the in-game TacPhone page before the layout test, or use a scratch
     mission: an open page may save its own layout during the round trip.
   - The remote-access and display-mode scenarios need an __A3_DEBUG__ build
@@ -179,8 +181,9 @@ function printConnectionHelp(url, error) {
 Prerequisites:
   - Arma 3 is running a mission with the current TacPhone PBO loaded.
   - The TacPhone web host is listening on port 8001.
-  - Node trusts the local HTTPS certificate. If not, point NODE_EXTRA_CA_CERTS at the
-    certificate PEM file; do not disable certificate verification.
+  - The runner exports and trusts the local HTTPS certificate automatically and
+    prints its PEM path. If you run Node manually, set NODE_EXTRA_CA_CERTS to
+    that path; do not disable certificate verification.
   - Use a current Node release: the suite uses a small RFC 6455 client that sends
     the loopback Origin header the host requires.`);
 }
@@ -314,4 +317,5 @@ async function main() {
     }
 }
 
+await ensureLocalCertificate();
 await main();

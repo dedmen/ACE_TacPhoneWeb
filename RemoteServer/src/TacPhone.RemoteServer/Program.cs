@@ -178,8 +178,19 @@ app.MapGet("/health", (ServerInfo info, HostRegistry registry, TerrainCache terr
     });
 });
 
+// CORS preflight for Arma's native webRequest client. Registered before the
+// WebSocket GET so an OPTIONS request never falls through to the SPA fallback.
+app.MapMethods("/ws", new[] { HttpMethods.Options }, (HttpContext context) =>
+{
+    RelayCors.ApplyPreflight(context.Response.Headers, context.Request.Headers.Origin.ToString());
+    context.Response.StatusCode = StatusCodes.Status204NoContent;
+    return Task.CompletedTask;
+});
+
 app.MapGet("/ws", async (HttpContext context, RelayEndpoint endpoint) =>
 {
+    RelayCors.ApplyAllowOrigin(context.Response.Headers, context.Request.Headers.Origin.ToString());
+
     if (!context.WebSockets.IsWebSocketRequest)
     {
         context.Response.StatusCode = StatusCodes.Status400BadRequest;

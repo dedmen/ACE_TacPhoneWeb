@@ -124,6 +124,9 @@ public sealed class RelayEndpoint
 
             if (frame.Type == ControlTypes.Auth && string.Equals(frame.Role, "game", StringComparison.Ordinal))
             {
+                // Every text frame to the game is "RELAY:" + base64, including the
+                // auth-ok and any error that follows.
+                socket.UseGameTextFraming();
                 await RunGameAsync(socket, reader, frame, shareBaseUrl, cancellationToken).ConfigureAwait(false);
                 return;
             }
@@ -278,17 +281,19 @@ public sealed class RelayEndpoint
                     break;
                 }
 
+                if (frame.Type == WebSocketMessageType.Binary)
+                {
+                    // The native SQF client is text only. A binary frame is a
+                    // protocol violation from a stale client.
+                    _logger.LogWarning("Closing a game socket after a binary frame (text only)");
+                    session.Game.TryEnqueueText(ServerFrames.Error(ErrorCodes.BadFrame, "the game socket is text only"));
+                    break;
+                }
+
                 try
                 {
-                    if (frame.Type == WebSocketMessageType.Binary)
-                    {
-                        HandleGameBinary(session, frame.Payload);
-                    }
-                    else
-                    {
-                        await HandleGameTextAsync(session, Encoding.UTF8.GetString(frame.Payload), cancellationToken)
-                            .ConfigureAwait(false);
-                    }
+                    await HandleGameTextAsync(session, Encoding.UTF8.GetString(frame.Payload), cancellationToken)
+                        .ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {
@@ -315,33 +320,13 @@ public sealed class RelayEndpoint
         }
     }
 
-    private void HandleGameBinary(HostSession session, byte[] payload)
-    {
-        if (!FrameCodec.TryDecodeGameFrame(payload, out var peerId, out var applicationPayload))
-        {
-            _logger.LogWarning(
-                "Game sent a malformed binary frame ({Length} bytes): {Frame}",
-                payload.Length,
-                PreviewBytes(payload));
-            session.Game.TryEnqueueText(ServerFrames.Error(ErrorCodes.BadFrame, "expected the binary peer envelope"));
-            return;
-        }
-
-        ForwardToClient(session, peerId, applicationPayload);
-    }
-
     private async Task HandleGameTextAsync(HostSession session, string text, CancellationToken cancellationToken)
     {
-        // The future SQF client is text only and sends "<peerId>\n<application JSON>".
-        if (FrameCodec.TryDecodeTextGameFrame(text, out var peerId, out var applicationJson))
-        {
-            ForwardToClient(session, peerId, Encoding.UTF8.GetBytes(applicationJson));
-            return;
-        }
-
+        // Inbound game text is control JSON only; application data arrives in a
+        // "send" control frame.
         if (!TryParseJsonObject(text, out var document))
         {
-            session.Game.TryEnqueueText(ServerFrames.Error(ErrorCodes.BadFrame, "expected a control frame or '<peerId>\\n<json>'"));
+            session.Game.TryEnqueueText(ServerFrames.Error(ErrorCodes.BadFrame, "expected a control frame"));
             return;
         }
 
@@ -352,12 +337,23 @@ public sealed class RelayEndpoint
 
             switch (type)
             {
+                case ControlTypes.Auth:
+                    // The first auth frame already authenticated this socket.
+                    // Arma's webRequest can invoke onWebsocketEstablished more
+                    // than once, which makes the SQF client send a duplicate
+                    // auth; ignore it instead of reporting an unknown frame.
+                    return;
+
                 case ControlTypes.Ping:
                     session.Game.TryEnqueueText(ServerFrames.Pong());
                     return;
 
                 case ControlTypes.Pong:
                     // Keepalive answer from the game; activity is already recorded.
+                    return;
+
+                case ControlTypes.Send:
+                    HandleSend(session, root);
                     return;
 
                 case ControlTypes.CodeNew:
@@ -400,14 +396,47 @@ public sealed class RelayEndpoint
         }
     }
 
-    private void ForwardToClient(HostSession session, string peerId, ReadOnlyMemory<byte> payload)
+    /// <summary>Handles the game's <c>send</c> frame: expand, dedupe, route, reply.</summary>
+    private void HandleSend(HostSession session, JsonElement root)
+    {
+        if (!TryGetStringArray(root, "targets", out var requested))
+        {
+            session.Game.TryEnqueueText(ServerFrames.Error(ErrorCodes.BadFrame, "send needs a 'targets' array of peer ids"));
+            return;
+        }
+
+        if (!root.TryGetProperty("data", out var dataElement) || dataElement.ValueKind != JsonValueKind.String)
+        {
+            session.Game.TryEnqueueText(ServerFrames.Error(ErrorCodes.BadFrame, "send needs a string 'data' payload"));
+            return;
+        }
+
+        var data = dataElement.GetString() ?? string.Empty;
+        var plan = RelaySendPlan.Expand(requested, session.Clients.Keys);
+        var payload = Encoding.UTF8.GetBytes(data);
+
+        var delivered = 0;
+        foreach (var target in plan.Targets)
+        {
+            // Every target goes through the same cache-aware path a browser frame
+            // would, so terrain/texture/file caching keeps working.
+            if (ForwardToClient(session, target, payload))
+            {
+                delivered++;
+            }
+        }
+
+        session.Game.TryEnqueueText(ServerFrames.SendResult(plan.Requested, delivered, plan.Unknown));
+    }
+
+    private bool ForwardToClient(HostSession session, string peerId, ReadOnlyMemory<byte> payload)
     {
         if (!session.Clients.TryGetValue(peerId, out var client))
         {
             // Unknown peers are dropped: the browser may have just closed. Nothing
             // is cached for a peer that is no longer there.
             _logger.LogDebug("Dropping an application frame for an unknown peer");
-            return;
+            return false;
         }
 
         // Terrain replies are large; only look inside a frame while a forwarded
@@ -424,7 +453,7 @@ public sealed class RelayEndpoint
             {
                 case ChunkResult.Buffered:
                     // Part of a transfer: hold it until every layer part arrived.
-                    return;
+                    return true;
 
                 case ChunkResult.Completed when completed is not null:
                 {
@@ -437,11 +466,11 @@ public sealed class RelayEndpoint
                         client.Socket.TryEnqueueBinary(frame);
                     }
 
-                    return;
+                    return true;
                 }
 
                 case ChunkResult.Completed:
-                    return;
+                    return true;
 
                 default:
                     // Not pending, an error chunk or an inconsistent transfer:
@@ -483,7 +512,7 @@ public sealed class RelayEndpoint
         }
 
         // A full queue aborts the peer; its receive loop then detaches it.
-        client.Socket.TryEnqueueBinary(payload);
+        return client.Socket.TryEnqueueBinary(payload);
     }
 
     private async Task HandleCodeNewAsync(HostSession session, CancellationToken cancellationToken)
@@ -1046,8 +1075,10 @@ public sealed class RelayEndpoint
                     }
                 }
 
-                var envelope = FrameCodec.EncodeGameFrame(client.PeerId, frame.Payload);
-                if (!host.Game.TryEnqueueBinary(envelope))
+                // The game socket is text only: "<peerId>\n<payload>", which the
+                // RelaySocket then wraps as "RELAY:" + base64.
+                var forwarded = client.PeerId + "\n" + Encoding.UTF8.GetString(frame.Payload);
+                if (!host.Game.TryEnqueueText(forwarded))
                 {
                     _logger.LogDebug("The game socket refused a frame; detaching the peer");
                     break;
@@ -1386,18 +1417,6 @@ public sealed class RelayEndpoint
             : redacted[..max] + $"… ({redacted.Length} chars)";
     }
 
-    private static string PreviewBytes(ReadOnlySpan<byte> payload, int max = 32)
-    {
-        if (payload.IsEmpty)
-        {
-            return "(empty)";
-        }
-
-        var count = Math.Min(payload.Length, max);
-        var hex = Convert.ToHexString(payload[..count]);
-        return payload.Length > count ? $"{hex}… ({payload.Length} bytes)" : $"{hex} ({payload.Length} bytes)";
-    }
-
     private static FirstFrame? ParseFirstFrame(string json)
     {
         if (!TryParseJsonObject(json, out var document))
@@ -1459,6 +1478,34 @@ public sealed class RelayEndpoint
         element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString()
             : null;
+
+    private static bool TryGetStringArray(JsonElement element, string name, out List<string> values)
+    {
+        values = [];
+
+        if (!element.TryGetProperty(name, out var array) || array.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+
+        foreach (var item in array.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.String)
+            {
+                return false;
+            }
+
+            var value = item.GetString();
+            if (value is null)
+            {
+                return false;
+            }
+
+            values.Add(value);
+        }
+
+        return true;
+    }
 
     private static List<(string Path, string Hash)>? ParseFileManifest(JsonElement root)
     {

@@ -6,7 +6,7 @@
  */
 
 /** Distance the player covers in the visible radius, seconds. */
-export const FOLLOW_LOOKAHEAD_SECONDS = 60;
+export const FOLLOW_LOOKAHEAD_SECONDS = 20;
 
 /** Visible radius while standing still, metres. */
 export const FOLLOW_STATIONARY_RADIUS_M = 200;

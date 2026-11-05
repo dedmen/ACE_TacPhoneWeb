@@ -1,7 +1,7 @@
 # Game side (SQF and config)
 
 Read this only when working in the parent add-on (`addons/tacphone`): SQF,
-config, app registration, the web protocol, interests, or the extension bridge.
+config, app registration, the web protocol, interests, or the debug LAN bridge.
 All paths below are relative to `addons/tacphone` unless stated otherwise. Web
 app rules are in [`apps.md`](apps.md); the Map's handlers are in
 [`map.md`](map.md); the .NET side is in [`webhost.md`](webhost.md). The add-on's
@@ -17,9 +17,10 @@ authors.
 | `CfgEventHandlers.hpp` | Wires the XEH scripts. |
 | `CfgWeapons.hpp`, `CfgUIGrids.hpp`, `gui.hpp`, `initKeybinds.inc.sqf`, `initSettings.inc.sqf` | Phone item, UI, HUD/layout, keybinds, settings. |
 | `functions/fnc_dispatchRequest.sqf` | Resolves `a` and calls the app's request processor. |
-| `functions/fnc_processBrowserRequest.sqf` | Built-in `main` app: `GetFile`, layout, interests, proxy, etc. |
-| `functions/fnc_terrainRequestCleanup.sqf` | Drops stale/abandoned pending terrain transfers. |
-| `functions/fnc_sendCommandToPhone.sqf` | Game → web push, with target routing. |
+| `functions/fnc_processBrowserRequest.sqf` | Built-in `main` app: `GetFile`, layout, interests, transport helpers, etc. |
+| `functions/fnc_forwardTransportMessage.sqf` | Forwards one pre-encoded relay/LAN transport string to the in-game Web UI. |
+| `functions/fnc_remoteAccess.sqf` | SQF relay pipe: open/close the native WebSocket, `Forward`, auth identity, clipboard. |
+| `functions/fnc_sendCommandToPhone.sqf` | Game → web push; the in-game hub broadcasts it to every web client. |
 | `functions/fnc_loadPhoneBackground.sqf` | Hidden background browser and the in-game request bridge. |
 | `functions/fnc_openDisplay.sqf`, `fnc_loadPhoneHud.sqf`, `fnc_loadPhoneForeground.sqf`, `fnc_canShow.sqf` | Display modes and the phone UI. |
 | `functions/fnc_interestSet.sqf`, `fnc_interestClearClient.sqf`, `fnc_getInterestClients.sqf` | Interest registry and targeting. |
@@ -30,19 +31,21 @@ authors.
 ## Lifecycle
 
 - `preStart` / `preInit`: compile and prepare functions, install settings, create
-  `GVAR(AppInfo)`, `GVAR(AppDataInterests)`, `GVAR(pendingTerrainRequest)` (empty
-  map) and `GVAR(terrainRequestCounter)` (`0`), and register the built-in `main`
-  app (`requestprocessor` = `fnc_processBrowserRequest`).
+  `GVAR(AppInfo)` and `GVAR(AppDataInterests)`, initialise the native relay state
+  (`localNamespace` handle `scriptNull`, armed flag, generation, URL, web base),
+  and register the built-in `main` app (`requestprocessor` =
+  `fnc_processBrowserRequest`).
 - `postInit`: collect every `scope > 0` class under `ace_tacphone_apps` from
-  `configFile` and `missionConfigFile`, build `GVAR(AppInfo)` entries, start the
-  web host extension (`StartServer 8001`), install the extension callback, and
-  open the hidden background browser via `loadPhoneBackground`.
+  `configFile` and `missionConfigFile`, build `GVAR(AppInfo)` entries, and open
+  the hidden background browser via `loadPhoneBackground`. In `__A3_DEBUG__`
+  builds only, start the LAN web host (`StartServer 8001`) and install the
+  `ExtensionCallback` handler before that.
 - `clientInit` (client only): initializes the closed display mode, registers the
   device key, and loads the keybinds.
 - Display modes are `CLOSED`, `HUD`, `DIALOG`, and internal `HIDDEN`;
   `fnc_openDisplay` toggles/switches and `fnc_canShow` guards them. The hidden
   background browser must stay loaded even when the phone is closed, because it
-  serves external-browser file/terrain/texture requests.
+  is the in-game Web UI hub for external-browser requests.
 
 ## Request flow (web → game)
 
@@ -55,21 +58,26 @@ In-game browser:
 3. The callback base64-encodes the result and calls
    `A3API._response(key, base64)` in the page.
 
-External browser (WebSocket):
+Relay and debug LAN clients:
 
-1. The extension receives `{k, d, s}` and raises the `Request` extension callback;
-   `XEH_postInit.sqf` calls `[d, s, callback] call FUNC(dispatchRequest)`.
-2. The callback wraps the result as `{k, d: result}` and calls the extension
-   `SendTo` for that client id.
+1. The in-game `RelayManager` hub receives the transport string
+   (`RELAY:`/`WEBHOST:`), decodes it, and owns all peer/session state.
+2. The hub rewrites the request with a fresh A3API `k` and sends it to SQF as a
+   normal `main` request through `NetworkingA3.RequestTracked`.
+3. SQF sees `{k, d}` only; it never sees `__client`, `__requestKey`, `__silent`
+   or any other source metadata. It dispatches exactly as for the in-game page.
+4. The hub correlates the reply by the local `k` and sends it back to the
+   originating relay/LAN client with the browser's original key.
 
 `fnc_dispatchRequest` looks up `a` in `GVAR(AppInfo)`, calls the app's
 `requestprocessor` with `[request, clientId, callback, callbackArgs]`, and handles
-a promise return via `continueWith`. `clientId` is `"local"` in-game and the
-WebSocket connection id remotely. Web code validates data; do not repeat type
-checks in SQF. That means no `isEqualType`/`typeName`/`count` validation of
-web-supplied fields, no `params` type annotations for them, and no fallback
-branch for a wrong type. Use `getOrDefault` only for an optional field that the
-protocol says may be absent; if it is present, trust it.
+a promise return via `continueWith`. `clientId` is `"local"` for the in-game page
+and for every remote request; the hub owns the remote identity. Web code
+validates data; do not repeat type checks in SQF. That means no
+`isEqualType`/`typeName`/`count` validation of web-supplied fields, no `params`
+type annotations for them, and no fallback branch for a wrong type. Use
+`getOrDefault` only for an optional field that the protocol says may be absent;
+if it is present, trust it.
 
 ### Processor contract
 
@@ -100,53 +108,27 @@ createHashMapFromArray [["__tacphone_stream", true]]
 `dispatchRequest` then sends no reply of its own. Without the sentinel it calls
 `[_result, _callbackArgs] call _callback` exactly once, as before.
 
-### Terrain chunks
+### Terrain and texture
 
-Terrain is the streaming case. One `RequestTerrainSVG` produces **many**
-`ReplyRequestTerrainSVG` chunks, each arriving as a separate, ordinary request
-from the local page:
-
-1. `RequestTerrainSVG` (remote client) sweeps stale contexts
-   (`["", 60] call FUNC(terrainRequestCleanup)`), takes a transfer id from
-   `GVAR(terrainRequestCounter)` (monotonic, so it cannot collide), and stores a
-   context in `GVAR(pendingTerrainRequest)` keyed by that id:
-   `{ clientId, callback, callbackArgs, created: diag_tickTime }`. The context is
-   registered **before** the command is sent to `"local"`, so the first chunk
-   cannot arrive unregistered.
-2. If `sendCommandToPhone` returns `false` (in-game phone closed) the context is
-   removed and the callback is invoked once with
-   `{a: "main", c: "ReplyRequestTerrainSVG", uid, error: "in-game phone not open"}`.
-   The handler returns the streaming sentinel either way.
-3. The command sent to `"local"` carries `debug: true` only when the add-on was
-   compiled with `__A3_DEBUG__`; release builds send `debug: false`. The web
-   producer uses it to enable the per-layer compression-ratio diagnostic. It is
-   not part of the chunk protocol or the relay cache.
-4. Each `ReplyRequestTerrainSVG` looks the context up by `uid` and calls the
-   stored `[_request, callbackArgs] call callback` — the chunk hashmap itself is
-   the reply (`{a, c, uid, index, count, part, parts, name, width, height, data,
-   last}`). SQF does not assemble or reorder chunks; the browser and the relay do.
-5. The context is deleted when the chunk carries `error` or `last`. An unknown
-   `uid` only logs, so a late chunk after cleanup is harmless.
-6. `fnc_terrainRequestCleanup` removes contexts older than the given age and all
-   contexts of a client. It runs on every new terrain request (60 s) and on the
-   WebSocket `Disconnect` callback for that client. It only inspects hashmap
-   entries — the texture proxy stores promises in the same map.
-
-Add new streaming commands this way instead of returning a promise: a promise can
-resolve only once and would have to buffer every chunk.
+Terrain and texture production is owned entirely by the in-game Web UI hub. A
+remote `RequestTerrainSVG`/`RequestTexture` is handled in `RelayManager`, which
+calls `LoadGameTerrain`/`LoadGameFileTexture` through the normal transport and
+sends the reply frames itself. SQF has no terrain/texture proxy: no pending
+transfer map, no `uid` counter, no `ReplyRequestTerrainSVG` /
+`ReplyRequestTexture` branches, no `fnc_terrainRequestCleanup`.
 
 Built-in `main` commands include `GetAvailableApps`, `GetGameInfo`, `GetFile`,
 `GetPlayerPos`, `GetTime`, `Interest.Set`, `Interest.Clear`, `GetLayout`,
-`SaveLayout`, and the terrain/texture proxies. `Debug.Status`,
-`Debug.SetLocalDisplayMode` and `Debug.RemoteAccess` are test-only bridges for
-the live host suite, compiled only in `__A3_DEBUG__` builds and requiring the
+`SaveLayout`, `Client.Disconnected`, and (debug only) `WebHost.Send`.
+`Debug.Status` and `Debug.SetLocalDisplayMode` are test-only SQF bridges for the
+live host suite, compiled only in `__A3_DEBUG__` builds and requiring the
 `Allow debug mode` setting; they are not part of the app-facing contract.
+`Debug.RemoteAccess` is handled in the in-game hub (JS), gated by
+`gameInfo.debug`.
 `GetGameInfo` is the one-time
 mission snapshot for the host (`multiplayer`, `playerId`, `missionName`,
 `terrainName` via `worldName`, `gameVersion`, and a debug flag that requires both
-`__A3_DEBUG__` and the `allowDebug` CBA setting). `RequestTexture` checks
-`fileExists` first and returns `{ok: false}` instead of forwarding when the
-texture is missing, since the engine would otherwise open an error popup.
+`__A3_DEBUG__` and the `allowDebug` CBA setting).
 `SaveLayout` stores the layout as an opaque, gzipped-and-base64-encoded string
 in `profileNamespace` under `ace_tacphone_layout` (one layout per player
 profile); `GetLayout` returns that string, or `""` when nothing was saved yet.
@@ -160,17 +142,20 @@ not exist.
 
 The **array form** of `callExtension` returns an array, not a string:
 ```sqf
-private _response = "arma_webhost" callExtension ["SendTo", _targets + [_json]];
+private _response = "arma_webhost" callExtension ["SendTo", [_payload]];
 // _response is [result, returnCode, errorCode]
 private _status = if (_response isEqualType []) then { _response param [0, ""] } else { _response };
 ```
+
+`SendTo` takes one JSON payload `{targets, data}`; SQF never builds a target list.
+The extension parses it and returns `OK <delivered> <requested>`.
 
 - Always unwrap element 0 before `fromJSON`, `parseSimpleArray`, string comparison,
   or splitting `OK <delivered> <requested>`.
 - The single-argument form (`"ext" callExtension "arg"`) still returns a string.
   Do not assume one shape at a shared call site.
-- Existing examples: `fnc_sendCommandToPhone.sqf`, `fnc_remoteAccess.sqf`,
-  `XEH_postInit.sqf` (`StartServer`).
+- Existing examples: `fnc_processBrowserRequest.sqf` (`WebHost.Send`),
+  `XEH_postInit.sqf` (`GetFile`/`FileContent`, `StartServer`).
 - A `fromJSON` on the raw array fails with "Type array, expected string"; that is
   this mistake, not a bad extension response.
 
@@ -185,16 +170,18 @@ returns and clears the buffer; the host `main` app replays it from `init()`.
 ## Game → web push
 
 ```sqf
-[_targets, createHashMapFromArray [["a", "ACE_TacPhone_Map"], ["c", "Marker.Upsert"], ...]] call FUNC(sendCommandToPhone)
+[createHashMapFromArray [["a", "ACE_TacPhone_Map"], ["c", "Marker.Upsert"], ...]] call FUNC(sendCommandToPhone)
 ```
 
-- Targets: `"local"` (in-game page), a WebSocket connection id, `"*"` (local plus
-  one broadcast to all remote clients), or an array mixing them. Empty/duplicate
-  entries are dropped; `"*"` is never expanded in SQF.
+- One argument only; there is no target list. The in-game page displays the
+  message and broadcasts it to **all** relay and LAN clients. SQF returns `false`
+  only when the in-game phone browser is not open.
 - The message must contain `a` (target app) and `c` (command). The host delivers
   it to that app's `OnMessageFromGame`; the app routes `c` with
   `window.TacPhone.utils.CommandRegistry`.
-- Do not broadcast expensive data. Prefer interest-targeted sends (below).
+- Interest gating still decides whether the game produces data at all, but the
+  hub does not filter the resulting broadcast. Do not broadcast expensive data
+  without an interest check.
 
 ## App registration
 
@@ -256,9 +243,11 @@ The web side calls `window.TacPhone.interests.acquire(name)`; SQF sees it as a
 `fnc_interestSet` fires `ace_tacphone_interestActivated` /
 `ace_tacphone_interestDeactivated` (CBA local events, payload `[interestName]`)
 only on the first client joining or the last one leaving.
-`fnc_getInterestClients` returns the client ids, including `"local"`; pass the
-result straight to `sendCommandToPhone`. `fnc_interestClearClient` drops all
-interests of a disconnected WebSocket client.
+The hub aggregates all remote clients and only ever sends SQF `"local"`, so SQF
+keeps a single entry per interest. `fnc_getInterestClients` returns the ids, but
+they are only used to decide whether anybody is interested; game pushes are
+broadcasts. `fnc_interestClearClient` drops all interests of a disconnected
+client (used by the debug LAN `Disconnect` path).
 
 Pattern for an app:
 
@@ -266,10 +255,10 @@ Pattern for an app:
 2. On activation, add exactly the game event handlers the app needs; on
    deactivation, remove exactly those handlers. Handlers run synchronously, so
    keep them small and do no data assembly there.
-3. In each data handler, get the target clients first and early-out on `[]`
-   before building data. Send only to those clients.
-4. On disconnect, the extension callback clears the client's interests and any
-   pending terrain transfer of that client; no app action is needed.
+3. In each data handler, early-out when `getInterestClients` returns `[]` before
+   building data. Call `sendCommandToPhone` with one message; the hub broadcasts.
+4. On disconnect, SQF clears the client's interests via `interestClearClient` or
+   the hub's `Client.Disconnected`; no app action is needed.
 
 ## SQF rules
 
@@ -284,7 +273,8 @@ Pattern for an app:
 - Do not poll for interest state; install handlers on activation and remove them
   on deactivation.
 - Keep the interest transition handlers cheap (add/remove handlers only).
-- Use `getInterestClients` and early-out before assembling marker/terrain data.
+- Use `getInterestClients` and early-out before assembling marker/terrain data;
+  the send itself is always a broadcast.
 
 ## Common tasks
 
@@ -293,11 +283,11 @@ Pattern for an app:
   from the app with `Request({ a, c, ... })`. For a multi-part reply that arrives
   as several later requests, use the callback/sentinel pattern described in
   [processor contract](#processor-contract).
-- **Push to the page**: build `{a, c, ...}` and call `sendCommandToPhone` with the
-  narrowest target list.
+- **Push to the page**: build `{a, c, ...}` and call `sendCommandToPhone`; the hub
+  broadcasts it to the in-game page and every web client.
 - **New interest**: define the name in the app's `script_component.hpp` and as a
   web constant, acquire it from the panel, register CBA transitions in
-  `XEH_postInit.sqf`, and push through `getInterestClients`.
+  `XEH_postInit.sqf`, and early-out through `getInterestClients`.
 - **New app**: copy `apps/SampleApp` (see
   [`SampleApp/README.md`](../SampleApp/README.md)), register the class, keep
   `QFUNC`/`PREP`/file names consistent, build the web side, and copy the JS into

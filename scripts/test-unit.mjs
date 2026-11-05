@@ -3,6 +3,7 @@
  * Game-free unit tests for every TacPhone web app.
  *
  * Runs the app unit runners sequentially, like `scripts/test-all.mjs`:
+ *   - host       ACE_TacPhone_Main/test/run-unit-tests.mjs
  *   - messaging  MessagingApp/test/run-unit-tests.mjs
  *   - map        ACE_TacPhone_Map/test/run-unit-tests.mjs
  *
@@ -25,14 +26,31 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const RUNNERS = [
     {
+        name: 'host',
+        script: 'ACE_TacPhone_Main/test/run-unit-tests.mjs',
+        description: 'Relay hub transport, request correlation, broadcast, interests',
+        modules: ['relay-manager'],
+    },
+    {
         name: 'messaging',
         script: 'MessagingApp/test/run-unit-tests.mjs',
         description: 'Messenger chat object codec',
+        modules: ['object-codec'],
     },
     {
         name: 'map',
         script: 'ACE_TacPhone_Map/test/run-unit-tests.mjs',
         description: 'GPS speed model, route splice, advisor, payload',
+        modules: [
+            'gps-speed',
+            'gps-splice',
+            'gps-advisor',
+            'gps-payload',
+            'gps-routing',
+            'gps-water-corridor',
+            'gps-leg-info',
+            'terrain-layer-priority',
+        ],
     },
 ];
 
@@ -46,7 +64,7 @@ Usage:
   node scripts/test-unit.mjs [options]
 
 Options:
-  --only <name>     Passed to the app runners (repeat or comma-separate)
+  --only <name>     Run only these unit modules (repeat or comma-separate)
   --verbose         Log bundling progress and failure stacks
   --fail-fast       Stop after the first failing runner
   --help            Show this help
@@ -89,10 +107,26 @@ function parseArgs(argv) {
     return options;
 }
 
+function requestedModules(options) {
+    return (options.values.only ?? '')
+        .split(',')
+        .map(name => name.trim())
+        .filter(Boolean);
+}
+
 function runnerArguments(runner, options) {
     const args = [runner.script];
+    const requested = requestedModules(options);
+    const only = requested.filter(name => runner.modules.includes(name));
 
     for (const [name, value] of Object.entries(options.values)) {
+        if (name === 'only') {
+            if (only.length > 0) {
+                args.push('--only', only.join(','));
+            }
+            continue;
+        }
+
         args.push(`--${name}`, value);
     }
 
@@ -151,14 +185,28 @@ async function main() {
         return;
     }
 
+    const requested = requestedModules(options);
+    const unknown = requested.filter(name => !RUNNERS.some(runner => runner.modules.includes(name)));
+
+    if (unknown.length > 0) {
+        console.error(`Unknown unit module(s): ${unknown.join(', ')}`);
+        console.error(`Available: ${RUNNERS.flatMap(runner => runner.modules).join(', ')}`);
+        process.exitCode = 2;
+        return;
+    }
+
+    const runners = requested.length === 0
+        ? RUNNERS
+        : RUNNERS.filter(runner => runner.modules.some(name => requested.includes(name)));
+
     console.log(`TacPhone unit test suite (Node ${process.version})`);
-    console.log(`Runners: ${RUNNERS.map(runner => runner.name).join(', ')}\n`);
+    console.log(`Runners: ${runners.map(runner => runner.name).join(', ')}\n`);
 
     const results = [];
     const startedAt = Date.now();
 
-    for (const [index, runner] of RUNNERS.entries()) {
-        console.log(`==== [${index + 1}/${RUNNERS.length}] ${runner.name}: ${runner.description} ====\n`);
+    for (const [index, runner] of runners.entries()) {
+        console.log(`==== [${index + 1}/${runners.length}] ${runner.name}: ${runner.description} ====\n`);
         const result = await runRunner(runner, options);
         results.push(result);
 

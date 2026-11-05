@@ -77,7 +77,7 @@ namespace ArmaServerSide
 
         /// <summary>
         /// Adds the sender id to a client request and hands it to the game.
-        /// Used by both the LAN WebSocket loop and the relay data path.
+        /// Used by the relay data path (kept for the unused Remote/ code).
         /// </summary>
         internal void DispatchToGame(string connectionId, string messageJson)
         {
@@ -91,6 +91,32 @@ namespace ArmaServerSide
             try
             {
                 DllEntry.callback("ArmaWebHost", "Request", Encoding.UTF8.GetBytes(framed));
+            }
+            catch (Exception ex)
+            {
+                ExtensionLog.Error("Request callback failed", ex);
+            }
+        }
+
+        /// <summary>
+        /// Adds the sender id to a LAN client request and hands it to the game as
+        /// <c>WEBHOST:</c> + base64(UTF8(framed JSON)). The base64 keeps the
+        /// payload safe to embed in an SQF <c>ExecJS</c> string; SQF forwards it
+        /// unchanged.
+        /// </summary>
+        internal void DispatchWebhostRequest(string connectionId, string messageJson)
+        {
+            var framed = RequestFraming.InjectSender(messageJson, connectionId);
+            if (framed is null)
+            {
+                ExtensionLog.Warn($"Dropping malformed client frame from {connectionId}.");
+                return;
+            }
+
+            try
+            {
+                var encoded = WebServer.WebhostTransportPrefix + Convert.ToBase64String(Encoding.UTF8.GetBytes(framed));
+                DllEntry.callback("ArmaWebHost", "Request", Encoding.UTF8.GetBytes(encoded));
             }
             catch (Exception ex)
             {
@@ -157,6 +183,19 @@ namespace ArmaServerSide
 
     internal class WebServer
     {
+        /// <summary>
+        /// Prefix for LAN connection ids. The in-game web UI tells LAN clients
+        /// apart from relay peers by this prefix; SQF never parses it.
+        /// </summary>
+        internal const string LocalConnectionPrefix = "LOCAL_";
+
+        /// <summary>
+        /// Prefix for a LAN request forwarded to the game. SQF forwards the whole
+        /// string to <c>window.TacPhone.networking.OnTransportMessage</c>, which
+        /// strips the prefix and base64-decodes the payload.
+        /// </summary>
+        internal const string WebhostTransportPrefix = "WEBHOST:";
+
         WebApplication app = null!;
 
         readonly WebSocketConnectionManager _connections = new();
@@ -230,7 +269,7 @@ namespace ArmaServerSide
                     var connectionManager = _connections;
 
                     var webSocket = await context.WebSockets.AcceptWebSocketAsync();
-                    var connectionId = Guid.NewGuid().ToString();
+                    var connectionId = LocalConnectionPrefix + Guid.NewGuid().ToString();
 
                     await connectionManager.AddConnectionAsync(connectionId, webSocket);
                     await HandleWebSocketAsync(connectionId, webSocket, connectionManager, _stopping.Token);
@@ -481,8 +520,9 @@ namespace ArmaServerSide
                         var messageJson = Encoding.UTF8.GetString(messageStream.GetBuffer(), 0, (int)messageStream.Length);
 
                         // This should be format { k: "keystring", d: {...} }, same as what usually goes direct to Arma.
-                        // The manager adds "s" so the game knows where to send the reply.
-                        connectionManager.DispatchToGame(connectionId, messageJson);
+                        // The manager adds "s" so the game knows where to send the reply, then
+                        // prefixes the base64-encoded frame with WEBHOST: for the in-game web UI.
+                        connectionManager.DispatchWebhostRequest(connectionId, messageJson);
                     }
                 }
 

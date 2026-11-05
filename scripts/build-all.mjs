@@ -3,9 +3,9 @@
  * One-shot TacPhone build and install.
  *
  * Checks what actually changed, then builds only the affected web apps, the
- * native web-host DLL when its source is newer, and the game PBO when its data
- * or SQF/config sources changed. Successful steps are quiet; only errors and
- * skipped installs are reported.
+ * native web-host DLL (debug builds only when its source is newer), and the
+ * game PBO when its data or SQF/config sources changed. Successful steps are
+ * quiet; only errors and skipped installs are reported.
  *
  * Usage (from `websource`):
  *
@@ -159,7 +159,7 @@ Environment:
 
 Debug (default) uses the unminified web bundles and a non-binarized HEMTT build.
 Release uses the minified bundles and a binarized HEMTT build. The native
-web-host is always published in Release.
+web-host is published and installed in debug builds only.
 `);
 }
 
@@ -480,9 +480,13 @@ function main() {
         excludeDirs: WEBHOST_SOURCE_EXCLUDES,
     });
     const webhostPublishTime = mtime(WEBHOST_PUBLISH);
-    const webhostBuild = force || webhostPublishTime === 0 || webhostSourceTime > webhostPublishTime + 1000;
-    const webhostCopy = force || webhostBuild
-        || (webhostTarget !== null && copyNeeded(WEBHOST_PUBLISH, webhostTarget));
+    // The LAN web host is a debug-only convenience; release builds neither
+    // publish nor install it (the PBO compiles out the LAN bridge).
+    const webhostBuild = mode !== 'release'
+        && (force || webhostPublishTime === 0 || webhostSourceTime > webhostPublishTime + 1000);
+    const webhostCopy = mode !== 'release'
+        && (force || webhostBuild
+            || (webhostTarget !== null && copyNeeded(WEBHOST_PUBLISH, webhostTarget)));
 
     if (options.check) {
         console.log(`Mode: ${mode}`);
@@ -491,7 +495,8 @@ function main() {
         console.log(`Web: ${appsToBuild.length > 0 ? `build ${appsToBuild.map((app) => app.name).join(', ')}` : 'up to date'}`);
         if (webCopyNeeded) console.log('Web: data copies needed');
         console.log(`PBO: ${pboBuild ? 'build' : 'up to date'}${pboCopy ? ', copy to @acedev' : ''}`);
-        console.log(`Webhost: ${webhostBuild ? 'publish' : 'up to date'}${webhostCopy ? ', copy to game' : ''}`);
+        if (mode === 'release') console.log('Webhost: skipped (debug-only)');
+        else console.log(`Webhost: ${webhostBuild ? 'publish' : 'up to date'}${webhostCopy ? ', copy to game' : ''}`);
         return;
     }
 

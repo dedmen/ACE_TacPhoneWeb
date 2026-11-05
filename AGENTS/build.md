@@ -13,7 +13,7 @@ copying artifacts into the game. Runtime rules live in the area docs.
 | `ACE_TacPhone_Map/` | Reference app, sibling of the host. |
 | `MessagingApp/` | Messenger app (chat, rooms, presence), sibling of the host. |
 | `SampleApp/` | Minimal example app; also the new-app template. |
-| `WebServerExtension/` | .NET 10 NativeAOT `arma_webhost_x64`; external-browser dev only. See [`webhost.md`](webhost.md). |
+| `WebServerExtension/` | .NET 10 NativeAOT `arma_webhost_x64`; debug-only LAN/dev host. Release builds use the native SQF relay. See [`webhost.md`](webhost.md). |
 | `RemoteServer/` | .NET 10 relay + static host for public remote access. Separate deployable, not part of the add-on. See [`remote.md`](remote.md). |
 | `WebHostExtension_FeatureFlagsExport/` | C shim for `RVExtensionFeatureFlags`; `WebServerExtension/featureflags.obj` is checked in and linked. |
 | `scripts/` | `build-all.mjs`: changed-only build/install; `copy-data.mjs`: post-build copy of web outputs into the game `data\` folders; `test-all.mjs`: all live suites. |
@@ -26,7 +26,7 @@ From this directory (workspace root):
 ```powershell
 npm install            # one root lockfile, hoisted workspace deps
 npm run dev            # host Vite server; open the printed URL
-npm run build:all      # DEFAULT for building/installing into the game: web + PBO + native DLL
+npm run build:all      # DEFAULT for building/installing into the game: web + PBO (+ debug DLL)
 npm run build:debug    # web assets only (no PBO): host + every app + data copy
 npm run build          # RELEASE ONLY when the user explicitly asks for it
 npm run build:host     # host build + data copy
@@ -50,7 +50,7 @@ npm run test:all       # every suite above, in one summary; needs the game runni
 
 **When asked to build for the game or copy files into the game, run
 `npm run build:all`.** It is the only root command that builds the PBO and copies
-it (plus the native DLL) into the game; it defaults to debug. It refuses to
+it (plus the debug-only native DLL) into the game; it defaults to debug. It refuses to
 install while Arma is running, so ask the user to close the game first (or use
 `-- --build-only`).
 
@@ -69,16 +69,17 @@ git-ignored, so a debug bundle there is a local test artifact, not a release.
 `npm run build:all` is the normal build-and-install command for the game. It
 checks whether Arma is running (and refuses to install while it is; use
 `-- --build-only` to compile anyway), compares web sources to their `dist`
-outputs, compares the PBO output to the game-side sources, and compares the
-native web-host sources to the publish DLL. It rebuilds only the changed pieces,
-copies changed web data, builds the PBO with `hemtt build --no-bin --just
-tacphone` (debug) or `hemtt build --just tacphone` (release), and copies the PBO
-and `arma_webhost_x64.dll` into the game folders. `-- --check` prints the
-decisions, `-- --release` selects a release web/PBO build (manual use only),
-`-- --force` rebuilds everything, and `ARMA3_PATH` or `--arma-path` overrides the
-Arma installation path. Without an override the script reads
+outputs, compares the PBO output to the game-side sources, and (debug builds
+only) compares the native web-host sources to the publish DLL. It rebuilds only
+the changed pieces, copies changed web data, builds the PBO with
+`hemtt build --no-bin --just tacphone` (debug) or `hemtt build --just tacphone`
+(release), and copies the PBO and, in debug builds, `arma_webhost_x64.dll` into
+the game folders. `-- --check` prints the decisions, `-- --release` selects a
+release web/PBO build (manual use only), `-- --force` rebuilds everything, and
+`ARMA3_PATH` or `--arma-path` overrides the Arma installation path. Without an
+override the script reads
 `HKLM\SOFTWARE\WOW6432Node\bohemia interactive\arma 3` value `main` (and the
-`...\main` key shape). The native web host is always published in Release.
+`...\main` key shape). Release builds neither publish nor install the DLL.
 
 Host (`ACE_TacPhone_Main`):
 
@@ -163,17 +164,19 @@ Copy-Item .hemttout\build\addons\ace_tacphone.pbo `
 The game loads that PBO from `@acedev\addons` on the next start. Never replace it
 while Arma has the file open.
 
-The native extension is separate: the game loads
+The native extension is separate and debug-only: debug builds load
 `D:\Spiele\SteamLibrary\steamapps\common\Arma 3\arma_webhost_x64.dll`. Use
-`npm run build:all`; it compares the `WebServerExtension` sources with the
-publish DLL, runs `dotnet publish` only when needed, and copies the result to the
-game root. The game only picks it up on restart. It refuses to install while Arma
-is running.
+`npm run build:all`; in debug mode it compares the `WebServerExtension` sources
+with the publish DLL, runs `dotnet publish` only when needed, and copies the
+result to the game root. Release builds skip this entirely (the PBO compiles out
+the LAN bridge and the native relay needs no DLL). The game only picks it up on
+restart. It refuses to install while Arma is running.
 
 ## Build behavior
 
 - `npm run build:all` is the normal game build-and-install command: changed web
-  apps, the PBO, and the native DLL, then the install copies.
+  apps, the PBO, and (debug builds only) the native DLL, then the install
+  copies.
 - `npm run build:debug` is the web-only development build: unminified with an
   inline source map. Its outputs are copied into the git-ignored game `data\`
   folders for local testing; it does not build or install the PBO. Never ship

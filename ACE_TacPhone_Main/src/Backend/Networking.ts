@@ -18,6 +18,7 @@ import type {
     TerrainLayerProgress,
 } from "./Types";
 import { t } from "./i18n";
+import { RelayManager } from "./RelayManager";
 
 /** Short description of a request for error logs; never includes large payloads. */
 function describeRequest(data: object): string {
@@ -38,7 +39,12 @@ class NetworkingA3 implements Networking {
     // The in-game page is recreated when the game terrain changes, so one
     // completed result remains valid for the page's whole lifetime.
     private readonly terrainCache = new TerrainRequestCache(Number.POSITIVE_INFINITY, true);
+    private readonly relay: RelayManager;
+
     constructor() {
+        // The hub owns relay state and also intercepts the host's `main`
+        // commands (RemoteAccess.*, interests, Debug.RemoteAccess).
+        this.relay = new RelayManager(this, () => window.TacPhone?.gameInfo?.isDebug() === true);
         console.log("NetworkStartup A3");
     };
     WhenReady(): Promise<void> {
@@ -51,10 +57,61 @@ class NetworkingA3 implements Networking {
     }
 
     Request(data:object): Promise<object> {
+        // Host-internal commands are handled by the relay hub: panel Remote
+        // Access commands, interest aggregation and the debug bridge.
+        const intercepted = this.relay.TryHandleLocalRequest(data);
+        if (intercepted) return intercepted;
+
+        return this.RequestDirect(data);
+    }
+
+    /** Sends a request to SQF without hub interception (used by RelayManager). */
+    RequestDirect(data: object): Promise<object> {
+        return this.requestToGame(data);
+    }
+
+    /**
+     * Sends a request to SQF and reports the generated A3API key before the
+     * request leaves. The hub uses this to correlate a rewritten remote request
+     * with the reply the game sends for its new key.
+     */
+    RequestTracked(
+        data: object,
+        onKey: (key: string) => void,
+        timeoutMs: number,
+    ): Promise<object> {
+        return this.requestToGame(data, onKey, timeoutMs);
+    }
+
+    private requestToGame(
+        data: object,
+        onKey?: (key: string) => void,
+        timeoutMs?: number,
+    ): Promise<object> {
         // We are reusing the existing A3API for request/response
 
         return new Promise((resolve, reject) => {
             let reqKey = this.GenerateRequestID();
+            let settled = false;
+            let timeout: ReturnType<typeof setTimeout> | undefined;
+
+            const settle = (finish: () => void): void => {
+                if (settled) return;
+                settled = true;
+                if (timeout !== undefined) clearTimeout(timeout);
+                finish();
+            };
+
+            if (timeoutMs !== undefined) {
+                timeout = setTimeout(() => {
+                    settle(() => reject(new Error(
+                        `TacPhone request "${reqKey}" timed out after ${timeoutMs}ms`
+                        + ` for ${describeRequest(data)}`,
+                    )));
+                }, timeoutMs);
+            }
+
+            onKey?.(reqKey);
 
             if (window.A3API._push(reqKey, 
                 {
@@ -62,6 +119,8 @@ class NetworkingA3 implements Networking {
                     // which gives a byte string. Repair the UTF-8 before parsing so string
                     // values are not mojibake; ASCII payloads take the no-copy fast path.
                     resolve: (resultData): void => {
+                        if (settled) return;
+
                         let text: string;
 
                         try {
@@ -69,35 +128,42 @@ class NetworkingA3 implements Networking {
                         } catch (error) {
                             // Do not let a decode failure escape into the game's ExecJS
                             // callback: it would be an uncaught error and the promise
-                            // would hang forever.
-                            console.error(
-                                `[TacPhone] Could not base64-decode the game reply for "${reqKey}"`
-                                + ` (${typeof resultData === "string" ? resultData.length : -1} chars)`
-                                + ` to request ${describeRequest(data)}:`,
-                                error,
-                            );
-                            reject(error);
+                            // would hang forever. A timed-out request has already settled.
+                            settle(() => {
+                                console.error(
+                                    `[TacPhone] Could not base64-decode the game reply for "${reqKey}"`
+                                    + ` (${typeof resultData === "string" ? resultData.length : -1} chars)`
+                                    + ` to request ${describeRequest(data)}:`,
+                                    error,
+                                );
+                                reject(error);
+                            });
                             return;
                         }
 
                         try {
-                            resolve(JSON.parse(text));
+                            const parsed = JSON.parse(text);
+                            settle(() => resolve(parsed));
                         } catch (error) {
                             // Keep the payload: a malformed/truncated reply is otherwise
                             // impossible to diagnose from the console alone.
-                            console.error(
-                                `[TacPhone] Invalid JSON reply from the game for "${reqKey}"`
-                                + ` to request ${describeRequest(data)}:`
-                                + ` ${text.length} chars, head="${text.slice(0, 200)}",`
-                                + ` tail="${text.slice(-200).replace(/\s+/g, " ")}"`,
-                                error,
-                            );
-                            reject(new Error(
-                                `The game sent an invalid JSON reply for request "${reqKey}".`,
-                            ));
+                            settle(() => {
+                                console.error(
+                                    `[TacPhone] Invalid JSON reply from the game for "${reqKey}"`
+                                    + ` to request ${describeRequest(data)}:`
+                                    + ` ${text.length} chars, head="${text.slice(0, 200)}",`
+                                    + ` tail="${text.slice(-200).replace(/\s+/g, " ")}"`,
+                                    error,
+                                );
+                                reject(new Error(
+                                    `The game sent an invalid JSON reply for request "${reqKey}".`,
+                                ));
+                            });
                         }
                     },
-                    reject 
+                    reject: (reason?: unknown): void => {
+                        settle(() => reject(reason));
+                    },
                 }
                 ))
                 window.A3API.SendAlert(JSON.stringify({k: reqKey, d:data}))
@@ -193,6 +259,19 @@ class NetworkingA3 implements Networking {
         const decoded = decodeGameTextDeep(message);
         console.log("Message from game", decoded);
         SendMessageToApp(decoded);
+
+        // Every game push is a broadcast: the hub does not filter by target.
+        this.relay.BroadcastGameMessage(decoded);
+    }
+
+    /** Raw transport string forwarded by SQF (`RELAY:` / `WEBHOST:`). */
+    OnTransportMessage(raw: string): void {
+        this.relay.OnTransportMessage(raw);
+    }
+
+    /** Relay lifecycle event reported by SQF (`established` / `lost`). */
+    OnRelayEvent(event: string, detail?: unknown): void {
+        this.relay.OnRelayEvent(event, detail);
     }
 
 };

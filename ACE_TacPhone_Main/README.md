@@ -22,8 +22,10 @@ Arma's in-game browser.
   example Messenger opening a marker on the Map.
 - **Demand-driven data**: apps announce interests so the game only streams data
   that an open page currently needs.
-- **Remote access**: the public relay serves the same page over a share link;
-  see [`AGENTS/remote.md`](../AGENTS/remote.md).
+- **Remote access**: the public relay serves the same page over a share link.
+  The game connects with Arma's native `webRequest` WebSocket; the in-game page
+  is the hub for relay and LAN clients. See
+  [`AGENTS/remote.md`](../AGENTS/remote.md).
 
 ## Requirements
 
@@ -48,9 +50,10 @@ npm run dev
 
 Open the printed URL (normally `http://localhost:5173`) in an external Chrome
 window. Use `localhost`, not `127.0.0.1`: the host selects the dev transport from
-that exact prefix. Keep Arma running with TacPhone open; the page connects to
-`wss://localhost:8001/ws`, served by the TacPhone web host extension. Without the
-game the page reports a connection failure.
+that exact prefix. Keep Arma running in a `__A3_DEBUG__` build with TacPhone
+open; the page connects to `wss://localhost:8001/ws`, served by the debug-only
+TacPhone web host extension. Release builds have no LAN extension. Without the
+game (or in a release build) the page reports a connection failure.
 
 Development apps are discovered from `dev-apps.local.json`, the
 `TACPHONE_DEV_APPS` environment variable, or sibling folders whose
@@ -60,7 +63,7 @@ changing discovery configuration.
 ## Build
 
 ```powershell
-npm run build:all      # build + install into the game (web + PBO + native DLL)
+npm run build:all      # build + install into the game (web + PBO; debug also installs the DLL)
 npm run build:debug    # web-only iteration (no PBO install)
 npm run build          # release, only when explicitly requested
 ```
@@ -124,9 +127,10 @@ download a browser.
 
 ## Limitations
 
-- Only the selected tab of a tabset is mounted; a background panel has no live
-  instance or registered API. Route to it with
-  `window.TacPhone.interApp.resolveAsync()`.
+- Every tab of a tabset stays mounted, background ones included, so a background
+  panel keeps its live instance and registered API (its content is only
+  `display: none`). Route to it with
+  `window.TacPhone.interApp.resolveAsync()` to bring it to the front.
 - Native window popouts (`window.open`) are not supported in the in-game
   browser; floating in-layout popups are the only popups.
 - There is no permission model between apps, and no cross-app events yet.

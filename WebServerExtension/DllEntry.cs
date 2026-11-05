@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Text.Json;
 using ArmaServerSide.Remote;
 // ReSharper disable InconsistentNaming
 
@@ -114,30 +115,54 @@ namespace ArmaServerSide
 
                         return WriteOutput(output, outputSize, "OK");
                     }
-                    case "SendTo" when args.Length >= 2:
+                    case "SendTo" when args.Length >= 1:
                     {
-                        // Content is the LAST argument; every preceding argument is a target.
-                        var content = Marshal.PtrToStringUTF8(args[^1]) ?? string.Empty;
-                        
-                        // Parse each arg with Marshal.PtrToStringUTF8; skip null/empty targets.
-                        var targets = new List<string>();
-                        for (int i = 0; i < args.Length - 1; i++)
-                        {
-                            var target = Marshal.PtrToStringUTF8(args[i]);
-                            if (!string.IsNullOrEmpty(target))
-                            {
-                                targets.Add(target);
-                            }
-                        }
-
+                        // Single JSON argument:
+                        //   { "targets": ["LOCAL_..."], "data": "<exact browser string>" }
+                        // Parsed here so SQF never builds a target list itself.
                         if (_webServer == null)
                             return WriteOutput(output, outputSize, "ERROR: server not running");
+
+                        var payload = Marshal.PtrToStringUTF8(args[0]) ?? string.Empty;
+
+                        var targets = new List<string>();
+                        string content;
+                        try
+                        {
+                            using var document = JsonDocument.Parse(payload);
+                            var root = document.RootElement;
+
+                            if (root.ValueKind != JsonValueKind.Object ||
+                                !root.TryGetProperty("targets", out var targetsElement) ||
+                                targetsElement.ValueKind != JsonValueKind.Array ||
+                                !root.TryGetProperty("data", out var dataElement) ||
+                                dataElement.ValueKind != JsonValueKind.String)
+                            {
+                                return WriteOutput(output, outputSize, "ERROR: invalid SendTo payload");
+                            }
+
+                            foreach (var item in targetsElement.EnumerateArray())
+                            {
+                                if (item.ValueKind != JsonValueKind.String)
+                                    return WriteOutput(output, outputSize, "ERROR: invalid SendTo payload");
+
+                                var target = item.GetString();
+                                if (!string.IsNullOrWhiteSpace(target))
+                                    targets.Add(target);
+                            }
+
+                            content = dataElement.GetString() ?? string.Empty;
+                        }
+                        catch (JsonException)
+                        {
+                            return WriteOutput(output, outputSize, "ERROR: invalid SendTo payload");
+                        }
 
                         if (targets.Count == 0)
                             return WriteOutput(output, outputSize, "ERROR: invalid arguments");
 
                         int delivered = _webServer.SendTo(targets, content);
-                        
+
                         // Return format: "OK <delivered> <requested>"
                         return WriteOutput(output, outputSize, $"OK {delivered} {targets.Count}");
                     }

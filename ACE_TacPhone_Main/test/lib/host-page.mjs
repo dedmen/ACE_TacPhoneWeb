@@ -26,7 +26,9 @@ export async function launchHostPage({
     viewport = { width: 1280, height: 900 },
 }) {
     const browser = await launchBrowser({ headed, slowMo });
-    const context = await browser.newContext({ viewport, hasTouch });
+    // The dev page connects to the debug LAN host over a self-signed certificate.
+    // Playwright tests are local, so trust it for this context.
+    const context = await browser.newContext({ viewport, hasTouch, ignoreHTTPSErrors: true });
     const page = await context.newPage();
     const consoleErrors = [];
     page.on('pageerror', (error) => consoleErrors.push(error.message));

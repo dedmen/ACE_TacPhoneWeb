@@ -11,6 +11,7 @@ public static class ControlTypes
 {
     // game -> server
     public const string Auth = "auth";
+    public const string Send = "send";
     public const string CodeNew = "code-new";
     public const string ShareCreate = "share-create";
     public const string ShareRevoke = "share-revoke";
@@ -23,6 +24,7 @@ public static class ControlTypes
 
     // server -> game
     public const string AuthOk = "auth-ok";
+    public const string SendResult = "send-result";
     public const string PeerJoined = "peer-joined";
     public const string PeerLeft = "peer-left";
     public const string Code = "code";

@@ -225,6 +225,11 @@ class App extends React.Component<AppProps & { mode?: 'map' | 'gps' }, MapState>
         });
         this.map = map;
 
+        // A Map in a background tab is `display: none`, so the viewport starts
+        // at 0x0 and only gets a real size when the tab is selected. The fit
+        // and queued fly-to requests wait for that size.
+        map.on('change:size', this.handleMapSizeChange);
+
         // The phone UI has no room for OL's +/- zoom buttons; wheel and pinch
         // zoom stay available.
         map.getControls().forEach((control) => {
@@ -303,11 +308,32 @@ class App extends React.Component<AppProps & { mode?: 'map' | 'gps' }, MapState>
     }
 
     /**
-     * Applies a view move, queueing it until the terrain view exists. This is
-     * the implementation of `MapApi.flyTo()` and of marker focusing.
+     * Applies a view move, queueing it until the terrain view exists and the
+     * map has a measurable viewport. This is the implementation of
+     * `MapApi.flyTo()` and of marker focusing.
      */
     private flyToCoordinate(options: MapFlyToOptions): void {
         this.gpsUiRef.current?.suspendFollow();
+
+        // The terrain view is replaced once the SVG arrives, and a Map in a
+        // background tab is `display: none`, so OpenLayers reports a 0x0
+        // viewport. A bbox fit would compute a meaningless resolution there;
+        // apply the request when the view exists and the tab is shown.
+        if (!this.map || !this.terrainViewReady || !this.hasMapArea()) {
+            this.pendingFlyTo = options;
+            return;
+        }
+
+        this.applyFlyToNow(options);
+    }
+
+    /** Applies one validated view move to the live, measured map. */
+    private applyFlyToNow(options: MapFlyToOptions): void {
+        const map = this.map;
+        if (!map) {
+            return;
+        }
+
         const bbox = this.readBoundingBox(options.bbox);
         if (options.bbox !== undefined && bbox === null) {
             console.warn('MapApi.flyTo: invalid bounding box, expected [minX, minY, maxX, maxY]');
@@ -323,14 +349,7 @@ class App extends React.Component<AppProps & { mode?: 'map' | 'gps' }, MapState>
             return;
         }
 
-        // The terrain view is replaced once the SVG arrives, so a request
-        // that arrives before then is applied by applyPendingFlyTo().
-        if (!this.map || !this.terrainViewReady) {
-            this.pendingFlyTo = options;
-            return;
-        }
-
-        const view = this.map.getView();
+        const view = map.getView();
         const projection = view.getProjection();
 
         const center: [number, number] = bbox
@@ -353,7 +372,7 @@ class App extends React.Component<AppProps & { mode?: 'map' | 'gps' }, MapState>
             : undefined;
 
         if (resolution === undefined && bbox) {
-            const size = this.map.getSize();
+            const size = map.getSize();
             const width = Math.max(1, (size?.[0] ?? 512) - FLY_TO_FIT_MARGIN_PX * 2);
             const height = Math.max(1, (size?.[1] ?? 512) - FLY_TO_FIT_MARGIN_PX * 2);
             const fitted = Math.max((bbox[2] - bbox[0]) / width, (bbox[3] - bbox[1]) / height);
@@ -619,8 +638,9 @@ class App extends React.Component<AppProps & { mode?: 'map' | 'gps' }, MapState>
             this.unsubscribeOptions = undefined;
         }
 
-        /** Clear pending fly-to on unmount. */
+        /** Clear pending view work on unmount. */
         this.pendingFlyTo = null;
+        this.pendingInitialFit = false;
 
         this.terrainLoadToken += 1;
         this.terrainSource = null;
@@ -634,6 +654,7 @@ class App extends React.Component<AppProps & { mode?: 'map' | 'gps' }, MapState>
 
         if (map) {
             // Detach the map from the DOM target
+            map.un('change:size', this.handleMapSizeChange);
             map.setTarget(undefined);
         }
     }
@@ -819,7 +840,13 @@ class App extends React.Component<AppProps & { mode?: 'map' | 'gps' }, MapState>
         // throttles new tile loads and would also request intermediate zooms that
         // are never displayed.
         if (!preserved) {
-            view.fit(extent);
+            if (this.hasMapArea()) {
+                view.fit(extent);
+            } else {
+                // A Map built in a background tab has a 0x0 viewport; fitting
+                // it now would divide by zero. Fit it when the tab is shown.
+                this.pendingInitialFit = true;
+            }
         }
 
         // A flyTo() that arrived before the terrain view existed must win over the
@@ -872,7 +899,49 @@ class App extends React.Component<AppProps & { mode?: 'map' | 'gps' }, MapState>
     private pendingFlyTo: MapFlyToOptions | null = null;
 
     /**
-     * Apply a pending fly-to request from before the terrain was ready.
+     * True when the initial whole-terrain fit was skipped because the Map was
+     * built in a hidden (0x0) tab; it runs on the first measured viewport.
+     */
+    private pendingInitialFit = false;
+
+    /** True when the OpenLayers viewport has a measurable size (the tab is shown). */
+    private hasMapArea(): boolean {
+        const size = this.map?.getSize();
+        return Boolean(size && size[0] > 0 && size[1] > 0);
+    }
+
+    /**
+     * Applies work that had to wait for a measurable viewport: a Map in a
+     * background tab is `display: none`, so OpenLayers reports a 0x0 size until
+     * the tab is selected and its ResizeObserver runs.
+     */
+    private handleMapSizeChange = (): void => {
+        if (!this.hasMapArea()) {
+            return;
+        }
+
+        if (this.pendingFlyTo) {
+            this.pendingInitialFit = false;
+            this.applyPendingFlyTo();
+            return;
+        }
+
+        if (!this.pendingInitialFit) {
+            return;
+        }
+
+        this.pendingInitialFit = false;
+
+        const view = this.map?.getView();
+        const extent = view?.getProjection().getExtent();
+        if (view && extent) {
+            view.fit(extent);
+        }
+    };
+
+    /**
+     * Applies a queued fly-to once the terrain view exists and the map has a
+     * measurable viewport. A request that still cannot be applied stays queued.
      */
     private applyPendingFlyTo(): void {
         const pending = this.pendingFlyTo;
@@ -880,50 +949,12 @@ class App extends React.Component<AppProps & { mode?: 'map' | 'gps' }, MapState>
             return;
         }
 
+        if (!this.map || !this.terrainViewReady || !this.hasMapArea()) {
+            return;
+        }
+
         this.pendingFlyTo = null;
-
-        const view = this.map?.getView();
-        if (!view) {
-            console.warn('MapApi: applyPendingFlyTo() called but the map is not ready');
-            return;
-        }
-
-        const projection = view.getProjection();
-
-        // Validate x/y are finite numbers
-        if (
-            typeof pending.x !== 'number' ||
-            typeof pending.y !== 'number' ||
-            !Number.isFinite(pending.x) ||
-            !Number.isFinite(pending.y)
-        ) {
-            console.warn('MapApi: pending fly-to has invalid x/y');
-            return;
-        }
-
-        const center = [pending.x, pending.y];
-
-        // Clamp the center to the current view projection extent when one exists
-        const extent = projection.getExtent();
-        if (extent) {
-            center[0] = Math.max(extent[0], Math.min(pending.x, extent[2]));
-            center[1] = Math.max(extent[1], Math.min(pending.y, extent[3]));
-        }
-
-        // Only apply resolution when it is a finite positive number
-        const resolution = pending.resolution !== undefined && Number.isFinite(pending.resolution) && pending.resolution > 0 ? pending.resolution : undefined;
-
-        if (pending.animate !== false) {
-            const animation: { center: number[]; resolution?: number; duration: number } = { center, duration: 300 };
-            if (resolution !== undefined)
-                animation.resolution = resolution;
-            view.animate(animation);
-        } else {
-            view.setCenter(center);
-            if (resolution !== undefined) {
-                view.setResolution(resolution);
-            }
-        }
+        this.applyFlyToNow(pending);
     }
 
     render() {

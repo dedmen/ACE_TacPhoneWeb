@@ -22,6 +22,13 @@ public static class ServerFrames
     public static string AuthOk(string hostId, string? issuedSecret) =>
         Build(ControlTypes.AuthOk, ("proto", ProtocolConstants.Version), ("hostId", hostId), ("secret", issuedSecret));
 
+    public static string SendResult(int requested, int delivered, IReadOnlyCollection<string> unknown) =>
+        Build(
+            ControlTypes.SendResult,
+            ("requested", requested),
+            ("delivered", delivered),
+            ("unknown", unknown));
+
     public static string PeerJoined(string peerId, string? label, string via, DateTimeOffset connectedAt, DateTimeOffset firstSeenAt) =>
         Build(
             ControlTypes.PeerJoined,

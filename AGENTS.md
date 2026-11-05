@@ -19,7 +19,7 @@ its own file map, rules, and links to the deeper READMEs.
 
 | If the task is about... | Read |
 | --- | --- |
-| Game side: SQF, config, request/response protocol, interests, extension bridge | [`AGENTS/sqf.md`](AGENTS/sqf.md) |
+| Game side: SQF, config, request/response protocol, interests, native relay pipe, debug LAN bridge | [`AGENTS/sqf.md`](AGENTS/sqf.md) |
 | Host UI (`ACE_TacPhone_Main`): panels, layout, app loading, networking, inter-app, notifications | [`AGENTS/host.md`](AGENTS/host.md) |
 | Map app (`ACE_TacPhone_Map`), web UI or game-side handlers | [`AGENTS/map.md`](AGENTS/map.md) |
 | Messenger app (`MessagingApp`) and game-side messaging server | [`AGENTS/messaging.md`](AGENTS/messaging.md) |
@@ -27,8 +27,9 @@ its own file map, rules, and links to the deeper READMEs.
 | App contract, packaging, creating an app, SampleApp | [`AGENTS/apps.md`](AGENTS/apps.md) |
 | Workspace commands, packages, build/release, tooling | [`AGENTS/build.md`](AGENTS/build.md) |
 | Development server, app discovery, VS Code debugging | [`AGENTS/dev.md`](AGENTS/dev.md) |
-| .NET `WebServerExtension` | [`AGENTS/webhost.md`](AGENTS/webhost.md) |
-| Remote access: public relay, pairing codes, share links | [`AGENTS/remote.md`](AGENTS/remote.md) |
+| Debug-only .NET `WebServerExtension` (LAN / direct dev access) | [`AGENTS/webhost.md`](AGENTS/webhost.md) |
+| Remote access: native SQF relay, in-game hub, pairing codes, share links | [`AGENTS/remote.md`](AGENTS/remote.md) |
+| Planned apps and backlogs that are not implemented (Radio, Vehicle/Air HUD, Explosives, Messenger notes, GPS trackers, Map completeness) | [`AGENTS/plans.md`](AGENTS/plans.md) |
 
 When a change crosses an area, read the other file only for that boundary. When
 you change behavior, update the matching `AGENTS/*.md` file and its README
@@ -56,6 +57,14 @@ section in the same change.
 - `window.TacPhone` is the only app-facing global and `@ace-tacphone/api` the
   only app contract. Apps never import host code or `TacPhoneMain.ts`, and the
   host is not passed as a prop or argument.
+- Remote access is split by design: SQF only opens/closes the native
+  `webRequest` WebSocket and forwards opaque transport strings; the in-game Web
+  UI hub (`ACE_TacPhone_Main/src/Backend/RelayManager.ts`, owned by
+  `NetworkingA3`) owns relay control frames, peers, codes/shares, reconnect,
+  request correlation, terrain/texture production and broadcast fan-out. Do not
+  move routing or correlation back into SQF. Remote and LAN requests reach SQF
+  as normal requests with a fresh A3API `k`; SQF must never see `__client`,
+  `__requestKey` or `__silent`.
 - A production app is one self-contained ESM imported from a blob URL: no
   relative imports, dynamic chunk imports, local `React.lazy` chunks, CSS side
   files, or `new URL(..., import.meta.url)`. Inline CSS/assets with
@@ -63,12 +72,14 @@ section in the same change.
 - Shared modules are fixed in `packages/tacphone-build/shared-modules.js`: only
   `react`, `react-dom`, `react-dom/client`, `react/jsx-runtime`, and
   `react/compiler-runtime`. Keep them external; apps cannot add mappings.
-- Only the selected tab of a tabset is mounted, so a background panel has no live
-  instance or registered API. Route with `window.TacPhone.interApp.resolveAsync()`
-  (it activates the panel and waits); native window popouts (`window.open`) are
-  unsupported in the in-game browser.
+- Every tab of a tabset stays mounted, background ones included, so a background
+  panel keeps its live instance and registered API; flexlayout only hides its
+  content with `display: none`. Route through
+  `window.TacPhone.interApp.resolveAsync()` (it activates the panel and waits) so
+  the target is also brought to the front; native window popouts
+  (`window.open`) are unsupported in the in-game browser.
 - **Builds**: use `npm run build:all` to build and install into the game (web
-  apps, PBO, native DLL). `npm run build:debug` is web-only (host + apps, copied
+  apps, PBO, and the debug-only LAN DLL). `npm run build:debug` is web-only (host + apps, copied
   into the game `data/` folders; no PBO install) and is only for quick web
   iteration. Only run the release `npm run build` when the user explicitly asks
   for a release or shipping build.
@@ -105,7 +116,7 @@ section in the same change.
 ## Deeper reference
 
 - [`AGENTS/host.md`](AGENTS/host.md) — host internals: panels, layout, loader,
-  transport, inter-app registry, interests, notifications, options.
+  transport, relay hub, inter-app registry, interests, notifications, options.
 - [`AGENTS/apps.md`](AGENTS/apps.md) — app contract, services, interests,
   packaging, runtime dependencies, creating/renaming an app.
 - [`AGENTS/map.md`](AGENTS/map.md) — Map app internals and game-side handlers.
@@ -121,4 +132,7 @@ section in the same change.
   contract types.
 - [`packages/tacphone-build/README.md`](packages/tacphone-build/README.md) —
   `tacphone-build` CLI, shared modules, single-file plugin.
+- [`AGENTS/plans.md`](AGENTS/plans.md) — index of the `PLAN_*.md` design documents
+  (Radio, Vehicle/Air HUD, Explosives, Messenger notes) and the two scope-only
+  backlogs (GPS trackers, Map completeness), plus their shared rules.
 - [`TODO.md`](TODO.md) — all known incomplete work and placeholders.

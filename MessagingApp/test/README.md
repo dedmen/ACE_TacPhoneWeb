@@ -24,15 +24,11 @@ Live tier:
   `Messaging.Debug.Status` first and stops with a clear message if debug support
   was not compiled in. Release builds deliberately do not contain the
   `Messaging.Debug.*` commands.
-- **Node trusts the local HTTPS certificate.** The suite never disables
-  certificate verification. If Node reports `SELF_SIGNED_CERT_IN_CHAIN`,
-  `UNABLE_TO_VERIFY_LEAF_SIGNATURE` or a hostname error, point
-  `NODE_EXTRA_CA_CERTS` at the certificate PEM:
-
-  ```powershell
-  $env:NODE_EXTRA_CA_CERTS = "C:\path\to\tacphone-localhost.pem"
-  node MessagingApp/test/run-tests.mjs
-  ```
+- **The local HTTPS certificate is handled automatically.** The shared runner
+  exports the certificate the web host presents to
+  `%LOCALAPPDATA%\TacPhone\localhost-test-ca.pem`, installs it for the Node
+  process and prints the path. It never disables certificate verification. For
+  a manual Node run, set `NODE_EXTRA_CA_CERTS` to the printed path.
 
 - **A current Node release.** Node 20.19+/22.12+ exposes the global `WebSocket`.
   The TacPhone web host requires an `Origin` header on the WebSocket handshake;

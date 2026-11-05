@@ -7,9 +7,11 @@ host/app source maps. For the in-game browser constraints see the root
 ## Preconditions
 
 - `npm install` once at the workspace root.
-- Keep Arma and TacPhone running: the extension serves `wss://localhost:8001/ws`.
+- Keep Arma and TacPhone running: in a `__A3_DEBUG__` build the extension serves
+  `wss://localhost:8001/ws`; release builds have no LAN extension and use the
+  native relay instead.
 - Trust the local ASP.NET TLS certificate, otherwise the dev page cannot open the
-  WebSocket.
+  WebSocket. The dev server is debug-only.
 - Open the printed `http://localhost:<port>` URL. Never use `127.0.0.1`:
   `IsLocalDev()` matches the exact `http://localhost` prefix and loads apps from
   the dev server. (The transport itself is chosen by `IsArma()`: a `blob:` page
@@ -73,7 +75,7 @@ do not use the VS Code integrated browser (it does not resolve `webRoot`).
 
 | Symptom | Check |
 | --- | --- |
-| Page cannot connect | Arma + TacPhone running, TLS cert trusted, URL is `localhost` not `127.0.0.1`. |
+| Page cannot connect | Arma + TacPhone running in a **debug** build (the LAN extension is debug-only), TLS cert trusted, URL is `localhost` not `127.0.0.1`. |
 | App missing from the chooser | `package.json` marker / config entry name equals the SQF config class; Vite restarted; the game-side `ace_tacphone_apps.hpp` is in the loaded PBO. |
 | App loads but `window.TacPhone` is missing | The page is served by the host server, not the app's own Vite server. |
 | Breakpoints do not bind in app sources | Keep the `devAppsPlugin` source-map rewrite; do not add `sourceMapPathOverrides`. |
