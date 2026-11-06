@@ -36,6 +36,10 @@ public sealed class FileCache
     private readonly Dictionary<string, PendingFile> _pending = new(StringComparer.Ordinal);
     private readonly Dictionary<string, long> _observations = new(StringComparer.Ordinal);
 
+    // Normalized paths per host, so UnpinHost drops a host's entries without a
+    // prefix scan over every pin and expected hash.
+    private readonly Dictionary<string, List<string>> _pathsByHost = new(StringComparer.Ordinal);
+
     private readonly ILogger<FileCache> _logger;
     private readonly long _maxTotalBytes;
     private readonly int _maxEntries;
@@ -161,6 +165,7 @@ public sealed class FileCache
 
                 IncrementObservationsLocked(hash);
                 _expected[key] = hash;
+                RememberPathLocked(hostId, path);
 
                 if (_content.ContainsKey(hash))
                 {
@@ -362,49 +367,26 @@ public sealed class FileCache
             return;
         }
 
-        var prefix = hostId + "\u0000";
-
         lock (_gate)
         {
-            List<string>? doomed = null;
-            foreach (var (key, hash) in _pins)
+            if (!_pathsByHost.TryGetValue(hostId, out var paths))
             {
-                if (!key.StartsWith(prefix, StringComparison.Ordinal))
-                {
-                    continue;
-                }
+                return;
+            }
 
-                (doomed ??= []).Add(key);
+            _pathsByHost.Remove(hostId);
 
-                if (_content.TryGetValue(hash, out var entry))
+            foreach (var path in paths)
+            {
+                var key = PinKey(hostId, path);
+
+                if (_pins.Remove(key, out var hash) &&
+                    _content.TryGetValue(hash, out var entry))
                 {
                     entry.PinnedCount = Math.Max(0, entry.PinnedCount - 1);
                 }
-            }
 
-            if (doomed is not null)
-            {
-                foreach (var key in doomed)
-                {
-                    _pins.Remove(key);
-                }
-            }
-
-            List<string>? expectedDoomed = null;
-            foreach (var key in _expected.Keys)
-            {
-                if (key.StartsWith(prefix, StringComparison.Ordinal))
-                {
-                    (expectedDoomed ??= []).Add(key);
-                }
-            }
-
-            if (expectedDoomed is not null)
-            {
-                foreach (var key in expectedDoomed)
-                {
-                    _expected.Remove(key);
-                }
+                _expected.Remove(key);
             }
         }
     }
@@ -484,6 +466,8 @@ public sealed class FileCache
 
     private void PinLocked(string hostId, string normalizedPath, string hash)
     {
+        RememberPathLocked(hostId, normalizedPath);
+
         var key = PinKey(hostId, normalizedPath);
 
         if (_pins.TryGetValue(key, out var existing))
@@ -616,6 +600,21 @@ public sealed class FileCache
 
     private static string PendingKey(string peerId, string requestKey) => peerId + "\u0000" + requestKey;
 
+    private void RememberPathLocked(string hostId, string normalizedPath)
+    {
+        if (_pathsByHost.TryGetValue(hostId, out var paths))
+        {
+            if (!paths.Contains(normalizedPath))
+            {
+                paths.Add(normalizedPath);
+            }
+        }
+        else
+        {
+            _pathsByHost[hostId] = [normalizedPath];
+        }
+    }
+
     private sealed class ContentEntry
     {
         public byte[] Bytes = [];
@@ -632,15 +631,3 @@ public sealed class FileCache
         DateTimeOffset CreatedAt,
         string PeerId);
 }
-
-/// <summary>A point-in-time view of the file cache.</summary>
-public readonly record struct FileCacheStats(
-    int Entries,
-    long Bytes,
-    long Hits,
-    long Misses,
-    long Evictions,
-    int Pending,
-    int Pinned,
-    int Sticky,
-    int Expected);

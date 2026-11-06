@@ -70,10 +70,23 @@ import {
     CMD_SET_CLIENT_PRESENCE,
 } from '../protocol';
 import type { ChatMessagesByRoom } from './roomUtils';
+import { sortRoomSummaries } from './roomUtils';
 import {
-    effectiveRoomPresence,
-    sortRoomSummaries,
-} from './roomUtils';
+    applyPresenceToRooms,
+    applyPlayerListToRooms,
+    buildRoomSummary,
+    placeholderRoomSummary,
+    roomMatchesCreate,
+    upsertRoomSummary,
+} from './ChatRooms';
+import {
+    applyNewMessage,
+    createOptimisticMessage,
+    keepMessagesForRooms,
+    markMessageFailedInRoom,
+    mergePendingOptimistic,
+    mergeSyncChunk,
+} from './ChatMessages';
 import {
     checkEncodedObjects,
     decodeChatObjectsFromStorage,
@@ -645,29 +658,20 @@ class ChatStoreImpl implements ChatStoreApi {
         this.touchServerTime(push.now);
 
         const roomId = push.room.id;
-        const messages = push.chunk <= 0
-            ? [...push.messages]
-            : [...(this.syncBuffers.get(roomId) ?? []), ...push.messages];
+        const buffered = mergeSyncChunk(this.syncBuffers.get(roomId), push.chunk, push.messages);
 
-        this.syncBuffers.set(roomId, messages);
+        this.syncBuffers.set(roomId, buffered);
         this.syncedRoomIds.add(roomId);
 
         // Optimistic messages the server has not echoed yet survive the sync.
-        const pending = (this.state.messages[roomId] ?? []).filter(message =>
-            message.pending === true &&
-            !messages.some(synced =>
-                synced.clientMessageId !== undefined && synced.clientMessageId === message.clientMessageId,
-            ),
-        );
-
-        const merged = pending.length > 0 ? [...messages, ...pending] : messages;
+        const merged = mergePendingOptimistic(buffered, this.state.messages[roomId]);
         const existing = this.getRoom(roomId);
-        const summary = this.buildSummary(push.room, merged, existing?.unreadCount ?? 0);
+        const summary = buildRoomSummary(push.room, merged, existing?.unreadCount ?? 0, this.state.self?.uid);
 
         this.setState({
             syncing: true,
             messages: { ...this.state.messages, [roomId]: merged },
-            rooms: this.upsertRoom(summary),
+            rooms: upsertRoomSummary(this.state.rooms, summary),
         });
     }
 
@@ -676,11 +680,7 @@ class ChatStoreImpl implements ChatStoreApi {
 
         // The server is authoritative: rooms missing from the sync are gone.
         const rooms = this.state.rooms.filter(room => this.syncedRoomIds.has(room.id));
-        const messages: ChatMessagesByRoom = {};
-        for (const room of rooms) {
-            const roomMessages = this.state.messages[room.id];
-            if (roomMessages) messages[room.id] = roomMessages;
-        }
+        const messages = keepMessagesForRooms(this.state.messages, rooms);
 
         const activeRoomId = this.state.activeRoomId !== undefined && rooms.some(room => room.id === this.state.activeRoomId)
             ? this.state.activeRoomId
@@ -723,9 +723,9 @@ class ChatStoreImpl implements ChatStoreApi {
 
         const existing = this.getRoom(push.room.id);
         const messages = this.state.messages[push.room.id] ?? [];
-        const summary = this.buildSummary(push.room, messages, existing?.unreadCount ?? 0);
+        const summary = buildRoomSummary(push.room, messages, existing?.unreadCount ?? 0, this.state.self?.uid);
 
-        this.setState({ rooms: this.upsertRoom(summary) });
+        this.setState({ rooms: upsertRoomSummary(this.state.rooms, summary) });
     }
 
     private applyMessageNew(push: MessageNewPush): void {
@@ -735,28 +735,10 @@ class ChatStoreImpl implements ChatStoreApi {
         if (!message || typeof message.roomId !== 'string') return;
 
         const roomId = message.roomId;
-        const current = this.state.messages[roomId] ?? [];
-        const selfUid = this.state.self?.uid;
-        const own = selfUid !== undefined && message.senderUid === selfUid;
+        const applied = applyNewMessage(this.state.messages[roomId], message, this.state.self?.uid);
+        if (!applied) return;
 
-        const echoIndex = message.clientMessageId === undefined
-            ? -1
-            : current.findIndex(existing =>
-                existing.clientMessageId === message.clientMessageId && existing.pending === true,
-            );
-
-        let nextMessages: ChatMessage[];
-        let isNew = false;
-
-        if (echoIndex !== -1) {
-            nextMessages = current.slice();
-            nextMessages[echoIndex] = { ...message, pending: false, failed: false };
-        } else if (message.id !== '' && current.some(existing => existing.id === message.id && existing.pending !== true)) {
-            return;
-        } else {
-            nextMessages = [...current, message];
-            isNew = true;
-        }
+        const { messages: nextMessages, echoIndex, isNew, own } = applied;
 
         const existingRoom = this.getRoom(roomId);
         const previousUnread = existingRoom?.unreadCount ?? 0;
@@ -766,11 +748,11 @@ class ChatStoreImpl implements ChatStoreApi {
 
         const summary = existingRoom
             ? { ...existingRoom, lastMessage: nextMessages[nextMessages.length - 1], unreadCount }
-            : { ...this.placeholderSummary(message), unreadCount };
+            : { ...placeholderRoomSummary(message, this.state.self), unreadCount };
 
         this.setState({
             messages: { ...this.state.messages, [roomId]: nextMessages },
-            rooms: this.upsertRoom(summary),
+            rooms: upsertRoomSummary(this.state.rooms, summary),
         });
 
         this.emit({
@@ -789,19 +771,7 @@ class ChatStoreImpl implements ChatStoreApi {
         const players = this.state.players.map(player =>
             player.uid === push.uid ? { ...player, presence } : player,
         );
-        const rooms = this.state.rooms.map(room => {
-            if (!room.participants.some(participant => participant.uid === push.uid)) return room;
-
-            const participants = room.participants.map(participant =>
-                participant.uid === push.uid ? { ...participant, presence } : participant,
-            );
-
-            return {
-                ...room,
-                participants,
-                presence: effectiveRoomPresence(participants, this.state.self?.uid),
-            };
-        });
+        const rooms = applyPresenceToRooms(this.state.rooms, push.uid, presence, this.state.self?.uid);
 
         this.setState({
             players,
@@ -821,25 +791,7 @@ class ChatStoreImpl implements ChatStoreApi {
             ? undefined
             : push.players.find(player => player.uid === selfUid);
 
-        const rooms = this.state.rooms.map(room => {
-            let changed = false;
-            const participants = room.participants.map(participant => {
-                const presence = presenceByUid.get(participant.uid);
-                if (presence === undefined || presence === participant.presence) return participant;
-
-                changed = true;
-
-                return { ...participant, presence };
-            });
-
-            if (!changed) return room;
-
-            return {
-                ...room,
-                participants,
-                presence: effectiveRoomPresence(participants, selfUid),
-            };
-        });
+        const rooms = applyPlayerListToRooms(this.state.rooms, presenceByUid, selfUid);
 
         this.setState({
             players: push.players,
@@ -867,21 +819,8 @@ class ChatStoreImpl implements ChatStoreApi {
     }
 
     private markMessageFailed(clientMessageId: string): void {
-        const messages: ChatMessagesByRoom = { ...this.state.messages };
-        let changed = false;
-
-        for (const roomId of Object.keys(messages)) {
-            const list = messages[roomId];
-            const index = list.findIndex(message => message.clientMessageId === clientMessageId);
-            if (index === -1) continue;
-
-            const next = list.slice();
-            next[index] = { ...next[index], pending: false, failed: true };
-            messages[roomId] = next;
-            changed = true;
-        }
-
-        if (changed) this.setState({ messages });
+        const messages = markMessageFailedInRoom(this.state.messages, clientMessageId);
+        if (messages) this.setState({ messages });
     }
 
     // -- commands -----------------------------------------------------------
@@ -942,7 +881,7 @@ class ChatStoreImpl implements ChatStoreApi {
         }
 
         const clientMessageId = createClientMessageId();
-        this.insertOptimistic(this.createOptimisticMessage(roomId, clientMessageId, text, objectList));
+        this.insertOptimistic(createOptimisticMessage(roomId, clientMessageId, text, objectList, this.state.self, this.getServerTime()));
 
         const result = await this.request<SendMessageResult>({
             c: CMD_SEND_MESSAGE,
@@ -1054,7 +993,7 @@ class ChatStoreImpl implements ChatStoreApi {
     private matchPendingRoomCreates(): void {
         for (const pending of [...this.pendingRoomCreates]) {
             const room = this.state.rooms.find(candidate =>
-                !pending.baseline.has(candidate.id) && this.roomMatchesCreate(candidate, pending.spec),
+                !pending.baseline.has(candidate.id) && roomMatchesCreate(candidate, pending.spec, this.state.self?.uid),
             );
 
             if (room) this.settlePendingRoomCreate(pending, { ok: true, roomId: room.id });
@@ -1065,32 +1004,10 @@ class ChatStoreImpl implements ChatStoreApi {
     private resolvePendingRoomCreate(room: Omit<ChatRoom, 'messages'>): void {
         for (const pending of [...this.pendingRoomCreates]) {
             if (pending.baseline.has(room.id)) continue;
-            if (!this.roomMatchesCreate(room, pending.spec)) continue;
+            if (!roomMatchesCreate(room, pending.spec, this.state.self?.uid)) continue;
 
             this.settlePendingRoomCreate(pending, { ok: true, roomId: room.id });
         }
-    }
-
-    private roomMatchesCreate(
-        room: Pick<ChatRoom, 'id' | 'kind' | 'name' | 'participants'>,
-        spec: NewRoomSpec,
-    ): boolean {
-        if (room.kind !== spec.kind) return false;
-
-        const selfUid = this.state.self?.uid;
-        const uids = new Set(room.participants.map(participant => participant.uid));
-
-        if (selfUid !== undefined && !uids.has(selfUid)) return false;
-        if (spec.kind === 'direct') {
-            const other = spec.playerUids.find(uid => uid !== selfUid);
-            return other === undefined || uids.has(other);
-        }
-
-        // A named room is a strong match; otherwise the baseline already excludes
-        // every older room and the first new group room is the right one.
-        if (spec.name !== undefined && spec.name !== '' && room.name !== spec.name) return false;
-
-        return true;
     }
 
     addParticipants(roomId: string, playerUids: string[], groupIds: string[] = []): Promise<CommandResult> {
@@ -1278,105 +1195,22 @@ class ChatStoreImpl implements ChatStoreApi {
         }
     }
 
-    private createOptimisticMessage(
-        roomId: string,
-        clientMessageId: string,
-        content: string,
-        objects: ChatObject[] | undefined,
-    ): ChatMessage {
-        const self = this.state.self;
-
-        return {
-            id: '',
-            roomId,
-            senderUid: self?.uid ?? '',
-            senderName: self?.name ?? '',
-            senderGroupId: self?.groupId,
-            senderGroupName: self?.groupName,
-            senderGroupColor: self?.groupColor,
-            content,
-            objects,
-            timestamp: this.getServerTime(),
-            clientMessageId,
-            pending: true,
-        };
-    }
-
     private insertOptimistic(message: ChatMessage): void {
         const roomId = message.roomId;
         const messages = [...(this.state.messages[roomId] ?? []), message];
         const existing = this.getRoom(roomId);
         const summary = existing
             ? { ...existing, lastMessage: message }
-            : this.placeholderSummary(message);
+            : placeholderRoomSummary(message, this.state.self);
 
         this.setState({
             messages: { ...this.state.messages, [roomId]: messages },
-            rooms: this.upsertRoom(summary),
+            rooms: upsertRoomSummary(this.state.rooms, summary),
         });
     }
 
     private findByClientMessageId(roomId: string, clientMessageId: string): ChatMessage | undefined {
         return this.getMessages(roomId).find(message => message.clientMessageId === clientMessageId);
-    }
-
-    private buildSummary(
-        room: Omit<ChatRoom, 'messages'>,
-        messages: ChatMessage[],
-        unreadCount: number,
-    ): ChatRoomSummary {
-        const participants = room.participants ?? [];
-
-        return {
-            id: room.id,
-            kind: room.kind,
-            name: room.name ?? '',
-            participants,
-            createdAt: room.createdAt,
-            createdBy: room.createdBy,
-            lastMessage: messages.length > 0 ? messages[messages.length - 1] : undefined,
-            unreadCount,
-            presence: effectiveRoomPresence(participants, this.state.self?.uid),
-        };
-    }
-
-    /** Fallback summary for a message that arrives before its `Room.Upsert`. */
-    private placeholderSummary(message: ChatMessage): ChatRoomSummary {
-        const participants: ChatParticipant[] = [];
-        const self = this.state.self;
-
-        if (self) participants.push(self);
-        if (message.senderUid !== '' && message.senderUid !== self?.uid) {
-            participants.push({
-                uid: message.senderUid,
-                name: message.senderName,
-                groupId: message.senderGroupId,
-                groupName: message.senderGroupName,
-                groupColor: message.senderGroupColor,
-                presence: 'offline',
-            });
-        }
-
-        return {
-            id: message.roomId,
-            kind: 'group',
-            name: '',
-            participants,
-            createdAt: message.timestamp,
-            createdBy: message.senderUid,
-            lastMessage: message,
-            unreadCount: 0,
-            presence: effectiveRoomPresence(participants, self?.uid),
-        };
-    }
-
-    private upsertRoom(room: ChatRoomSummary): ChatRoomSummary[] {
-        const exists = this.state.rooms.some(existing => existing.id === room.id);
-        const rooms = exists
-            ? this.state.rooms.map(existing => (existing.id === room.id ? room : existing))
-            : [...this.state.rooms, room];
-
-        return sortRoomSummaries(rooms);
     }
 
     private touchServerTime(now: number | undefined): void {

@@ -281,12 +281,3 @@ public sealed class TextureCache
 
     private readonly record struct PendingTexture(string CacheKey, DateTimeOffset CreatedAt, string PeerId);
 }
-
-/// <summary>A point-in-time view of the texture cache.</summary>
-public readonly record struct TextureCacheStats(
-    int Entries,
-    long Bytes,
-    long Hits,
-    long Misses,
-    long Evictions,
-    int Pending);

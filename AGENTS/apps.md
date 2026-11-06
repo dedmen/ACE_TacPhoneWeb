@@ -38,7 +38,8 @@ boundary. Neither stops the other apps from loading.
 
 ### Host global
 
-`window.TacPhone` is the only app-facing global. Removed legacy globals
+The single-host-global rule is in the root [`AGENTS.md`](../AGENTS.md)
+(`window.TacPhone` / `@ace-tacphone/api`). Removed legacy globals
 (`window.Networking`, `window.AppDirectory`, `window.PanelDirectory`,
 `window.AppApi`, `window.InterestRegistry`, `window.Notifications`,
 `window.TacPhoneUtils`) must not be used.
@@ -189,6 +190,10 @@ An app's service types live in `src/api.ts` and are bundled into
 `dist/<name>.d.ts` by `tacphone-build bundle-api-types`. Never import host code
 into that file, and never hand-edit the generated declaration.
 
+Services in this add-on: `map` v1 and `gps` v1 (Map app), and `radio` v1
+(Radio app) — a page-local service with a `radio.frequency` chat-object
+renderer; it adds no contract change.
+
 ## Data interests
 
 Declare what the page needs so the game only does expensive work for interested
@@ -318,11 +323,11 @@ The output is a normal `TACPHONE-BUNDLE:` file copied into the app's game
 
 ## StrictMode and lifecycle
 
-Development mounts every component twice. Register apps, services, interests,
-and subscriptions in an effect that returns its cleanup; never register at module
-scope and never assume an effect runs once. `interApp.register()` returns the
-unregister function, so return it directly. Do not disable StrictMode to hide a
-double mount.
+The StrictMode double-mount rule (and "never disable it") is in the root
+[`AGENTS.md`](../AGENTS.md). For an app it means: register apps, services,
+interests, and subscriptions in an effect that returns its cleanup; never
+register at module scope and never assume an effect runs once.
+`interApp.register()` returns the unregister function, so return it directly.
 
 ## Creating a new app
 

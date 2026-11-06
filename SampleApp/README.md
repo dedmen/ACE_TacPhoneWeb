@@ -409,7 +409,8 @@ is the bare specifier; the value is an object (empty for a normal library):
 ```
 
 The optional `"facade": "<prefix>/"` marks a facade bundle (see
-`PLAN_APP_DEPENDENCIES.md`): the runtime registers the core file, and every
+`../plans/completed/PLAN_APP_DEPENDENCIES.md`): the runtime registers the core
+file, and every
 specifier under that prefix resolves to a generated `data:` adapter.
 `check-shared-imports` accepts the declared keys and the facade prefixes and
 rejects any other bare specifier.
@@ -461,15 +462,5 @@ Dependency outputs are git-ignored, like the app bundle.
 
 ### File format and import rules
 
-- A dependency may be **plain ESM** or a `TACPHONE-BUNDLE` compressed bundle,
-  exactly like an app bundle.
-- It must be **one self-contained ESM file**: no relative imports, no dynamic
-  chunk imports, no `new URL(..., import.meta.url)`.
-- Only bare specifiers are allowed, and only the shared modules or specifiers
-  this app declared. Specifiers under a declared facade prefix are allowed too.
-- `data:` and `blob:` specifiers are allowed. Relative (`./`, `../`, `/`) and
-  network/file schemes (`http:`, `https:`, `//`, `file:`, `ws:`) are rejected,
-  and dynamic imports need a literal specifier.
-- Per-app versions of the same specifier are kept apart with import-map scopes;
-  a shared dependency that itself needs conflicting transitive versions is an
-  explicit error, so keep it app-local.
+See [`packages/tacphone-build/README.md`](../packages/tacphone-build/README.md#import-rules)
+(file format and import rules for dependency files).

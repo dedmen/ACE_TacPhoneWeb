@@ -22,6 +22,11 @@ const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 
 const MODULES = [
     {
+        name: 'message-router',
+        description: 'Command routing, one warn per unsubscribed command',
+        file: path.join(APP_ROOT, 'test/unit/message-router.unit.mjs'),
+    },
+    {
         name: 'relay-manager',
         description: 'Hub transport decode, request correlation, broadcast and interests',
         file: path.join(APP_ROOT, 'test/unit/relay-manager.unit.mjs'),

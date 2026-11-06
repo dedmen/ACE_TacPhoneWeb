@@ -691,8 +691,9 @@ that the single-file plugin inlines. See
   persisted in layouts, so remove it deliberately (see `TODO.md`).
 - Do not add bundle-relative imports or CSS side files; the production bundle is
   loaded from a blob URL.
-- StrictMode double-mounts panels. Marker layers, interests, services, and
-  request queues must tolerate mount → unmount → mount.
+- StrictMode double-mounts panels (root rule in [`AGENTS.md`](../AGENTS.md)).
+  Marker layers, interests, services, and request queues must tolerate
+  mount → unmount → mount.
 - A background Map panel stays mounted, so its marker state stays live; routing
   still goes through `interApp.resolveAsync()` to bring it to the front.
 - Never `layer.dispose()` a layer that was just removed from a live map. It nulls

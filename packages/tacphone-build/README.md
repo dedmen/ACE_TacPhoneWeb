@@ -373,6 +373,9 @@ network:
   facade prefix.
 - A dynamic import must use a literal specifier; a computed URL cannot be
   resolved through the shim.
+- Per-app versions of the same specifier are kept apart with import-map scopes;
+  a shared dependency that itself needs conflicting transitive versions is an
+  explicit error, so keep it app-local.
 
 `tacphone-build check-shared-imports` enforces all of this after every build.
 
@@ -446,7 +449,8 @@ Arma types:
 | `packages/tacphone-build/bundle-format.js` | `TACPHONE-BUNDLE` marker and header parser (browser-safe, no imports). |
 | `packages/tacphone-build/facade.js` | `tacphoneFacade()` Vite plugin and `tacphone-build facade build`. |
 | `packages/tacphone-build/shared-modules.js` | Example host module list (optional). |
-| `ACE_TacPhone_Main/src/Backend/` dependency loader | Runtime counterpart: `es-module-shims` bootstrapping, ordered dependency loading, blob URLs, per-specifier import maps. See `PLAN_APP_DEPENDENCIES.md`. |
+| `ACE_TacPhone_Main/src/Backend/` dependency loader | Runtime counterpart: `es-module-shims` bootstrapping, ordered dependency loading, blob URLs, per-specifier import maps. See
+`../../plans/completed/PLAN_APP_DEPENDENCIES.md`. |
 | `ACE_TacPhone_Main/src/Backend/AppDirectory.ts` | Shows how the bundle header is unpacked before a blob import; it imports `bundle-format.js`. |
 
 Copy `bundle-format.js` too whenever you copy the loader or `AppDirectory`: both

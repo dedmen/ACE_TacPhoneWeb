@@ -2,62 +2,17 @@
 
 All incomplete work and code placeholders. Line numbers come from the 2026-10-28
 scan (`0536969` plus the uncommitted dev-app discovery refactor) and will drift.
+Completed entries are removed; the 2026-11-06 pass deleted 46 finished items.
 
 Tags: **[bug]** breaks behaviour today, **[robustness]** failure path that hangs,
 spams, or leaks instead of reporting, **[cleanup]** quality only, **[decision]**
 needs a product decision before coding, **[wontfix]** deliberately left as is.
-
-## Persist the TacPhone layout in-game
-
-- [x] Implement `GetLayout` and `SaveLayout` in
-  `addons/tacphone/functions/fnc_processBrowserRequest.sqf`.
-  - `SaveLayout` stores the gzipped/base64 `layout` string in `profileNamespace`
-    under `ace_tacphone_layout`, rejects only oversized values, and skips the
-    profile write when the layout did not change.
-  - `GetLayout` returns that string, or `""` when nothing was saved yet.
-- [x] Keep `localStorage` as the external-browser persistence path and use the
-  SQF path when `localStorage` is unavailable (the in-game browser).
-- [x] Remove the temporary placeholder comments in
-  `ACE_TacPhone_Main/src/App.tsx` and avoid sending `SaveLayout` on every layout
-  change once the SQF persistence is implemented. Changes are coalesced into at
-  most one save per 5 seconds (trailing throttle); option changes use a 300 ms
-  window. A pending change is flushed on `pagehide`/unmount. The stored value is
-  the whole envelope `{ ...layout, options }`; SQF treats it as opaque text, so
-  it already round-trips unknown top-level keys such as `options`.
 
 ## Native extension (`WebServerExtension`, debug only)
 
 This extension is the debug LAN/dev host. Release builds neither install it nor
 start it; the production relay uses the native SQF `webRequest` WebSocket. The
 items below are therefore debug-only cleanup unless stated otherwise.
-
-### Critical: silent failure and process kill
-
-*Fixed 2026-10-29: guarded synchronous start, try/catch on every export, bounded
-shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`.*
-
-- [x] **[bug]** Startup errors are swallowed. `WebServer.cs:236` discards the
-  `app.RunAsync()` task, `DllEntry.cs:88` returns `1` for every outcome, and
-  `XEH_postInit.sqf:99-101` prints "Webhost started" regardless.
-  Verified failures: port already bound (`IOException`) and missing HTTPS cert
-  (`InvalidOperationException`). Replace with a guarded synchronous
-  `StartAsync().GetAwaiter().GetResult()`, keep the task for post-start faults,
-  and return the error to SQF.
-- [x] **[bug]** No export has a try/catch (`DllEntry.cs:20-36, 42-89`). In
-  NativeAOT an exception crossing a reverse P/Invoke terminates the Arma process.
-  Wrap every export, return a status, never let a managed exception escape.
-  Reachable paths: `Stop()`'s `.Wait()` wrapping `AggregateException`,
-  `new WebServer(port)` failing, `SendTo` touching a stopped host.
-- [x] **[bug]** Mission restart blocks the game thread up to 30 s.
-  `Stop()` is `app.StopAsync().Wait()` (`WebServer.cs:341-344`) while the WS loop
-  waits on `ReceiveAsync(..., CancellationToken.None)` (`:368`). Measured
-  31,008 ms with one non-responsive peer (suspended phone tab / dropped Wi-Fi).
-  Configure `HostOptions.ShutdownTimeout` (1-2 s), pass a shutdown token into the
-  WS loop, and `Abort()` the socket on timeout. Never block the Arma thread
-  unbounded.
-- [x] **[bug]** Close paths can hang and throw out of the handler.
-  `CloseAsync(..., CancellationToken.None)` at `WebServer.cs:35, 377, 389`.
-  Wrap in a short `CancellationTokenSource`, catch, `Abort()`.
 
 ### Protocol correctness
 
@@ -71,14 +26,9 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
   `WebServer.cs:189-221`: concurrent GETs share a `TaskCompletionSource`, and the
   first waiter calls `TrySetCanceled()` on it. Give each request its own timeout,
   never cancel the shared source, and pass `context.RequestAborted`.
-- [x] **[robustness]** `SendTo` takes one JSON payload `{targets, data}`, returns
-  `OK <delivered> <requested>`, `"*"` broadcasts, and unknown ids are logged.
 - [ ] **[robustness]** 30 MB per-connection message limit with no auth or rate
   limit (`WebServer.cs:352`) is a LAN memory DoS. Lower the limit for control
   frames and reject early.
-- [x] **[robustness]** `_webServer` is published after the server already
-  listens (`DllEntry.cs:60` vs `WebServer.cs:236`), so an early request can lose
-  its `FileContent` and 504. Construct, assign, then start.
 - [ ] **[robustness]** `app` is never disposed and `SendTo` does not check state
   (`WebServer.cs:341-344`, `:462`). `await app.DisposeAsync()`, null the field,
   guard access.
@@ -87,8 +37,6 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
   so a global `Development` value exposes the developer exception page to LAN
   clients (`:138-141`) and picks up stray `appsettings.json`. Pin `Production`
   and an explicit content root (`WebApplicationOptions`).
-- [ ] **[cleanup]** `_fileCache` is dead (`WebServer.cs:418`, TODO at `:456`).
-  Add caching with correct threading, or delete the field.
 
 ### Security and TLS (needs a decision)
 
@@ -126,29 +74,11 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
   CS8625 nullable warnings (`WebServer.cs:112`, `DllEntry.cs:40`). The unused
   `using Microsoft.AspNetCore.Mvc` and dead `GetConnectionCount` were removed.
   `CountOpenConnections()` remains as the live connection counter.
-- [x] **[cleanup]** Return codes are uninformative (`DllEntry.cs:88`:
-  unknown method, missing arg, failed start, success all return 1).
-  `RvExtensionVersion` ignores `outputSize`; `RvExtension` writes nothing.
-- [x] **[cleanup]** Diagnostics only go to `Console.WriteLine`, which is invisible
-  in the native host. Fixed: `ExtensionLog` sends `{level, message, time}` through
-  the `Log` extension callback; SQF buffers the last 50 entries and pushes
-  `Host.Log` to the in-game page, which writes them to its dev console and shows
-  warnings/errors as notifications. `GetHostLog` replays the buffer on page boot.
 
 ## SQF <-> web protocol
 
-- [x] **[cleanup]** Obsolete: SQF no longer proxies terrain/texture. The
-  in-game hub (`RelayManager`) produces terrain chunks and texture replies
-  directly, so the old promise/leak, ID-collision and shared-map issues in
-  `fnc_processBrowserRequest.sqf` are gone with the removed code.
-- [x] **[cleanup]** Obsolete: `systemChat` file-request spam was removed with the
-  rewritten `XEH_postInit.sqf`; the remaining `systemChat` only reports a failed
-  debug webhost start.
-- [x] **[cleanup]** Removed the temporary interest `systemChat` logging from
-  `fnc_interestSet.sqf`; both transitions now log to `diag_log` only in
-  `__A3_DEBUG__`. `Debug.GetInterests` exposes the live interest snapshot.
 - [ ] **[bug]** The dev console opens on every mission start:
-  `fnc_loadPhoneBackground.sqf:76-80` (`//#TODO development, remove this`).
+  `fnc_loadPhoneBackground.sqf:56-60` (`//#TODO development, remove this`).
 - [ ] **[decision]** Only `/` is remapped to the addon data folder
   (`XEH_postInit.sqf:33-36`); every other path resolves from the game root, so
   the catch-all is "read game files", not "serve app assets". Restrict or document.
@@ -174,9 +104,6 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
   map instance; load once and share.
 - [ ] **[cleanup]** Icon offset and shadow displacement are hardcoded and wrong
   for scaled markers (`MarkerLayer.tsx:262, 285`).
-- [x] **[cleanup]** `MarkerLayer.tsx` applies every incoming marker property.
-  `shape`/`brush` are stored on the feature; their rectangle/ellipse pattern
-  texture rendering remains a separate feature task.
 - [ ] **[feature]** Render `RECTANGLE`/`ELLIPSE` markers, including
   `CfgMarkerBrushes` pattern textures. `MarkerLayer.tsx` already stores `shape`
   and `brush` from `Marker.Upsert`.
@@ -202,12 +129,6 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
 
 ### Lifecycle and feedback
 
-- [x] **[decision]** Default marker color: the Web UI sends `color: "Default"`
-  and resolves it to the selected marker type's `color[]` for the swatch, type
-  previews and label text. `fnc_createMarker.sqf` always applies the supplied
-  color with `setMarkerColorLocal`, including `"Default"`; it has no
-  `_useTypeColor` special case. The real `CfgMarkerColors.Default` class stays
-  hidden because it duplicates `Black`.
 - [ ] **[wontfix]** Marker creation failures stay invisible. `Map.tsx:311-316`
   closes the dialog immediately and only logs the error. This is deliberate: the
   dialog should not turn into an error UI. No action planned.
@@ -239,25 +160,8 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
 
 ### App surface
 
-- [ ] **[bug]** The placeholder panel ships: `ACE_TacPhone_Map_Placeholder`
-  ("Wololo!", `src/main.tsx:29-41`, documented at `README.md:101`). Panel ids are
-  persisted in layouts, so removing it later breaks saved layouts. Remove now.
-- [x] **[wontfix]** `src/CommandRegistry.ts:1` reads `window.TacPhone.utils` at
-  module scope. Host globals are always present when an app is loaded (apps are
-  only loaded through the host; the standalone `preview` path is not supported),
-  so no guard is needed; apps use `window.TacPhone.utils`.
-- [x] **[bug]** `dist/ace_tacphone_map.d.ts` is `export { }` (12 bytes) although
-  `package.json` points `types`/`exports` at it. Fixed: the Map build calls
-  `tacphone-build bundle-api-types --app . --entry src/api.ts --name ACE_TacPhone_Map`,
-  which emits a self-contained declaration exporting `MapApi`, `MapViewState`,
-  `MapFlyToOptions`, `MAP_SERVICE`, and `MAP_SERVICE_VERSION`. This now lives in
-  `@ace-tacphone/build`; apps no longer keep their own copy of that bundler.
-- [x] **[cleanup]** Broadcast log spam when no map panel is mounted: marker updates are only sent to interested clients, so no broadcast reaches a page without a Map panel. Log at debug level.
 - [ ] **[cleanup]** `Map.tsx:96` `forceUpdate` hack; a state bump or ref-driven
   redraw would be clearer.
-- [x] **[cleanup]** `README.md:66` omits the emitted `.d.ts` from the build
-  outputs. Updated; the Map README now lists both `ace_tacphone_map.js` and
-  `ace_tacphone_map.d.ts`.
 
 ### Polyline drawing (remaining)
 
@@ -313,6 +217,28 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
   terrain profile or slope view, and the segment height difference is not fed into
   any ballistic solution.
 
+## Radio app (TFAR)
+
+- [ ] **[decision]** Per-radio user label (`displayName` rename) needs a
+  storage home; options are per app, not per radio.
+- [ ] **[robustness]** RX indicator: GT/intercom receive state has no verified
+  TFAR getter, so v1 shows TX only.
+- [ ] **[decision]** `allowRemoteTransmit` is a page-local option; a
+  server-forced policy would need a CBA setting.
+- [ ] **[robustness]** TFAR channel-base assumptions (`set*Channel`,
+  `do*Transmit`) must be re-verified on every TFAR major version (see
+  [`AGENTS/radio.md`](AGENTS/radio.md)).
+- [ ] **[cleanup]** `TF_tangent_*_pressed` are TFAR internals used only as a
+  fallback; prefer the event-tracked state if TFAR ever stops setting them.
+- [ ] **[robustness]** In-game volume and speaker changes produce no push: the
+  verified TFAR CBA event list (see `AGENTS/radio.md`) has no
+  volume/speakers-changed event, so the panel only reflects them on the next
+  state push. Re-check on every TFAR major version.
+- [ ] **[robustness]** In-game verification pass not yet done: run
+  `Radio.Debug.State` on a real SR and LR radio to record the actual channel
+  bases for `set*Channel`/`do*Transmit` (plan §5.1), and work through the
+  transmit-safety checklist (plan §11 phase 4).
+
 ## Notifications
 
 ### Remaining work
@@ -331,28 +257,15 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
   SampleApp to one military field-terminal visual language, and export the
   tokens + React primitives through `window.TacPhone.theme` and
   `window.TacPhone.components`. The design, file map and phases are in
-  [`PLAN_MILITARY_UI.md`](PLAN_MILITARY_UI.md). Settled up front: the game's
+  [`plans/PLAN_MILITARY_UI.md`](plans/PLAN_MILITARY_UI.md). Settled up front: the game's
   browser frame supplies the bezel (the page draws no bezel and no outer
   padding) and only system fonts are used (no embedded WOFF/TTF, ever).
 
 ## Host (`ACE_TacPhone_Main`)
 
-- [x] **[feature]** Extract the custom select menu into a reusable host
-  component library that other apps can use through the host API.
-  `src/Components/SelectMenu.tsx` is exposed as
-  `window.TacPhone.components.SelectMenu` (`ComponentsApi`); it supports a
-  leading icon/swatch per option, disabled options, a filter field, custom
-  `renderOption`/`renderValue` and theme class names/CSS variables. The opened
-  menu is portaled to `document.body` with `position: fixed` (z-index 4000), so
-  it no longer grows its owner or pushes the following options down.
-  `OptionsPanel` and the Map `MarkerCreateDialog` (type + channel) use it.
-
 - [ ] **[bug]** `NetworkingA3.Request` has no timeout (`Networking.ts:306-346`),
   so a promise the game never resolves hangs the in-game UI forever. Add the same
   timeout the WebSocket path uses.
-- [x] **[cleanup]** Obsolete: the SQF terrain/texture proxy was removed. Remote
-  clients are handled by `RelayManager`, which reports failures to the client
-  directly; the old `main.tsx` proxy handler is no longer reached from SQF.
 - [ ] **[robustness]** `AppDirectory.fetchExternalModule` leaks blob URLs
   (`AppDirectory.ts:59`) and has a TODO to log unknown app names (`:192`).
 - [ ] **[robustness]** `MessageRouter.routeMessage` warns when no subscriber
@@ -362,20 +275,6 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
   (`Networking.ts:394`), so `npm run preview` uses dev app URLs while the
   `/devapps/` middleware is `apply: 'serve'` and 404s. Detect the dev server
   explicitly.
-- [x] **[cleanup]** `src/MainApps/main.tsx:12` TODO: move the compression helpers
-  out of the app entry. Moved to `Backend/Compression.ts` and exposed as
-  `window.TacPhone.utils.compressAndToBase64` / `decompressFromBase64`.
-- [x] **[cleanup]** `AppChooserPanel.tsx:56` TODO: load panel state from the
-  model instead of ad-hoc state. The selected app is read back from the tab config
-  in `componentDidMount()` via `PanelInstance.getConfig()`; the chooser element
-  itself is still local component state.
-- [x] **[decision]** Host UI for `window.TacPhone.interApp.setTargetChooser(...)`. The
-  user-selection dialog (panel title, panel/app id, instance id or tab id,
-  floating badge, area) is implemented in `src/Panels/TargetChooserDialog.tsx`
-  and installed once by `ACE_TacPhone_Main/src/App.tsx`, so `policy: "ask"` is a
-  user choice instead of the focused -> largest -> only-candidate heuristic.
-  Cancel, a backdrop click, Escape, and a newer request superseding a pending one
-  all resolve `undefined`.
 - [ ] **[decision]** `App.tsx:316-317` TODO: keep the mobile screen awake and add
   a fullscreen mode (Settings), relevant for the external-browser path.
 - [ ] **[feature]** Audio options in the Options panel: a configurable master
@@ -389,39 +288,13 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
   report Arma's selected output device, so the browser sink is not mapped to it.
   Wire Arma's device to `setSinkId` once the game can expose it; notification and
   Messenger sounds share the one `AudioContext`.
-- [x] **[cleanup]** Remove the temporary `SaveLayout`/`GetLayout` placeholders
-  once the game-side persistence exists (see the first section). Done: the host
-  sends a gzipped/base64 layout and SQF stores it in `profileNamespace`.
-- [x] Removed all references to and handling of the legacy `devapps/` folder.
-  Discovery now only uses `dev-apps.local.json`, `TACPHONE_DEV_APPS`, or sibling
-  folders with the `"tacphone"` marker; `AGENTS.md`, `ACE_TacPhone_Main/README.md`,
-  `dev-apps.js`, `vite.config.ts`, and `AppDirectory.ts` were updated. The
-  `/devapps/<AppName>/` URL prefix is unchanged. (The old `scripts/sync-api-types.mjs`
-  script was moved into `@ace-tacphone/build` as `tacphone-build sync-api-types`.)
 
 ## Inter-app API (panels and `window.TacPhone.interApp`)
 
-- [x] **[decision]** Native window popouts (`PanelInfo.isPoppedOut`,
-  `'window'` sub-layouts) need `window.open` and a separate document, so they
-  cannot work in the in-game sandboxed browser. **Decision: not supported.**
-  Everything stays inside the single page/tab; floating in-layout popups are the
-  only popup placement. `isPoppedOut` stays as passive diagnostics for a
-  sub-layout the host never creates.
 - [ ] **[cleanup]** `PanelDirectory.largest()` ignores floating popups
   (`PanelDirectory.ts`, `isFloating`/`isPoppedOut` are filtered out) because areas
   from separate layouts are not comparable. Rank floats too, or expose a
   per-layout comparison, so a large popup can win routing.
-- [x] **[cleanup]** Restore the app chooser selection on first mount from the
-  persisted layout. `AppChooserPanel.componentDidMount()` now reads
-  `PanelInstance.getConfig().panelId` and switches to that app when it is still
-  registered; `setPanelConfig()` keeps writing the value for the next reload.
-- [x] **[decision]** Messenger app consuming the `map` service with
-  `policy: 'ask'`. Done: the `map.marker` object carries
-  `action: { service: 'map', method: 'focusMarker', policy: 'ask' }`; Messenger
-  routes it through `resolveAsync({ service: 'map', policy: 'ask' })`, so the
-  host target chooser picks the Map instance. The Map renderer only supplies the
-  preview, so Messenger can keep the card and offer the last known position when
-  `focusMarker()` returns false.
 - [ ] **[feature]** GPS routing-event subscriptions for apps. The GPS service
   currently exposes only method calls, so other apps cannot react to navigation
   progress. Add a subscription API on the `gps` service (with an unsubscribe
@@ -440,29 +313,9 @@ shutdown (11 ms restart with a live socket, was 31 s), 2 s closes with `Abort()`
   example "markers changed" notifications).
 - [ ] **[cleanup]** `interApp.waitFor(service, predicate)` lifecycle helper, so
   consumers can await a registration instead of choosing a `waitMs` budget.
-- [x] **[decision]** Auth/permissions between apps. **Decision: no permission
-  model.** Page-local calls are deliberately unauthenticated; the whole web UI and
-  all its apps are one trust domain with no security boundaries between apps.
 
 ## Tooling and dependencies
 
-- [x] **[cleanup]** The Map browser scenarios have an optional Playwright dev
-  dependency. `playwright` is installed with
-  `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` and launches the installed Chrome channel
-  (`chromium.launch({ channel: 'chrome' })`); no Playwright browser download is
-  required. A missing Chrome/Playwright install is reported as `SKIP`; the Node
-  marker scenario and
-  `ACE_TacPhone_Map/test/browser/marker-create-checklist.md` still work.
-  The Map suite now has five scenarios (`marker-protocol`, `marker-channels`,
-  `marker-ui`, `polyline-draw`, `map-view`); `marker-channels` runs a
-  singleplayer subset and logs the skipped multiplayer-only checks, and
-  `polyline-draw` runs in a touch-capable context. The Messenger has a separate
-  Playwright UI suite (`test:messaging-ui`) for rooms, messages, marker sharing
-  and Map focus. `npm run test:all` runs the host, host UI, Messenger WebSocket,
-  Messenger UI and Map suites in one pass and prints one summary.
-  `test:host` and `test:messaging` stay Node-only; `test:host-ui` is the host's
-  Playwright suite (audio unlock). The shared browser/Node helpers live in
-  `ACE_TacPhone_Main/test/lib/` and every suite imports them from there.
 - [ ] **[cleanup]** rerun `npm audit`, both builds, and `check:importmap`.
 - [ ] **[enhancement]** Brotli app bundles. The container header already carries
   the codec (`TACPHONE-BUNDLE:<version>:<codec>:<base64>`), so the build only has
@@ -503,20 +356,10 @@ Remaining work:
   is preferred.
 - [ ] **[decision]** The Messenger panel does not remember the last open room
   across remounts; the store's `activeRoomId` resets when the app re-syncs.
-- [x] Task 8: `GetPlayerList` is answered by a `PlayerList.State` push, while the
-  request reply only says `pending`; `ChatStore.requestPlayerList()` now applies
-  a list only when the reply carries one, so an empty reply no longer wipes the
-  pushed roster.
-- [x] `CreateRoom` now waits for the matching `Room.Upsert` push, so the new
-  room id is available to the create and share dialogs even though relayed
-  commands answer `{ ok: true, pending: true }`.
 - [ ] **[bug]** The same `pending` reply still leaves `JoinRoom` and forwarding
   into a new room without a correlated server result; a rejected join only
   surfaces later through `Error`/room pushes. Add a correlated result push
   (request id) or wait for the room/error push in those flows.
-- [x] `Messaging.Debug.Reset` now sends `Room.Upsert` with `removed: true` to
-  every participant before clearing the server maps, so open pages drop stale
-  debug rooms without a reload.
 - [ ] **[decision]** Cross-device presence: the in-game client is `"local"` and
   its presence is derived from the TacPhone display mode by the game, so
   `setClientPresence` from the page is informational only for that client.
@@ -526,18 +369,10 @@ Remaining work:
 - [ ] **[decision]** Scoped Messenger pushes (`_client`) are also broadcast to
   every web client because the sender identity is gone. Clients cannot filter
   them; revisit together with the presence identity work.
-- [x] Presence live-tested: HUD/DIALOG available, CLOSED/HIDDEN minimized when
-  no other client is visible, external page visible/hidden, and fake players.
-  The suite now refuses to run if another remote phone/tablet/dev page is
-  visible, because that legitimately keeps the player available.
 - [ ] **[decision]** Leaving a room whose whole group is invited is currently
   blocked. Figure out a later flow: leave the in-game group, convert the group
   invite into individual participants, or let the member leave and mark the
   group as partially invited.
-- [x] Notification suppression live-verified: with the in-game phone focused on
-  the active room, an injected message produced no notification.
-- [x] Group `Deleted` handler live-verified with synthetic AI-only groups,
-  including deleting the only group in a room.
 - [ ] Fake-player testing limitations: the debug commands and fake players only
   exist in an `__A3_DEBUG__` build. The guarded `fnc_debug*.sqf` files are still
   shipped in release PBOs (bodies compiled out), and the page's debug toolbar
@@ -554,17 +389,6 @@ Remaining work:
   marker/header from the relay server instead.
 - [ ] **[decision]** Device labels come from `User-Agent`. Add a rename UI and
   persist the label server-side.
-- [x] **[decision]** Terrain SVG chunking. The in-game `Networking` producer
-  splits the SVG into layers, compresses each layer, and sends one frame per
-  layer part; SQF forwards every chunk; the relay assembles one combined cache
-  entry and re-emits the layers; the browser `Networking` reassembles them. See
-  `tacphone-terrain-chunking.md`. App bundles are still sent as one frame,
-  bounded by the relay's 32 MiB cap.
-- [x] **[decision]** Relay texture cache. `RequestTexture` replies are cached
-  globally by normalized path + `maxSize`, LRU-bounded by
-  `TacPhone:TextureCache:*`. The cache is not per-host and is not cleared on
-  host disconnect; a mod update at the same path is not detected until eviction
-  or relay restart (documented in `RemoteServer/README.md`).
 - [ ] **[decision]** Relay cache for on-demand `Localization.Get` results. The
   relay's `FileCache` only covers `GetFile` responses, so base-game keys reused
   by the web UI (chat channels, `str_disp_*`, ...) are never in the preloaded
@@ -586,8 +410,6 @@ Remaining work:
     key instead of relying on the language alone.
 - [ ] **[cleanup]** Measure the largest individual terrain layer/part on the
   biggest maps and record the margin under the future 10 MB SQF message limit.
-- [x] **[wontfix]** No `GetFile` allowlist. Only packed game/mod files are
-  readable and they are public; access is gated by pairing codes/share links.
 - [ ] **[cleanup]** Relay traffic is plaintext at the server (TLS ends in nginx).
   Documented; app-level encryption is not planned.
 - [ ] **[robustness]** The in-game hub reconnects with 1–30 s backoff. Verify a
@@ -624,6 +446,11 @@ Remaining work:
 - [ ] **[tests]** Messenger presence/`SetClientPresence` and scoped `_client`
   pushes cannot distinguish relay clients (see the Messenger [decision] items
   above); do not add per-client identity until a sender identity exists.
+- [ ] **[cleanup]** `RelayManager.ts` `status()` and C# `RemoteAccessService.cs`
+  `BuildStatusJsonLocked` assemble the same status fields on both sides. Keep the
+  two in sync, or codegen both from one shared schema.
+- [ ] **[cleanup]** `TerrainCache.cs` `TryGetPin` logs `LogInformation` on every
+  cache hit and miss (the hottest cache path). Consider demoting to Debug/Trace.
 
 ## React-free host base (spike)
 
@@ -652,8 +479,6 @@ UI bundle.
   from `Localization.Info` selects the language block. Re-enable the file loader
   (and the per-app stringtable loader) when the XML is available in the game
   files again.
-- [ ] **[cleanup]** The Map's `ACE_TacPhone_Map_Placeholder` panel still renders
-  `Wololo!` and keeps the default title `Placeholder`; it is a development stub.
 - [ ] **[robustness]** The bundled default table only ships the languages present
   in `stringtable.xml` at build time. When translations are added, verify the
   browser-language mapping in `Backend/Stringtable.ts` and the `index.html` size.
@@ -705,20 +530,6 @@ UI bundle.
   equivalent) command and restart the PFH with `1 / Hz` (clamp to a sane
   minimum, e.g. 30 Hz). The HUD/follow code already tolerates faster fixes;
   verify CPU cost and that a released interest still stops the PFH.
-- [x] **[cleanup]** The planned router split is complete: `routing/AStar.ts`,
-  `routing/TerrainGrid.ts`, `routing/SpeedModel.ts`, `routing/RouteMetrics.ts`,
-  `routing/TurnInstructions.ts`, `routing/DeviationTracker.ts`,
-  `routing/VehicleChange.ts`, `routing/RouteTypes.ts`,
-  `terrain/TerrainMasks.ts`, `roads/RoadSvgParser.ts` and
-  `roads/RoadNetwork.ts`. `MapGps/RoutePlanner.ts` only orchestrates the modes,
-  road/grid connectors, leg splitting and cancellation.
-- [x] **[robustness]** Slope is wired into the live A* edge cost:
-  `TerrainHeights` builds a bounded 32x32 coarse height grid (10 m minimum
-  spacing, chunked requests, bounded LRU), `slopeAt` feeds both the road graph
-  and the grid, and foot routes get a 1 m fine validation pass after the path
-  exists. A failed section is re-planned with a 25 m penalty around the
-  problem points. Peaks found in the coarse grid are kept in a long-lived
-  peak + ring cache so later routes do not re-query them.
 - [ ] **[robustness]** Verify the slope model against real vehicles/maps: a
   heavy, low-power vehicle should be slower on a steep asphalt pass than a
   light, high-power one, and a longer flatter road should win over a short
@@ -728,39 +539,9 @@ UI bundle.
 - [ ] **[robustness]** Tune waterResistanceCoef / waterSpeedCoef water speed for amphibious vehicles and the transport-mode advisor's follow delay, cooldown and 60 s / 20% saving threshold.
 - [ ] **[decision]** The transport-mode advisor runs only for shared routes. Explore enabling it for locally planned routes too.
 - [ ] **[cleanup]** Polyline edit currently moves existing vertices only; adding/removing points and sharing the full polyline geometry are follow-ups.
-- [x] **[cleanup]** GPS unit/separator strings are no longer stringtable keys:
-  `STR_ACE_Tacphone_Map_Gps_Route_DistanceKm` and
-  `STR_ACE_Tacphone_Map_Gps_Shared_Summary` were removed and replaced by
-  `MapGps/GpsFormat.ts` (`850 m`, `12.4 km`, `mode · distance · waypoints`).
-  `Gps_Route_Clear`/`Gps_Route_Start` were replaced by the base-game
-  `str_disp_arcmap_clear`/`str_mprole_start`, preloaded through
-  `MAP_BASE_GAME_STRINGS`.
 - [ ] **[cleanup]** The shared-route stored preview uses the sender's language when the GPS/Map app is not mounted; the renderer rebuilds it when mounted.
 - [ ] **[cleanup]** Messenger object compression has no codec-version migration path beyond reading the `v` field; document/implement the next version when needed.
 - [ ] **[robustness]** Message retention is still unbounded in the game-side Messenger server; compression reduces but does not cap memory.
-- [x] **[tests]** Deterministic GPS coverage landed:
-  - `npm run test:unit` (no game, no browser): `objectCodec` (small stays plain,
-    large becomes an envelope, decode restores `data`/`action`, a corrupted
-    payload keeps the preview, forwarding is idempotent, the decode cache is
-    bounded, the size helper rejects oversized objects), `legSpeed` (maxSpeed
-    cap, heavy-vs-light climb, slope and crawl/impassable cases, missing-config
-    fallback, water and surface costs), `gps-routing` (route metrics, leg index,
-    turn instructions, deviation delay/cooldown/zoom/arrival, vehicle-change
-    parsing and the road graph's 0.5 m node merge), the transport-mode advisor
-    (follow delay, saving threshold, dismissal per authored mode, accept
-    splices only up to the next waypoint) and the `map.gps_route` encode/decode
-    contract.
-  - `npm run test:map`: `gps-panel`, `gps-route`, `gps-shared`,
-    `gps-shared-messenger` (debug build only) and `gps-protocol` (the
-    `GetPlayerTravelMode` contract, `Interest.Set` starting/stopping the 10 Hz
-    `GPS.Update` push and its shape, release -> silence -> re-acquire, and a
-    pre-encoded `map.gps_route` envelope plus a plain small object stored
-    byte-identically by the Messenger server).
-  - `npm run test:gps-interactive` (opt-in, human in a vehicle): a <= 5 km route
-    with a mid waypoint relative to the live position and a dry destination for non-amphibious ground vehicles, progress on the real feed,
-    a deliberate deviation that triggers `gpsAutoRepath` (asserted through the new
-    `repathCount` debug counter), and a full cleanup. Its follow window scales
-    with the route (`max(120 s, distance / expectedSpeed * 4)`).
 - [ ] **[tests]** Residual GPS test gaps:
   1. `gps-route` now searches for water within 4 km and asserts both the boat
      route and an amphibious ground vehicle's water leg. The opt-in
@@ -795,7 +576,6 @@ UI bundle.
   8. `gps-route` plans the same foot route twice and asserts the second plan
      adds no new coarse height requests (`heights.coarseRequests`), proving the
      LRU/peak cache reuse. The peak/ring storage itself is also unit-tested.
-- [x] **[robustness]** `TerrainMasks.findLayer` prefers exact role names (`terrain`/`land`, `roads`/`road`, `forests`/`forest`, `objects`/`object`) and only then falls back to a substring match. `filterByPaint` now resolves inherited `fill`/`stroke` through parent `<g>` elements (an explicit `fill="none"` still wins). Verify the real terrain SVGs on several maps when adding new terrain data.
 - [ ] **[decision]** `GetInMan`/`GetOutMan` are installed on the player object when the GPS interest activates. Before adding a `EntityRespawned`/player-change re-arm path, test whether the engine transfers unit event handlers to the new player automatically on respawn. Only add re-arming if that test shows the handlers are lost; otherwise the extra path is unnecessary.
 - [ ] **[robustness]** Verify the GPS with Arma running: travel-mode detection, vehicle changes, route calculation with slope/fine validation, the debug viewport scan, shared-route start/join, auto-repath, polyline edit save/cancel and the first-click audio unlock. (`gps-panel`, `gps-route`, `gps-shared`, `gps-protocol` and the opt-in `gps-interactive` now cover most of this automatically; the audio unlock, the viewport scan and a real drive still need a manual pass.)
 
@@ -806,16 +586,8 @@ questions belong to the plan files; [`AGENTS/plans.md`](AGENTS/plans.md) holds t
 rules and the fixed panel ids, addon names and interests. This list exists so a
 plan cannot be forgotten, not as a second copy of its checklist.
 
-- [ ] **[feature]** TFAR radio control app — [`PLAN_RADIO.md`](PLAN_RADIO.md).
-  `ACE_TacPhone_Radio` plus `addons/tacphone/apps/radio` (`ace_tacphone_radio`).
-  No panel, bundle, interest or config class exists yet.
-  - Resolve first: the TFAR channel-base mismatch (`get*Channel` is 0-based,
-    `set*Channel`/`do*Transmit` are called 1-based by TacControl's web layer and
-    0-based by its own tangent handler). Phase 1 records the truth with
-    `Radio.Debug.State` on a real SR and LR radio; no UI may depend on the
-    internal base before that.
 - [ ] **[feature]** Vehicle controls and Air HUD —
-  [`PLAN_VEHICLE_AIRHUD.md`](PLAN_VEHICLE_AIRHUD.md). `ACE_TacPhone_Vehicle` plus
+  [`plans/PLAN_VEHICLE_AIRHUD.md`](plans/PLAN_VEHICLE_AIRHUD.md). `ACE_TacPhone_Vehicle` plus
   `addons/tacphone/apps/vehicle` (`ace_tacphone_vehicle`), two panels
   (`ACE_TacPhone_Vehicle`, `ACE_TacPhone_Vehicle_Hud`) and two interests
   (`ACE_TacPhone_Vehicle.anim` 5 Hz, `ACE_TacPhone_Vehicle.state` 20 Hz).
@@ -824,7 +596,7 @@ plan cannot be forgotten, not as a second copy of its checklist.
     whether the 20 Hz state stream fits the relay's push budget on a full phone
     layout.
 - [ ] **[feature]** ACE explosives remote detonation —
-  [`PLAN_EXPLOSIVES.md`](PLAN_EXPLOSIVES.md). `ACE_TacPhone_Explosives` plus
+  [`plans/PLAN_EXPLOSIVES.md`](plans/PLAN_EXPLOSIVES.md). `ACE_TacPhone_Explosives` plus
   `addons/tacphone/apps/explosives` (`ace_tacphone_explosives`), interest
   `ACE_TacPhone_Explosives.charges`. The game side must store each charge's
   position (ATL/ASL/AGL/dir/class/trigger/detector) and refresh it at 1 Hz;
@@ -836,11 +608,11 @@ plan cannot be forgotten, not as a second copy of its checklist.
     `ace_explosives_place`/`_defuse`/`_explodeOnDefuse` events; verify on a real
     ACE version that a defused or moved charge cannot be detonated by a stale id.
 - [ ] **[feature]** Messenger personal notes room —
-  [`PLAN_MESSENGER_NOTES.md`](PLAN_MESSENGER_NOTES.md). No new app or addon: a
+  [`plans/PLAN_MESSENGER_NOTES.md`](plans/PLAN_MESSENGER_NOTES.md). No new app or addon: a
   pinned one-participant `Messaging` room whose blob lives in `profileNamespace`
   under `ace_tacphone_notes_<uid>`, plus `PersonalNotes.Load`/`Save`/`Clear`/
   `Flush` handled locally in
-  `apps/messaging/functions/fnc_processBrowserRequest.sqf` before
+  `apps/messaging/functions/shared/fnc_processBrowserRequest.sqf` before
   `relayToServer`.
   - Resolve first: the `PersonalNotes.*` branches must never reach the relay (a
     branch placed after `relayToServer` would upload private notes); add the
@@ -848,9 +620,45 @@ plan cannot be forgotten, not as a second copy of its checklist.
   - Also still open: the `map.position` rich object is already a separate item in
     the Messenger section above; the notes room does not cover it. Server-side
     persistence and message retention stay there too.
+- [ ] **[feature]** Logistics request and tracking app —
+  [`plans/PLAN_LOGISTICS.md`](plans/PLAN_LOGISTICS.md).
+  `ACE_TacPhone_Logistics` plus `addons/tacphone/apps/logistics`
+  (`ace_tacphone_logistics`), interest `ACE_TacPhone_Logistics.requests`.
+  Server-authoritative queue and worker roles; every request gets a public
+  (empty invite key) Messenger group room with the workers auto-joined;
+  locations come from a map marker or a new `pickPosition()` method on the
+  `map` service.
+  - Resolve first: the room path calls Messenger server internals
+    (`ace_tacphone_Messaging_fnc_serverCreateRoom` / `_serverStoreRoom` /
+    `_serverBroadcastRoom`) and clears the room's generated `inviteKey`; both
+    are `Public: No` — verify they still behave as planned in phase 3.
+  - Follow-up (after v1): allow claiming requests — a "claim" button where a
+    worker marks themselves on the request (claim/assignment is a non-goal of
+    the plan).
+- [ ] **[feature]** Messenger public rooms —
+  [`plans/PLAN_PUBLIC_ROOMS.md`](plans/PLAN_PUBLIC_ROOMS.md). No new app or
+  addon: a public room is a `group` room with an empty `inviteKey` (the
+  formalized logistics trick); `CreateRoom` gains `room.public`, new
+  `SetRoomPublic` (creator only) and `GetPublicRooms` commands, a
+  side-filtered `PublicRooms.State` push, and the room list gains a "Public
+  rooms" section with one-tap join. Enemy-side players never see the rooms.
+  - Resolve first: the list predicate must stay exactly the `JoinRoom` group
+    side check (a listed room must always be joinable); keep the room record
+    itself unchanged so the persistence scaffolding format does not move.
+- [ ] **[feature]** In-game (non-phone) notifications —
+  [`plans/PLAN_IN_GAME_NOTIFICATIONS.md`](plans/PLAN_IN_GAME_NOTIFICATIONS.md).
+  Extends the built-in `main` app and the host: a `Notify.Show` request
+  renders a `BIS_fnc_showNotification` toast (TacPhone `CfgNotifications`
+  templates) on the owning player's screen while the phone is closed;
+  `notifications.show()` gains an `inGame` option; local-client only, with a
+  machine-wide rate limit. No new app, panel, interest or service.
+  - Resolve first: confirm the top-right BIS notification area does not
+    collide with mission task toasts on a busy mission, and that the
+    `GVAR(currentShowMode)` suppression never double-shows while the phone is
+    open.
 - [ ] **[decision]** Live GPS tracker entities — scope only, do not design or
-  implement yet: [`PLAN_GPS_TRACKERS.md`](PLAN_GPS_TRACKERS.md).
+  implement yet: [`plans/PLAN_GPS_TRACKERS.md`](plans/PLAN_GPS_TRACKERS.md).
 - [ ] **[decision]** Map completeness (RECTANGLE/ELLIPSE markers, marker
   import/export using TacControl's exact schema, per-channel solo, cursor grid
   readout and live-rendered grid, marker owner on hover) — scope only, do not
-  design or implement yet: [`PLAN_MAP_COMPLETENESS.md`](PLAN_MAP_COMPLETENESS.md).
+  design or implement yet: [`plans/PLAN_MAP_COMPLETENESS.md`](plans/PLAN_MAP_COMPLETENESS.md).

@@ -29,7 +29,7 @@ its own file map, rules, and links to the deeper READMEs.
 | Development server, app discovery, VS Code debugging | [`AGENTS/dev.md`](AGENTS/dev.md) |
 | Debug-only .NET `WebServerExtension` (LAN / direct dev access) | [`AGENTS/webhost.md`](AGENTS/webhost.md) |
 | Remote access: native SQF relay, in-game hub, pairing codes, share links | [`AGENTS/remote.md`](AGENTS/remote.md) |
-| Planned apps and backlogs that are not implemented (Radio, Vehicle/Air HUD, Explosives, Messenger notes, GPS trackers, Map completeness) | [`AGENTS/plans.md`](AGENTS/plans.md) |
+| Planned apps and backlogs that are not implemented (Vehicle/Air HUD, Explosives, Messenger notes, GPS trackers, Map completeness) | [`AGENTS/plans.md`](AGENTS/plans.md) |
 
 When a change crosses an area, read the other file only for that boundary. When
 you change behavior, update the matching `AGENTS/*.md` file and its README
@@ -65,13 +65,10 @@ section in the same change.
   move routing or correlation back into SQF. Remote and LAN requests reach SQF
   as normal requests with a fresh A3API `k`; SQF must never see `__client`,
   `__requestKey` or `__silent`.
-- A production app is one self-contained ESM imported from a blob URL: no
-  relative imports, dynamic chunk imports, local `React.lazy` chunks, CSS side
-  files, or `new URL(..., import.meta.url)`. Inline CSS/assets with
-  `@ace-tacphone/build/singlefile`.
-- Shared modules are fixed in `packages/tacphone-build/shared-modules.js`: only
-  `react`, `react-dom`, `react-dom/client`, `react/jsx-runtime`, and
-  `react/compiler-runtime`. Keep them external; apps cannot add mappings.
+- App bundle packaging (one self-contained ESM per app, allowed import
+  specifiers, the fixed shared modules, the `TACPHONE-BUNDLE` container): the
+  single source is [`packages/tacphone-build/README.md`](packages/tacphone-build/README.md)
+  (`singlefile.ts`, `shared-modules.js`, "Import rules").
 - Every tab of a tabset stays mounted, background ones included, so a background
   panel keeps its live instance and registered API; flexlayout only hides its
   content with `display: none`. Route through
@@ -132,7 +129,9 @@ section in the same change.
   contract types.
 - [`packages/tacphone-build/README.md`](packages/tacphone-build/README.md) —
   `tacphone-build` CLI, shared modules, single-file plugin.
-- [`AGENTS/plans.md`](AGENTS/plans.md) — index of the `PLAN_*.md` design documents
-  (Radio, Vehicle/Air HUD, Explosives, Messenger notes) and the two scope-only
-  backlogs (GPS trackers, Map completeness), plus their shared rules.
+- [`AGENTS/plans.md`](AGENTS/plans.md) — index of the active `PLAN_*.md` design
+  documents (Radio, Vehicle/Air HUD, Explosives, Messenger notes) and the two
+  scope-only backlogs (GPS trackers, Map completeness), plus their shared rules.
+  Active plans live in `plans/`; implemented plans and finished design docs are
+  archived in `plans/completed/` — do not read those for task context.
 - [`TODO.md`](TODO.md) — all known incomplete work and placeholders.

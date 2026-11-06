@@ -1,6 +1,7 @@
 /**
- * Follow zoom: the map shows roughly the distance the player covers in one
- * minute, and never less than a small local radius while standing still.
+ * Follow zoom: the map shows roughly the distance the player covers in the
+ * next few seconds, and never less than a small local radius while standing
+ * still.
  *
  * These helpers are pure so the zoom rule is testable without a map.
  */

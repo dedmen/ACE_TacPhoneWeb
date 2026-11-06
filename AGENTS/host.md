@@ -186,9 +186,9 @@ Declaration and authoring rules are in
 - `largest()` ranks only the main layout, not floating popups, because areas of
   different layouts are not comparable.
 
-StrictMode is deliberate. `createLayoutModel`, app loading, layout restore, and
-panel instance creation are idempotent across the double mount. Do not disable it
-to hide a duplicate.
+StrictMode is a root rule ([`AGENTS.md`](../AGENTS.md), never disable it):
+`createLayoutModel`, app loading, layout restore, and panel instance creation
+are idempotent across the double mount.
 
 ## Transport (`Backend/Networking.ts`)
 

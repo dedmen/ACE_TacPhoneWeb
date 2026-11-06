@@ -45,39 +45,46 @@ public static class FileRequest
 
         using (document)
         {
-            var root = document.RootElement;
-
-            if (AppFrameJson.GetString(root, "k") is not { Length: > 0 } key)
-            {
-                return false;
-            }
-
-            if (!root.TryGetProperty("d", out var request) || request.ValueKind != JsonValueKind.Object)
-            {
-                return false;
-            }
-
-            if (!string.Equals(AppFrameJson.GetString(request, "a"), App, StringComparison.Ordinal) ||
-                !string.Equals(AppFrameJson.GetString(request, "c"), Command, StringComparison.Ordinal))
-            {
-                return false;
-            }
-
-            if (AppFrameJson.GetString(request, "path") is not { Length: > 0 } rawPath)
-            {
-                return false;
-            }
-
-            if (!IsCacheablePath(rawPath) ||
-                rawPath.Contains("..", StringComparison.Ordinal))
-            {
-                return false;
-            }
-
-            requestKey = key;
-            path = NormalizePath(rawPath);
-            return true;
+            return TryParse(document.RootElement, out requestKey, out path);
         }
+    }
+
+    /// <summary>Request checks for an already parsed frame.</summary>
+    public static bool TryParse(JsonElement root, out string requestKey, out string path)
+    {
+        requestKey = string.Empty;
+        path = string.Empty;
+
+        if (AppFrameJson.GetString(root, "k") is not { Length: > 0 } key)
+        {
+            return false;
+        }
+
+        if (!root.TryGetProperty("d", out var request) || request.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        if (!string.Equals(AppFrameJson.GetString(request, "a"), App, StringComparison.Ordinal) ||
+            !string.Equals(AppFrameJson.GetString(request, "c"), Command, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (AppFrameJson.GetString(request, "path") is not { Length: > 0 } rawPath)
+        {
+            return false;
+        }
+
+        if (!IsCacheablePath(rawPath) ||
+            rawPath.Contains("..", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        requestKey = key;
+        path = NormalizePath(rawPath);
+        return true;
     }
 
     /// <summary>

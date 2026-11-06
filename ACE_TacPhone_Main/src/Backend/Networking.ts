@@ -17,8 +17,10 @@ import type {
     TerrainLayerListener,
     TerrainLayerProgress,
 } from "./Types";
-import { t } from "./i18n";
 import { RelayManager } from "./RelayManager";
+import { RemoteSession, type RemoteSessionApi, type RemoteSessionTransport } from "./RemoteSession";
+
+export type { RemoteState, RemoteSessionApi } from "./RemoteSession";
 
 /** Short description of a request for error logs; never includes large payloads. */
 function describeRequest(data: object): string {
@@ -282,28 +284,9 @@ type PendingRequest = {
     timeout: ReturnType<typeof setTimeout>;
 };
 
-/** Pairing/connection state of the public relay page. */
-export type RemoteState = "need-pairing" | "attaching" | "connected" | "host-offline" | "rejected";
-
-/** UI-facing handle for the relay session; `null` outside the hosted page. */
-export interface RemoteSessionApi {
-    getState(): RemoteState;
-    getError(): string;
-    subscribe(listener: () => void): () => void;
-    attachCode(code: string): void;
-    retry(): void;
-}
-
-type RemoteAttach =
-    | { kind: "token"; value: string; hostId?: string }
-    | { kind: "code"; value: string }
-    | { kind: "share"; value: string };
-
 type TransportMode = "direct" | "remote";
 
-const DEVICE_STORAGE_PREFIX = "tacphone.device.";
-
-class NetworkingWebsocket implements Networking {
+class NetworkingWebsocket implements Networking, RemoteSessionTransport {
     requestCounter: number = 0;
     // A relay host can change without this socket reconnecting, and the new host
     // can serve a different terrain. Completed results are therefore never
@@ -313,9 +296,10 @@ class NetworkingWebsocket implements Networking {
     readonly remoteApi: RemoteSessionApi | null = null;
 
     private static readonly RequestTimeoutMs = 30_000;
-    private static readonly RemoteRetryMs = 15_000;
 
     private readonly mode: TransportMode;
+    // Owns the relay pairing state machine; dormant in "direct" mode.
+    private readonly session: RemoteSession;
 
     private readyPromise!: Promise<void>;
     private resolveReady: (() => void) | undefined;
@@ -340,13 +324,6 @@ class NetworkingWebsocket implements Networking {
         onError: (key, error) => this.rejectRequest(key, error),
         onComplete: (key, terrain) => this._response(key, terrain),
     });
-
-    private remoteState: RemoteState = "need-pairing";
-    private remoteError = "";
-    private remoteListeners = new Set<() => void>();
-    private pendingAttach: RemoteAttach | null = null;
-    private retryTimer: ReturnType<typeof setTimeout> | null = null;
-    private hostId = "";
 
     private rejectRequest(key: string, reason: unknown): void {
         this.terrainAssembler.forget(key);
@@ -390,7 +367,7 @@ class NetworkingWebsocket implements Networking {
     }
 
     /** Tells every listener whether the socket is usable; listener failures are contained. */
-    private notifyConnectionChange(connected: boolean): void {
+    notifyConnectionChange(connected: boolean): void {
         for (const listener of [...this.connectionListeners]) {
             try {
                 listener(connected);
@@ -445,22 +422,14 @@ class NetworkingWebsocket implements Networking {
 
         constructor(mode: TransportMode = "direct") {
         this.mode = mode;
+        this.session = new RemoteSession(this);
         console.log(`NetworkStartup ${mode === "remote" ? "Relay" : "WebSocket"}`);
 
         if (mode === "remote") {
-            this.remoteApi = {
-                getState: () => this.remoteState,
-                getError: () => this.remoteError,
-                subscribe: (listener) => {
-                    this.remoteListeners.add(listener);
-                    return () => { this.remoteListeners.delete(listener); };
-                },
-                attachCode: (code) => this.attachCode(code),
-                retry: () => this.retryRemote(),
-            };
+            this.remoteApi = this.session.api;
 
             this.resetReadyPromise();
-            this.prepareRemote();
+            this.session.prepareRemote();
             return;
         }
 
@@ -477,238 +446,37 @@ class NetworkingWebsocket implements Networking {
         this.readyPromise.catch(() => {});
     }
 
-    private setRemoteState(state: RemoteState, error = ""): void {
-        if (this.remoteState === state && this.remoteError === error) return;
-        this.remoteState = state;
-        this.remoteError = error;
+    // -- RemoteSessionTransport --------------------------------------------
 
-        for (const listener of [...this.remoteListeners]) {
-            try {
-                listener();
-            } catch (listenerError) {
-                console.error("TacPhone remote state listener failed:", listenerError);
-            }
-        }
+    markNotReady(): void {
+        this.isReady = false;
     }
 
-    private prepareRemote(): void {
-        // Pairing data can arrive as #p=<code>, #s=<share>, ?p=<code> or ?s=<share>.
-        const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
-        const query = new URLSearchParams(window.location.search);
-
-        const code = query.get("p") || query.get("code") || hash.get("p") || hash.get("code");
-        const share = query.get("s") || query.get("share") || hash.get("s") || hash.get("share");
-
-        if (code || share) {
-            // Do not leave a bearer key in the address bar/history.
-            history.replaceState(null, "", window.location.pathname);
-            this.pendingAttach = code
-                ? { kind: "code", value: normalizeCode(code) }
-                : { kind: "share", value: share! };
-            this.connect();
-            return;
-        }
-
-        const stored = this.loadDevice();
-        if (stored) {
-            this.hostId = stored.hostId;
-            this.pendingAttach = { kind: "token", value: stored.token, hostId: stored.hostId };
-            this.connect();
-            return;
-        }
-
-        this.setRemoteState("need-pairing");
+    markReady(): void {
+        this.isReady = true;
     }
 
-    private attachCode(code: string): void {
-        const normalized = normalizeCode(code);
-        if (!normalized) {
-            this.setRemoteState("need-pairing", t('STR_ACE_Tacphone_RemoteAccess_PairingErrorInvalidCode'));
-            return;
-        }
-
-        this.pendingAttach = { kind: "code", value: normalized };
-        this.setRemoteState("attaching");
-        this.connect();
+    settleReady(): void {
+        this.resolveReady?.();
+        this.resolveReady = this.rejectReady = undefined;
     }
 
-    private retryRemote(): void {
-        this.clearRetryTimer();
-        this.connect(true);
+    clearTerrain(): void {
+        this.terrainCache.clear();
+        this.terrainAssembler.clear();
     }
 
-    private clearRetryTimer(): void {
-        if (this.retryTimer !== null) {
-            clearTimeout(this.retryTimer);
-            this.retryTimer = null;
-        }
+    flushQueue(): void {
+        this.flushPreOpenQueue();
     }
 
-    private scheduleRetry(): void {
-        if (this.retryTimer !== null) return;
-        this.retryTimer = setTimeout(() => {
-            this.retryTimer = null;
-            this.connect(true);
-        }, NetworkingWebsocket.RemoteRetryMs);
+    deliverMessage(data: unknown): void {
+        this.handleSocketMessage(data);
     }
 
-    private loadDevice(): { hostId: string; token: string } | null {
-        try {
-            const raw = localStorage.getItem(DEVICE_STORAGE_PREFIX + window.location.host);
-            if (!raw) return null;
-            const parsed = JSON.parse(raw) as { hostId?: string; token?: string };
-            if (!parsed?.token) return null;
-            return { hostId: parsed.hostId ?? "", token: parsed.token };
-        } catch (error) {
-            console.warn("Could not read the stored TacPhone device token:", error);
-            return null;
-        }
-    }
+    // ---------------------------------------------------------------------
 
-    private saveDevice(hostId: string, token: string): void {
-        try {
-            localStorage.setItem(
-                DEVICE_STORAGE_PREFIX + window.location.host,
-                JSON.stringify({ hostId, token }),
-            );
-        } catch (error) {
-            console.warn("Could not persist the TacPhone device token:", error);
-        }
-    }
-
-    private sendAttach(): void {
-        if (!this.pendingAttach) return;
-
-        const frame: Record<string, unknown> = { t: "attach", proto: 1, role: "client" };
-
-        if (this.pendingAttach.kind === "token") {
-            frame.deviceToken = this.pendingAttach.value;
-            if (this.pendingAttach.hostId) frame.hostId = this.pendingAttach.hostId;
-        } else if (this.pendingAttach.kind === "code") {
-            frame.code = this.pendingAttach.value;
-        } else {
-            frame.share = this.pendingAttach.value;
-        }
-
-        try {
-            this.socket.send(JSON.stringify(frame));
-        } catch (error) {
-            console.error("Could not send the TacPhone attach frame:", error);
-        }
-    }
-
-    private handleRemoteControl(frame: any): void {
-        switch (frame.t) {
-            case "attach-ok": {
-                const token: string | undefined = frame.deviceToken;
-                const hostId: string = frame.hostId ?? this.hostId ?? "";
-
-                // The relay can switch its game host without closing this socket;
-                // terrain cached for the old host must not survive that.
-                if (hostId !== this.hostId) {
-                    this.terrainCache.clear();
-                    this.terrainAssembler.clear();
-                }
-
-                if (token) {
-                    this.hostId = hostId;
-                    this.pendingAttach = { kind: "token", value: token, hostId };
-                    this.saveDevice(hostId, token);
-                }
-
-                this.isReady = true;
-                this.setRemoteState("connected");
-                this.resolveReady?.();
-                this.resolveReady = this.rejectReady = undefined;
-                this.flushPreOpenQueue();
-                this.notifyConnectionChange(true);
-                break;
-            }
-
-            case "host-offline":
-                this.setRemoteState("host-offline", t('STR_ACE_Tacphone_RemoteAccess_PairingErrorHostOffline'));
-                this.socket?.close();
-                break;
-
-            case "rejected":
-                this.setRemoteState("rejected", t('STR_ACE_Tacphone_RemoteAccess_PairingErrorRejected', frame.reason ?? t('STR_ACE_Tacphone_RemoteAccess_PairingErrorUnknownReason')));
-                this.pendingAttach = null;
-                this.socket?.close();
-                break;
-
-            case "peer-kicked":
-                this.setRemoteState("host-offline", t('STR_ACE_Tacphone_RemoteAccess_PairingErrorSessionEnded'));
-                this.socket?.close();
-                break;
-
-            case "ping":
-                // The relay drops peers that do not answer its keepalive.
-                try {
-                    this.socket?.send(JSON.stringify({ t: "pong" }));
-                } catch (error) {
-                    console.warn("Could not answer the TacPhone relay ping:", error);
-                }
-                break;
-
-            case "pong":
-                break;
-
-            default:
-                // Keep this visible: an unexpected control frame means the server and
-                // page disagree about the protocol version.
-                console.warn("Unknown TacPhone relay control frame:", frame);
-                break;
-        }
-    }
-
-    private connect(silent = false): void {
-        if (this.mode === "remote") {
-            if (!this.pendingAttach) {
-                this.setRemoteState("need-pairing");
-                return;
-            }
-
-            this.clearRetryTimer();
-            this.isReady = false;
-            if (!silent) this.setRemoteState("attaching");
-
-            const socket = new WebSocket(`wss://${window.location.host}/ws`);
-            socket.binaryType = "arraybuffer";
-            this.socket = socket;
-
-            socket.onopen = () => {
-                this.sendAttach();
-            };
-
-            socket.onmessage = (event) => {
-                this.handleSocketMessage(event.data);
-            };
-
-            socket.onclose = () => {
-                this.isReady = false;
-                this.terrainCache.clear();
-                this.terrainAssembler.clear();
-                // Keep queued requests: they flush again after the next attach.
-                this.notifyConnectionChange(false);
-
-                if (this.remoteState === "rejected") return;
-                if (!this.pendingAttach) {
-                    this.setRemoteState("need-pairing");
-                    return;
-                }
-
-                this.setRemoteState("host-offline");
-                this.scheduleRetry();
-            };
-
-            socket.onerror = () => {
-                // onclose follows and schedules the retry.
-                console.log("[error] TacPhone relay socket error");
-            };
-
-            return;
-        }
-
+    private connect(): void {
         this.isReady = false;
         this.resetReadyPromise();
 
@@ -794,7 +562,7 @@ class NetworkingWebsocket implements Networking {
         }
 
         if (this.mode === "remote" && typeof jsonData?.t === "string") {
-            this.handleRemoteControl(jsonData);
+            this.session.handleRemoteControl(jsonData);
             return;
         }
 
@@ -956,11 +724,6 @@ class NetworkingWebsocket implements Networking {
     }
 
 };
-
-/** Normalises a pairing code: uppercase, alphanumerics only. */
-function normalizeCode(code: string): string {
-    return code.toUpperCase().replace(/[^A-Z0-9]/g, "");
-}
 
 // Are we running inside Arma game, or are we standalone browser page
 export function IsArma()

@@ -12,10 +12,10 @@ host/app source maps. For the in-game browser constraints see the root
   native relay instead.
 - Trust the local ASP.NET TLS certificate, otherwise the dev page cannot open the
   WebSocket. The dev server is debug-only.
-- Open the printed `http://localhost:<port>` URL. Never use `127.0.0.1`:
-  `IsLocalDev()` matches the exact `http://localhost` prefix and loads apps from
-  the dev server. (The transport itself is chosen by `IsArma()`: a `blob:` page
-  URL means the in-game browser.)
+- Open the printed `http://localhost:<port>` URL; `127.0.0.1` is out (root
+  [`AGENTS.md`](../AGENTS.md) rule — `IsLocalDev()` matches the exact
+  `http://localhost` prefix). (The transport itself is chosen by `IsArma()`: a
+  `blob:` page URL means the in-game browser.)
 
 ## Where discovery lives
 

@@ -3,7 +3,8 @@
  *
  * Terrain data is parsed lazily by `TerrainMasks`; the road graph lives in
  * `roads/RoadNetwork` and the terrain-grid search in `routing/TerrainGrid`.
- * This class only orchestrates the modes, legs and road/grid connectors.
+ * This class orchestrates the modes, legs and road/grid connectors; the
+ * terrain/cost-field queries live in the `RouteCostField` sibling.
  *
  * | Mode   | Strategy                                                        |
  * | ------ | --------------------------------------------------------------- |
@@ -27,7 +28,6 @@ import {
 import {
     buildDebugGrid,
     searchGrid,
-    segmentCost,
     simplifyGridPath,
     type GridContext,
 } from '../routing/TerrainGrid';
@@ -45,7 +45,6 @@ import {
     splitPathAtWater,
     waterReplacementAcceptable,
 } from '../routing/WaterCorridor';
-import { MAX_GROUND_SLOPE } from '../routing/SpeedModel';
 import type {
     ActiveRoute,
     RouteDebugGrid,
@@ -58,14 +57,12 @@ import type {
 } from '../routing/RouteTypes';
 import { distanceBetween } from './SharedRoute';
 import { buildRouteGeometry } from './RouteSplice';
+import { RouteCostField } from './RouteCostField';
 
 export { legSpeed } from '../routing/SpeedModel';
 
 /** Preferred clearance from water on repaired foot legs, metres. */
 const WATER_BUFFER_M = 3;
-/** Search-only slowdown for foot paths that hug a water edge, metres. */
-const WATER_EDGE_PENALTY_M = 3;
-const WATER_EDGE_PENALTY_FACTOR = 0.5;
 /** Water fragments shorter than this are a raster sliver, not a real crossing. */
 const MAX_FOOT_WATER_SLIVER_M = 10;
 /** Farthest a ground waypoint may snap to the road graph, metres. */
@@ -108,10 +105,10 @@ interface PathChunk {
 
 /** Plans routes for one terrain snapshot. */
 export class RoutePlanner {
-    private readonly masks: TerrainMasks;
-    private readonly heights = new TerrainHeights();
-    private terrain: TerrainData | null;
-    private disposed = false;
+    public readonly masks: TerrainMasks;
+    public readonly heights = new TerrainHeights();
+    public terrain: TerrainData | null;
+    public disposed = false;
     /** Lazily built width-aware road graph for ground routing. */
     private roadNetwork: RoadNetwork | null = null;
     /**
@@ -119,10 +116,13 @@ export class RoutePlanner {
      * `GpsModule` switches it on in debug builds only.
      */
     private debug = false;
+    /** Terrain/cost-field sibling; constructed last in the constructor. */
+    public cost: RouteCostField;
 
     constructor(terrain: TerrainData | null) {
         this.terrain = terrain;
         this.masks = new TerrainMasks(terrain);
+        this.cost = new RouteCostField(this);
     }
 
     /** Debug only: includes a planning grid in every result while enabled. */
@@ -184,7 +184,7 @@ export class RoutePlanner {
         coarseRequests: number;
         fineRequests: number;
     } {
-        return this.heights.stats;
+        return this.cost.getHeightStats();
     }
 
     /**
@@ -260,47 +260,7 @@ export class RoutePlanner {
         waterCapable: boolean,
         performance: VehiclePerformance | undefined,
     ): Promise<RouteDebugGrid | null> {
-        if (this.disposed || !this.terrain) {
-            return null;
-        }
-
-        const clamped: [number, number, number, number] = [
-            Math.max(0, Math.min(this.terrain.width, bbox[0])),
-            Math.max(0, Math.min(this.terrain.height, bbox[1])),
-            Math.max(0, Math.min(this.terrain.width, bbox[2])),
-            Math.max(0, Math.min(this.terrain.height, bbox[3])),
-        ];
-        if (clamped[2] <= clamped[0] || clamped[3] <= clamped[1]) {
-            return null;
-        }
-
-        const cell = this.masks.cellSizeFor(clamped);
-        const isCancelled = (): boolean => this.disposed;
-        const rasters = await this.masks.buildRasters(mode, clamped, cell, isCancelled);
-        if (this.disposed) {
-            return null;
-        }
-
-        const heightGrid = mode === 'foot' || mode === 'ground'
-            ? await this.heights.sampleGrid(clamped, 96, isCancelled)
-            : null;
-        const slopeAt = heightGrid
-            ? (x: number, y: number): number | null => heightSlopeAt(heightGrid, x, y)
-            : undefined;
-
-        return buildDebugGrid(
-            this.gridContext(
-                mode,
-                rasters,
-                clamped,
-                cell,
-                performance,
-                waterCapable,
-                isCancelled,
-                slopeAt,
-            ),
-            heightGrid,
-        );
+        return this.cost.scanDebugGrid(bbox, mode, waterCapable, performance);
     }
 
     /**
@@ -588,7 +548,7 @@ export class RoutePlanner {
         // search, so a failed plan still shows what the planner had to work with.
         const debug = this.debug
             ? await buildDebugGrid(
-                this.gridContext(mode, rasters, bbox, cell, performance, waterCapable, isCancelled, slopeAt),
+                this.cost.gridContext(mode, rasters, bbox, cell, performance, waterCapable, isCancelled, slopeAt),
                 heightGrid,
             )
             : null;
@@ -720,12 +680,12 @@ export class RoutePlanner {
         // If a steep section is found, re-run the grid search with a penalty
         // around the problem points so the path works around it.
         if (mode === 'foot' && request.validate) {
-            const problems = await this.validateFootPath(legs, isCancelled);
+            const problems = await this.cost.validateFootPath(legs, isCancelled);
             if (isCancelled()) {
                 return { ok: false, reason: 'cancelled' };
             }
             if (problems.length > 0) {
-                const penaltyAt = this.makePenalty(problems);
+                const penaltyAt = this.cost.makePenalty(problems);
                 const adjusted = await this.planGridLegs(
                     start,
                     waypoints,
@@ -812,99 +772,6 @@ export class RoutePlanner {
         }
 
         return legs;
-    }
-
-    /**
-     * Fine 1 m validation of a foot path.
-     *
-     * Samples are capped at 2000 points, so a very long route widens the
-     * spacing instead of sending an unbounded request. A sample pair with a
-     * grade above `MAX_GROUND_SLOPE` becomes a problem point for the reroute.
-     */
-    private async validateFootPath(
-        legs: RouteLeg[],
-        isCancelled: () => boolean,
-    ): Promise<Array<[number, number]>> {
-        const flat: number[] = [];
-        let length = 0;
-        for (const leg of legs) {
-            for (let index = 0; index < leg.points.length; index += 2) {
-                const x = leg.points[index];
-                const y = leg.points[index + 1];
-                const count = flat.length / 2;
-                if (count > 0 && flat[(count - 1) * 2] === x && flat[(count - 1) * 2 + 1] === y) {
-                    continue;
-                }
-                flat.push(x, y);
-            }
-            length += leg.distance;
-        }
-
-        if (flat.length < 4) {
-            return [];
-        }
-
-        const spacing = Math.max(1, length / 2000);
-        const samples = await this.heights.samplePath(flat, spacing, isCancelled, false);
-        if (isCancelled() || samples.length < 2) {
-            return [];
-        }
-
-        const problems: Array<[number, number]> = [];
-        for (let index = 0; index + 1 < samples.length && problems.length < 64; index += 1) {
-            const a = samples[index];
-            const b = samples[index + 1];
-            const horizontal = distanceBetween(a.x, a.y, b.x, b.y);
-            if (!(horizontal > 0)) {
-                continue;
-            }
-            const grade = Math.abs(b.height - a.height) / horizontal;
-            if (grade > MAX_GROUND_SLOPE) {
-                problems.push([(a.x + b.x) / 2, (a.y + b.y) / 2]);
-            }
-        }
-
-        return problems;
-    }
-
-    /** Search penalty near a failed fine-validation point. */
-    private makePenalty(
-        problems: Array<[number, number]>,
-    ): (x: number, y: number) => number {
-        const radius = 25;
-        return (x: number, y: number): number => {
-            for (const problem of problems) {
-                if (distanceBetween(x, y, problem[0], problem[1]) <= radius) {
-                    return 0.05;
-                }
-            }
-            return 1;
-        };
-    }
-
-    /**
-     * Search-only slowdown for land within a few metres of water. Foot routes
-     * should not skim the coastline when a slightly inland line is just as
-     * fast; the displayed ETA stays the real speed.
-     */
-    private waterEdgePenalty(rasters: RasterSet): (x: number, y: number) => number {
-        const offsets: ReadonlyArray<readonly [number, number]> = [
-            [WATER_EDGE_PENALTY_M, 0],
-            [-WATER_EDGE_PENALTY_M, 0],
-            [0, WATER_EDGE_PENALTY_M],
-            [0, -WATER_EDGE_PENALTY_M],
-        ];
-        return (x: number, y: number): number => {
-            if (this.masks.landAt(x, y, rasters) === false) {
-                return 1;
-            }
-            for (const [dx, dy] of offsets) {
-                if (this.masks.landAt(x + dx, y + dy, rasters) === false) {
-                    return WATER_EDGE_PENALTY_FACTOR;
-                }
-            }
-            return 1;
-        };
     }
 
     /** Aircraft: straight lines between the consecutive waypoints. */
@@ -1255,7 +1122,7 @@ export class RoutePlanner {
         slopeAt?: (x: number, y: number) => number | null,
         penaltyAt?: (x: number, y: number) => number,
     ): Promise<RouteLeg[] | null> {
-        const context = this.gridContext(
+        const context = this.cost.gridContext(
             mode,
             rasters,
             bbox,
@@ -1472,7 +1339,7 @@ export class RoutePlanner {
             const a = pointAt(splitPath, run.startIndex);
             const b = pointAt(splitPath, run.endIndex);
             const margin = Math.max(250, Math.min(1500, run.waterDistance * 2 + 250));
-            const fineBBox = this.clampBounds(corridorBounds(splitPath, run, margin));
+            const fineBBox = this.cost.clampBounds(corridorBounds(splitPath, run, margin));
             const span = Math.max(fineBBox[2] - fineBBox[0], fineBBox[3] - fineBBox[1]);
             const fineCell = Math.max(5, Math.min(context.cell, span / 900));
             if (!(span > 0) || !(fineCell < context.cell)) {
@@ -1492,7 +1359,7 @@ export class RoutePlanner {
                     ? 0
                     : (penaltyAt?.(x, y) ?? 1)
             );
-            const fineContext = this.gridContext(
+            const fineContext = this.cost.gridContext(
                 'foot',
                 fineRasters,
                 fineBBox,
@@ -1527,13 +1394,13 @@ export class RoutePlanner {
                 continue;
             }
 
-            const originalEta = this.pathEta(
+            const originalEta = this.cost.pathEta(
                 { ...context, penaltyAt: undefined },
                 splitPath,
                 run.startIndex,
                 run.endIndex,
             );
-            const replacementEta = this.pathEta(
+            const replacementEta = this.cost.pathEta(
                 { ...fineContext, penaltyAt: undefined, avoidWater: false },
                 finePath,
                 0,
@@ -1579,40 +1446,6 @@ export class RoutePlanner {
         return chunks;
     }
 
-    /** Travel time of a path span using the search masks and speed model. */
-    private pathEta(
-        context: GridContext,
-        path: number[],
-        fromIndex: number,
-        toIndex: number,
-    ): number {
-        let eta = 0;
-        for (let index = fromIndex; index < toIndex; index += 1) {
-            eta += segmentCost(
-                context,
-                path[index * 2],
-                path[index * 2 + 1],
-                path[(index + 1) * 2],
-                path[(index + 1) * 2 + 1],
-            );
-        }
-        return eta;
-    }
-
-    /** Clamps a corridor box to the terrain, if its dimensions are known. */
-    private clampBounds(bounds: BBox): BBox {
-        const terrain = this.masks.getBounds();
-        if (!terrain) {
-            return bounds;
-        }
-        return [
-            Math.max(0, bounds[0]),
-            Math.max(0, bounds[1]),
-            Math.min(terrain.width, bounds[2]),
-            Math.min(terrain.height, bounds[3]),
-        ];
-    }
-
     private planBoatPair(
         start: [number, number],
         goal: [number, number],
@@ -1645,7 +1478,7 @@ export class RoutePlanner {
             legs.push(this.straightLeg('foot', 'walk', start, waterStart, performance));
         }
 
-        const context = this.gridContext('boat', rasters, bbox, cell, performance, false, isCancelled);
+        const context = this.cost.gridContext('boat', rasters, bbox, cell, performance, false, isCancelled);
         const result = searchGrid(context, waterStart, waterEnd);
         if (!result) {
             return null;
@@ -2087,35 +1920,6 @@ export class RoutePlanner {
             return 'road';
         }
         return mode === 'ground' ? 'offroad' : 'walk';
-    }
-
-    private gridContext(
-        mode: TravelMode,
-        rasters: RasterSet,
-        bbox: BBox,
-        cell: number,
-        performance: VehiclePerformance | undefined,
-        waterCapable: boolean,
-        isCancelled: () => boolean,
-        slopeAt?: (x: number, y: number) => number | null,
-        penaltyAt?: (x: number, y: number) => number,
-    ): GridContext {
-        const effectivePenalty = mode === 'foot' && penaltyAt === undefined
-            ? this.waterEdgePenalty(rasters)
-            : penaltyAt;
-
-        return {
-            mode,
-            masks: this.masks,
-            rasters,
-            bbox,
-            cell,
-            waterCapable,
-            performance,
-            isCancelled,
-            slopeAt,
-            penaltyAt: effectivePenalty,
-        };
     }
 }
 

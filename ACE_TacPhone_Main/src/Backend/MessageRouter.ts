@@ -10,17 +10,28 @@ export type { CommandHandler } from "./Types";
 export class CommandRegistry {
   // Internal map tracking a Set of callbacks for each action string
   private registry: Map<string, Set<CommandHandler>> = new Map();
+  // Commands already reported as unsubscribed, so a high-rate push (GPS.Update
+  // runs at 10 Hz) warns once instead of on every message. Registering a
+  // subscriber for the command arms the report again.
+  private reportedUnsubscribed: Set<string> = new Set();
 
   /**
    * Registers a callback for a specific action.
    * @returns A cleanup function to unregister this specific listener.
    */
   public register(action: string, handler: CommandHandler): () => void {
-    if (!this.registry.has(action)) {
+    const existing = this.registry.get(action);
+    const wasEmpty = !existing || existing.size === 0;
+    if (!existing) {
       this.registry.set(action, new Set());
     }
 
     this.registry.get(action)!.add(handler);
+
+    // The first subscriber makes a previous "no subscribers" report stale.
+    if (wasEmpty) {
+      this.reportedUnsubscribed.delete(action);
+    }
 
     // Return a self-contained unregister closure
     return () => {
@@ -50,7 +61,8 @@ export class CommandRegistry {
             console.error(`Error in subscriber for command "${packet.c}":`, err);
           }
         });
-      } else {
+      } else if (!this.reportedUnsubscribed.has(packet.c)) {
+        this.reportedUnsubscribed.add(packet.c);
         console.warn(`No active subscribers for command: ${packet.c}`);
       }
     } catch (err) {
@@ -63,5 +75,6 @@ export class CommandRegistry {
    */
   public clear(): void {
     this.registry.clear();
+    this.reportedUnsubscribed.clear();
   }
 }

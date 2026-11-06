@@ -36,6 +36,9 @@ public sealed class TerrainCache
 
     private readonly object _pendingGate = new();
     private readonly Dictionary<string, PendingTransfer> _pending = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, List<string>> _pendingPeers = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, List<string>> _pendingHosts = new(StringComparer.Ordinal);
+    private DateTimeOffset _oldestPendingCreatedAt;
     private long _pendingBytes;
 
     private readonly ILogger<TerrainCache> _logger;
@@ -315,7 +318,18 @@ public sealed class TerrainCache
             }
         }
 
-        DropWhere(transfer => string.Equals(transfer.HostId, hostId, StringComparison.Ordinal));
+        lock (_pendingGate)
+        {
+            if (_pendingHosts.TryGetValue(hostId, out var keys))
+            {
+                _pendingHosts.Remove(hostId);
+
+                foreach (var key in keys)
+                {
+                    RemovePendingLocked(key);
+                }
+            }
+        }
     }
 
     private void ReleaseLocked(string contentHash)
@@ -350,8 +364,9 @@ public sealed class TerrainCache
 
         lock (_pendingGate)
         {
-            _pending[PendingKey(peerId, requestKey)] =
-                new PendingTransfer(peerId, hostId, configHash, DateTimeOffset.UtcNow);
+            SetPendingLocked(
+                PendingKey(peerId, requestKey),
+                new PendingTransfer(peerId, hostId, configHash, DateTimeOffset.UtcNow));
         }
     }
 
@@ -380,20 +395,17 @@ public sealed class TerrainCache
             return false;
         }
 
-        PendingTransfer? pending;
         lock (_pendingGate)
         {
-            if (!_pending.Remove(PendingKey(peerId, requestKey), out pending))
+            if (!RemovePendingLocked(PendingKey(peerId, requestKey), out var pending))
             {
                 return false;
             }
 
-            _pendingBytes -= pending.Bytes;
+            hostId = pending.HostId;
+            configHash = pending.ConfigHash;
+            return true;
         }
-
-        hostId = pending.HostId;
-        configHash = pending.ConfigHash;
-        return true;
     }
 
     /// <summary>
@@ -435,7 +447,7 @@ public sealed class TerrainCache
 
             if (chunk.Error is not null)
             {
-                RemoveLocked(key, transfer);
+                RemovePendingLocked(key);
                 return ChunkResult.Failed;
             }
 
@@ -444,7 +456,7 @@ public sealed class TerrainCache
 
             if (!transfer.Matches(chunk))
             {
-                RemoveLocked(key, transfer);
+                RemovePendingLocked(key);
                 return ChunkResult.Failed;
             }
 
@@ -458,7 +470,7 @@ public sealed class TerrainCache
                 _logger.LogWarning(
                     "A chunked terrain transfer ({Bytes} buffered bytes) would exceed TerrainCache:MaxTotalBytes and was not buffered",
                     transfer.Bytes);
-                RemoveLocked(key, transfer);
+                RemovePendingLocked(key);
                 return ChunkResult.Failed;
             }
 
@@ -469,7 +481,7 @@ public sealed class TerrainCache
 
             var layers = transfer.BuildLayers();
             var payload = TerrainRequest.BuildCombinedPayload(transfer.Width, transfer.Height, layers);
-            RemoveLocked(key, transfer);
+            RemovePendingLocked(key);
             completed = new TerrainPayload(transfer.Width, transfer.Height, layers, payload);
             return ChunkResult.Completed;
         }
@@ -483,7 +495,18 @@ public sealed class TerrainCache
             return;
         }
 
-        DropWhere(transfer => string.Equals(transfer.PeerId, peerId, StringComparison.Ordinal));
+        lock (_pendingGate)
+        {
+            if (_pendingPeers.TryGetValue(peerId, out var keys))
+            {
+                _pendingPeers.Remove(peerId);
+
+                foreach (var key in keys)
+                {
+                    RemovePendingLocked(key);
+                }
+            }
+        }
     }
 
     /// <summary>
@@ -492,43 +515,120 @@ public sealed class TerrainCache
     /// </summary>
     public void SweepPending(TimeSpan age)
     {
-        DropWhere(transfer => DateTimeOffset.UtcNow - transfer.CreatedAt >= age);
-    }
-
-    private void DropWhere(Func<PendingTransfer, bool> predicate)
-    {
         lock (_pendingGate)
         {
+            if (_pending.Count == 0)
+            {
+                return;
+            }
+
+            var now = DateTimeOffset.UtcNow;
+
+            // Fast path: the oldest transfer is still fresh, so nothing can
+            // be expired; the sweep stays O(1) while nothing times out.
+            if (now - _oldestPendingCreatedAt < age)
+            {
+                return;
+            }
+
             List<string>? doomed = null;
+            var oldest = now;
             foreach (var (key, transfer) in _pending)
             {
-                if (predicate(transfer))
+                if (now - transfer.CreatedAt >= age)
                 {
                     (doomed ??= []).Add(key);
+                }
+                else if (transfer.CreatedAt < oldest)
+                {
+                    oldest = transfer.CreatedAt;
                 }
             }
 
             if (doomed is null)
             {
+                // The age hint had gone stale; nothing expired after all.
+                _oldestPendingCreatedAt = oldest;
                 return;
             }
 
             foreach (var key in doomed)
             {
-                if (_pending.Remove(key, out var transfer))
-                {
-                    _pendingBytes -= transfer.Bytes;
-                }
+                RemovePendingLocked(key);
+            }
+
+            _oldestPendingCreatedAt = _pending.Count == 0 ? now : oldest;
+        }
+    }
+
+    private void SetPendingLocked(string key, PendingTransfer transfer)
+    {
+        if (_pending.TryGetValue(key, out var previous))
+        {
+            // A reused key replaces the transfer; move the key to the new
+            // peer/host buckets.
+            UntrackPendingLocked(previous.PeerId, previous.HostId, key);
+        }
+
+        _pending[key] = transfer;
+
+        TrackPendingLocked(_pendingPeers, transfer.PeerId, key);
+        TrackPendingLocked(_pendingHosts, transfer.HostId, key);
+
+        if (_pending.Count == 1 || transfer.CreatedAt < _oldestPendingCreatedAt)
+        {
+            _oldestPendingCreatedAt = transfer.CreatedAt;
+        }
+    }
+
+    private bool RemovePendingLocked(string key, out PendingTransfer transfer)
+    {
+        if (!_pending.Remove(key, out transfer!))
+        {
+            return false;
+        }
+
+        _pendingBytes -= transfer.Bytes;
+        UntrackPendingLocked(transfer.PeerId, transfer.HostId, key);
+        return true;
+    }
+
+    private void RemovePendingLocked(string key)
+    {
+        RemovePendingLocked(key, out _);
+    }
+
+    private static void TrackPendingLocked(Dictionary<string, List<string>> buckets, string id, string key)
+    {
+        if (buckets.TryGetValue(id, out var keys))
+        {
+            keys.Add(key);
+        }
+        else
+        {
+            buckets[id] = [key];
+        }
+    }
+
+    private static void UntrackPendingLocked(
+        Dictionary<string, List<string>> buckets,
+        string id,
+        string key)
+    {
+        if (buckets.TryGetValue(id, out var keys))
+        {
+            keys.Remove(key);
+            if (keys.Count == 0)
+            {
+                buckets.Remove(id);
             }
         }
     }
 
-    private void RemoveLocked(string key, PendingTransfer transfer)
+    private void UntrackPendingLocked(string peerId, string hostId, string key)
     {
-        if (_pending.Remove(key))
-        {
-            _pendingBytes -= transfer.Bytes;
-        }
+        UntrackPendingLocked(_pendingPeers, peerId, key);
+        UntrackPendingLocked(_pendingHosts, hostId, key);
     }
 
     // ----------------------------------------------------------------- stats
@@ -673,536 +773,4 @@ public sealed class TerrainCache
 
         public Dictionary<int, string> Data { get; } = new();
     }
-}
-
-/// <summary>Outcome of adding one chunk of a chunked terrain reply.</summary>
-public enum ChunkResult
-{
-    /// <summary>No transfer is pending for this peer and request key.</summary>
-    NotPending,
-
-    /// <summary>The chunk was buffered; the transfer is still incomplete.</summary>
-    Buffered,
-
-    /// <summary>The transfer is complete and <c>completed</c> holds the payload.</summary>
-    Completed,
-
-    /// <summary>The chunk is an error or does not match the transfer, which was dropped.</summary>
-    Failed,
-}
-
-/// <summary>A point-in-time view of the terrain cache.</summary>
-public readonly record struct TerrainCacheStats(
-    int Entries,
-    long Bytes,
-    int Pins,
-    long Hits,
-    long Misses,
-    int Pending = 0,
-    long PendingBytes = 0);
-
-/// <summary>One decompressed layer of a chunked terrain reply.</summary>
-public sealed record TerrainLayer(string Name, string Data);
-
-/// <summary>A completed chunked terrain reply: canonical payload plus its layers.</summary>
-public sealed record TerrainPayload(int Width, int Height, IReadOnlyList<TerrainLayer> Layers, string Data);
-
-/// <summary>
-/// One frame of a chunked <c>ReplyRequestTerrainSVG</c> reply, or its error frame.
-/// </summary>
-public readonly record struct TerrainChunk(
-    int Index,
-    int Count,
-    int Part,
-    int Parts,
-    int Width,
-    int Height,
-    string Name,
-    string? Data,
-    string? Error);
-
-/// <summary>
-/// Parses the two application frames the terrain cache cares about: the browser's
-/// <c>RequestTerrainSVG</c> request and the game's reply. Both are plain
-/// <c>{k, d}</c> frames over the existing protocol; nothing about the wire format
-/// changes.
-/// </summary>
-public static class TerrainRequest
-{
-    /// <summary>The app name the request must target.</summary>
-    public const string App = "main";
-
-    /// <summary>The command the relay intercepts.</summary>
-    public const string Command = "RequestTerrainSVG";
-
-    /// <summary>The command of a chunked terrain reply.</summary>
-    public const string ReplyCommand = "ReplyRequestTerrainSVG";
-
-    /// <summary>Upper bound for <c>count</c> and <c>parts</c>; larger values are malformed.</summary>
-    public const int MaxChunks = 64;
-
-    /// <summary>Maximum base64 characters per emitted layer part.</summary>
-    public const int MaxTerrainChunkChars = 6 * 1024 * 1024;
-
-    /// <summary>
-    /// Parses <c>{"k":"...","d":{"a":"main","c":"RequestTerrainSVG","config":{...}}}</c>.
-    /// Returns false for every other command or a malformed frame, so the relay
-    /// forwards it untouched.
-    /// </summary>
-    public static bool TryParse(ReadOnlySpan<byte> payload, out string requestKey, out string configHash)
-    {
-        requestKey = string.Empty;
-        configHash = string.Empty;
-
-        if (!TryParseObject(payload, out var document))
-        {
-            return false;
-        }
-
-        using (document)
-        {
-            var root = document.RootElement;
-
-            if (GetString(root, "k") is not { Length: > 0 } key)
-            {
-                return false;
-            }
-
-            if (!root.TryGetProperty("d", out var request) || request.ValueKind != JsonValueKind.Object)
-            {
-                return false;
-            }
-
-            if (!string.Equals(GetString(request, "a"), App, StringComparison.Ordinal) ||
-                !string.Equals(GetString(request, "c"), Command, StringComparison.Ordinal))
-            {
-                return false;
-            }
-
-            if (!request.TryGetProperty("config", out var config) || config.ValueKind != JsonValueKind.Object)
-            {
-                return false;
-            }
-
-            var computed = TerrainCache.ComputeConfigHash(config);
-            if (computed is null)
-            {
-                return false;
-            }
-
-            requestKey = key;
-            configHash = computed;
-            return true;
-        }
-    }
-
-    /// <summary>
-    /// Parses the game's reply <c>{"k":"...","d":"..."}</c>. Only a string payload
-    /// counts: errors and objects are never cached. A frame without a string
-    /// <c>k</c> is ignored.
-    /// </summary>
-    public static bool TryReadReply(ReadOnlySpan<byte> payload, out string requestKey, out string? data)
-    {
-        requestKey = string.Empty;
-        data = null;
-
-        if (!TryParseObject(payload, out var document))
-        {
-            return false;
-        }
-
-        using (document)
-        {
-            var root = document.RootElement;
-
-            if (GetString(root, "k") is not { Length: > 0 } key)
-            {
-                return false;
-            }
-
-            if (!root.TryGetProperty("d", out var value))
-            {
-                return false;
-            }
-
-            requestKey = key;
-            data = value.ValueKind == JsonValueKind.String ? value.GetString() : null;
-            return true;
-        }
-    }
-
-    /// <summary>Builds the cache-hit reply <c>{"k":"&lt;k&gt;","d":"&lt;payload&gt;"}</c>.</summary>
-    public static byte[] BuildReply(string requestKey, string payload) => AppReply.Build(requestKey, payload);
-
-    /// <summary>
-    /// Parses one chunk frame of a chunked terrain reply. A chunk either carries a
-    /// non-empty <c>data</c> string plus the layer indices, or a non-empty
-    /// <c>error</c> string. Bounds are validated here so an assembly cannot be
-    /// driven past <c>count</c>/<c>parts</c> = 64.
-    /// </summary>
-    public static bool TryReadChunk(
-        ReadOnlySpan<byte> payload,
-        out string requestKey,
-        out TerrainChunk chunk)
-    {
-        requestKey = string.Empty;
-        chunk = default;
-
-        if (!AppFrameJson.TryParseObject(payload, out var document))
-        {
-            return false;
-        }
-
-        using (document)
-        {
-            var root = document.RootElement;
-
-            if (AppFrameJson.GetString(root, "k") is not { Length: > 0 } key)
-            {
-                return false;
-            }
-
-            if (!root.TryGetProperty("d", out var reply) || reply.ValueKind != JsonValueKind.Object)
-            {
-                return false;
-            }
-
-            if (!string.Equals(AppFrameJson.GetString(reply, "c"), ReplyCommand, StringComparison.Ordinal))
-            {
-                return false;
-            }
-
-            if (AppFrameJson.GetString(reply, "error") is { Length: > 0 } error)
-            {
-                requestKey = key;
-                chunk = new TerrainChunk(0, 1, 0, 1, 0, 0, string.Empty, null, error);
-                return true;
-            }
-
-            if (AppFrameJson.GetString(reply, "data") is not { Length: > 0 } data)
-            {
-                return false;
-            }
-
-            var index = AppFrameJson.GetInt(reply, "index");
-            var count = AppFrameJson.GetInt(reply, "count");
-            if (index is null or < 0 || count is null or < 1 or > MaxChunks || index >= count)
-            {
-                return false;
-            }
-
-            var part = AppFrameJson.GetInt(reply, "part") ?? 0;
-            var parts = AppFrameJson.GetInt(reply, "parts") ?? 1;
-            if (part < 0 || parts < 1 || parts > MaxChunks || part >= parts)
-            {
-                return false;
-            }
-
-            var width = AppFrameJson.GetInt(reply, "width");
-            var height = AppFrameJson.GetInt(reply, "height");
-            if (width is null or <= 0 || height is null or <= 0)
-            {
-                return false;
-            }
-
-            var name = AppFrameJson.GetString(reply, "name");
-            requestKey = key;
-            chunk = new TerrainChunk(
-                index.Value,
-                count.Value,
-                part,
-                parts,
-                width.Value,
-                height.Value,
-                string.IsNullOrEmpty(name) ? $"Layer {index.Value + 1}" : name,
-                data,
-                null);
-            return true;
-        }
-    }
-
-    /// <summary>
-    /// Canonical cache entry for a chunked transfer:
-    /// <c>{"width":W,"height":H,"layers":[{"name":"...","data":"..."}]}</c>.
-    /// </summary>
-    public static string BuildCombinedPayload(int width, int height, IReadOnlyList<TerrainLayer> layers)
-    {
-        ArgumentNullException.ThrowIfNull(layers);
-
-        using var buffer = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(buffer))
-        {
-            writer.WriteStartObject();
-            writer.WriteNumber("width", width);
-            writer.WriteNumber("height", height);
-            writer.WriteStartArray("layers");
-
-            foreach (var layer in layers)
-            {
-                writer.WriteStartObject();
-                writer.WriteString("name", layer.Name);
-                writer.WriteString("data", layer.Data);
-                writer.WriteEndObject();
-            }
-
-            writer.WriteEndArray();
-            writer.WriteEndObject();
-        }
-
-        return Encoding.UTF8.GetString(buffer.ToArray());
-    }
-
-    /// <summary>
-    /// Splits a combined payload back into layer frames for a cache hit. Returns
-    /// false when <paramref name="payload"/> is not a combined payload (for
-    /// example a legacy whole-SVG string), so the caller can emit the old single
-    /// frame instead.
-    /// </summary>
-    public static bool TryBuildLayerFrames(
-        string requestKey,
-        string payload,
-        int maxChars,
-        out IReadOnlyList<byte[]> frames)
-    {
-        frames = Array.Empty<byte[]>();
-
-        if (string.IsNullOrEmpty(requestKey) ||
-            string.IsNullOrEmpty(payload) ||
-            payload[0] != '{')
-        {
-            return false;
-        }
-
-        JsonDocument document;
-        try
-        {
-            document = JsonDocument.Parse(payload);
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
-
-        using (document)
-        {
-            var root = document.RootElement;
-            if (root.ValueKind != JsonValueKind.Object ||
-                !root.TryGetProperty("width", out var widthElement) ||
-                !widthElement.TryGetInt32(out var width) ||
-                width <= 0 ||
-                !root.TryGetProperty("height", out var heightElement) ||
-                !heightElement.TryGetInt32(out var height) ||
-                height <= 0 ||
-                !root.TryGetProperty("layers", out var layersElement) ||
-                layersElement.ValueKind != JsonValueKind.Array)
-            {
-                return false;
-            }
-
-            var layers = new List<TerrainLayer>();
-            foreach (var layer in layersElement.EnumerateArray())
-            {
-                if (layer.ValueKind != JsonValueKind.Object ||
-                    AppFrameJson.GetString(layer, "name") is not { } name ||
-                    AppFrameJson.GetString(layer, "data") is not { } data ||
-                    data.Length == 0 ||
-                    layers.Count >= MaxChunks)
-                {
-                    return false;
-                }
-
-                layers.Add(new TerrainLayer(name, data));
-            }
-
-            if (layers.Count == 0)
-            {
-                return false;
-            }
-
-            frames = BuildLayerFrames(requestKey, width, height, layers, maxChars);
-            return true;
-        }
-    }
-
-    /// <summary>Builds one frame per layer part, in index/part order.</summary>
-    public static IReadOnlyList<byte[]> BuildLayerFrames(
-        string requestKey,
-        int width,
-        int height,
-        IReadOnlyList<TerrainLayer> layers,
-        int maxChars)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(requestKey);
-        ArgumentNullException.ThrowIfNull(layers);
-        ArgumentOutOfRangeException.ThrowIfLessThan(maxChars, 1);
-
-        var frames = new List<byte[]>();
-        var count = layers.Count;
-
-        for (var index = 0; index < count; index++)
-        {
-            var layer = layers[index];
-            var parts = SplitBase64(layer.Data, maxChars);
-
-            for (var part = 0; part < parts.Count; part++)
-            {
-                frames.Add(BuildChunkFrame(
-                    requestKey,
-                    index,
-                    count,
-                    part,
-                    parts.Count,
-                    width,
-                    height,
-                    layer.Name,
-                    parts[part],
-                    last: index == count - 1 && part == parts.Count - 1));
-            }
-        }
-
-        return frames;
-    }
-
-    /// <summary>Builds frames from a completed payload.</summary>
-    public static IReadOnlyList<byte[]> BuildLayerFrames(
-        string requestKey,
-        TerrainPayload payload,
-        int maxChars)
-    {
-        ArgumentNullException.ThrowIfNull(payload);
-        return BuildLayerFrames(requestKey, payload.Width, payload.Height, payload.Layers, maxChars);
-    }
-
-    private static List<string> SplitBase64(string data, int maxChars)
-    {
-        if (data.Length == 0)
-        {
-            return [string.Empty];
-        }
-
-        var parts = new List<string>((data.Length / maxChars) + 1);
-        for (var offset = 0; offset < data.Length; offset += maxChars)
-        {
-            parts.Add(data.Substring(offset, Math.Min(maxChars, data.Length - offset)));
-        }
-
-        return parts;
-    }
-
-    private static byte[] BuildChunkFrame(
-        string requestKey,
-        int index,
-        int count,
-        int part,
-        int parts,
-        int width,
-        int height,
-        string name,
-        string data,
-        bool last)
-    {
-        using var buffer = new MemoryStream(data.Length + 256);
-        using (var writer = new Utf8JsonWriter(buffer))
-        {
-            writer.WriteStartObject();
-            writer.WriteString("k", requestKey);
-            writer.WriteStartObject("d");
-            writer.WriteString("a", App);
-            writer.WriteString("c", ReplyCommand);
-            writer.WriteNumber("index", index);
-            writer.WriteNumber("count", count);
-            writer.WriteNumber("part", part);
-            writer.WriteNumber("parts", parts);
-            writer.WriteString("name", name);
-            writer.WriteNumber("width", width);
-            writer.WriteNumber("height", height);
-            writer.WriteString("data", data);
-            writer.WriteBoolean("last", last);
-            writer.WriteEndObject();
-            writer.WriteEndObject();
-        }
-
-        return buffer.ToArray();
-    }
-
-    internal static bool TryParseObject(ReadOnlySpan<byte> payload, out JsonDocument document) =>
-        AppFrameJson.TryParseObject(payload, out document);
-
-    internal static string? GetString(JsonElement element, string name) =>
-        AppFrameJson.GetString(element, name);
-}
-
-/// <summary>A <c>{"k":"...","d":"..."}</c> application reply frame.</summary>
-internal static class AppReply
-{
-    public static byte[] Build(string requestKey, string payload)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(requestKey);
-        ArgumentNullException.ThrowIfNull(payload);
-
-        using var buffer = new MemoryStream(payload.Length + requestKey.Length + 16);
-        using (var writer = new Utf8JsonWriter(buffer))
-        {
-            writer.WriteStartObject();
-            writer.WriteString("k", requestKey);
-            writer.WriteString("d", payload);
-            writer.WriteEndObject();
-        }
-
-        return buffer.ToArray();
-    }
-}
-
-/// <summary>Small parsers shared by the terrain and texture frame readers.</summary>
-internal static class AppFrameJson
-{
-    public static bool TryParseObject(ReadOnlySpan<byte> payload, out JsonDocument document)
-    {
-        document = null!;
-
-        if (payload.IsEmpty)
-        {
-            return false;
-        }
-
-        try
-        {
-            // Utf8JsonReader works directly on the frame buffer, so no copy is
-            // made for the (rare) frames the relay has to look into.
-            var reader = new Utf8JsonReader(payload, isFinalBlock: true, state: default);
-            var parsed = JsonDocument.ParseValue(ref reader);
-
-            if (parsed.RootElement.ValueKind != JsonValueKind.Object)
-            {
-                parsed.Dispose();
-                return false;
-            }
-
-            // Exactly one value per frame; trailing data is not a protocol frame.
-            if (reader.Read())
-            {
-                parsed.Dispose();
-                return false;
-            }
-
-            document = parsed;
-            return true;
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
-    }
-
-    public static string? GetString(JsonElement element, string name) =>
-        element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
-            ? value.GetString()
-            : null;
-
-    public static int? GetInt(JsonElement element, string name) =>
-        element.TryGetProperty(name, out var value) &&
-        value.ValueKind == JsonValueKind.Number &&
-        value.TryGetInt32(out var number)
-            ? number
-            : null;
 }

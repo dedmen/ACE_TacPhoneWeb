@@ -1,9 +1,19 @@
 /**
  * Imperative GPS module for an existing OpenLayers map.
  *
- * Mirrors the `MarkerModule` split: this class owns the GPS layers, the game
- * command handlers, player tracking, route calculation, the shared-route
- * preview/start flow and the transport-mode advisor. It never renders React;
+ * This class is the orchestrator: it owns the GPS layers and the shared GPS
+ * state, and it delegates the detailed behaviour to sibling sections, each
+ * of which holds a back-reference to the module:
+ *
+ * - `GpsCamera` — follow/rotation/zoom and the map pointer interactions
+ * - `GpsRoutes` — waypoints, measurements, route planning and drawing
+ * - `GpsNavigation` — metrics, deviation, guidance and arrival
+ * - `GpsAdvisor` — the transport-mode advisor offer flow
+ * - `GpsDebugProbe` — the `window.__TACPHONE_MAP_TEST__.gps` surface and the
+ *   debug cost/height overlay layers
+ *
+ * The module is still the object registered as the `MapGpsTestProbe`; it keeps
+ * thin public delegators that forward to the probe. It never renders React;
  * the overlay subscribes through {@link GpsModuleCallbacks.onStateChange}.
  *
  * Player tracking data comes from the game at 10 Hz:
@@ -19,16 +29,13 @@
 
 import type { TerrainData } from '@ace-tacphone/api';
 import type OlMap from 'ol/Map';
-import type MapBrowserEvent from 'ol/MapBrowserEvent';
 import Feature from 'ol/Feature';
 import Point from 'ol/geom/Point';
-import LineString from 'ol/geom/LineString';
 import ImageLayer from 'ol/layer/Image';
 import VectorLayer from 'ol/layer/Vector';
 import ImageStatic from 'ol/source/ImageStatic';
 import VectorSource from 'ol/source/Vector';
-import DragPan from 'ol/interaction/DragPan';
-import { Circle as CircleStyle, Fill, Icon, Stroke, Style, Text } from 'ol/style';
+import { Icon, Stroke, Style } from 'ol/style';
 
 import type { GpsStartRouteOptions, MapFlyToOptions } from '../api';
 import { mapCommandRegistry } from '../CommandRegistry';
@@ -36,64 +43,35 @@ import { t } from '../i18n';
 import {
     registerGpsTestProbe,
     unregisterGpsTestProbe,
-    type MapGpsDebugState,
-    type MapGpsLayerDebugState,
-    type MapGpsLayersDebugState,
     type MapGpsTestProbe,
 } from '../MapMarkers/MapTestHooks';
 import { onGpsSettingsChanged, readGpsSettings, type GpsSettings } from '../MapOptions';
-import { getTerrainHeights } from '../MapMarkers/TerrainHeightApi';
-import {
-    DEBUG_OVERLAY_ALPHA,
-    buildCostOverlayCanvas,
-    buildHeightOverlayCanvas,
-    debugGridExtent,
-    sampleDebugGrid,
-    type DebugSample,
-} from './GpsDebugOverlay';
+import { DEBUG_OVERLAY_ALPHA } from './GpsDebugOverlay';
 import type {
     ActiveRoute,
-    AdvisorPrompt,
     GpsDebugOverlayMode,
     GpsStatus,
     GpsViewState,
     RouteDebugGrid,
-    RouteLeg,
-    RouteLegKind,
-    RoutePlanResult,
     RouteSummary,
     SharedPreviewInfo,
     TravelMode,
     VehiclePerformance,
 } from './GpsTypes';
 import { createInitialGpsViewState, isTravelMode } from './GpsTypes';
-import { RoutePlanner, type WaterRouteWaypoints } from './RoutePlanner';
-import { legSpeed } from '../routing/SpeedModel';
-import { computeRouteMetrics, findLegIndexForSegment, remainingEta } from '../routing/RouteMetrics';
-import { followResolution } from '../routing/FollowZoom';
-import { describeRouteLegHover, type RouteLegHoverInfo } from '../routing/RouteLegInfo';
-import {
-    nextManeuver,
-    nextSurfaceTransition,
-    isRoadLeg,
-    pointAtDistance,
-    spokenDistance,
-    guidanceCue,
-    GUIDANCE_FAR_CUE_M,
-    type Maneuver,
-} from '../routing/TurnInstructions';
+import { RoutePlanner } from './RoutePlanner';
+import { remainingEta } from '../routing/RouteMetrics';
+import type { RouteLegHoverInfo } from '../routing/RouteLegInfo';
 import { DeviationTracker } from '../routing/DeviationTracker';
 import { parseVehicleChange, VehicleChangeDebouncer } from '../routing/VehicleChange';
 import {
     buildRouteGeometry,
-    flattenToCoordinates,
     projectionAlong,
     sliceLegsFrom,
     type RouteGeometry,
 } from './RouteSplice';
 import { TransportModeAdvisor } from './TransportModeAdvisor';
 import {
-    decodeSharedRoute,
     distanceBetween,
     flatPointCount,
     normalizeDegrees,
@@ -105,6 +83,11 @@ import {
     sharedRouteWaypoints,
     type SharedRouteData,
 } from './SharedRoute';
+import { GpsCamera } from './GpsCamera';
+import { GpsRoutes } from './GpsRoutes';
+import { GpsNavigation } from './GpsNavigation';
+import { GpsAdvisor } from './GpsAdvisor';
+import { GpsDebugProbe } from './GpsDebugProbe';
 
 /** Game-side GPS interest; must match INTEREST_GPS in the game add-on. */
 export const GPS_INTEREST = 'ACE_TacPhone_Map.gps';
@@ -112,12 +95,6 @@ export const GPS_INTEREST = 'ACE_TacPhone_Map.gps';
 const MAP_APP = 'ACE_TacPhone_Map';
 
 const FOLLOW_SUSPEND_MS = 5000;
-
-/** Player speed above which the advisor may offer an alternative. */
-const ADVISOR_MIN_SPEED = 1;
-
-/** How long the Arrived badge stays before the finished route is cleared. */
-const ARRIVAL_CLEAR_MS = 10_000;
 
 const PLAYER_ICON_SVG = [
     '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">',
@@ -166,171 +143,140 @@ function readNumbers(value: unknown, minimumLength: number): number[] | null {
     return value as number[];
 }
 
-/** First stroke of a feature style, so the tests can read dash/color. */
-function findStroke(style: unknown): Stroke | null {
-    if (style instanceof Style) {
-        return style.getStroke() ?? null;
-    }
-
-    if (Array.isArray(style)) {
-        for (const entry of style) {
-            const stroke = findStroke(entry);
-            if (stroke) {
-                return stroke;
-            }
-        }
-    }
-
-    return null;
-}
-
-/** Feature count plus the styles actually set on one GPS line layer. */
-function describeLineLayer(source: VectorSource): MapGpsLayerDebugState {
-    const features = source.getFeatures();
-    const colors: string[] = [];
-    let lineDash: number[] = [];
-
-    for (const feature of features) {
-        const stroke = findStroke(feature.getStyle());
-        if (!stroke) {
-            continue;
-        }
-
-        const color = stroke.getColor();
-        if (color !== null && color !== undefined) {
-            colors.push(String(color));
-        }
-
-        if (lineDash.length === 0) {
-            lineDash = [...(stroke.getLineDash() ?? [])];
-        }
-    }
-
-    return { features: features.length, lineDash, colors };
-}
-
-/** Imperative GPS behaviour for one OpenLayers map. */
+/**
+ * Imperative GPS behaviour for one OpenLayers map. The state fields below are
+ * public module-internal: the sibling sections read and write them through
+ * their back-reference to this instance.
+ */
 export class GpsModule implements MapGpsTestProbe {
-    private readonly map: OlMap;
+    public readonly map: OlMap;
     private readonly callbacks: GpsModuleCallbacks;
 
-    private readonly playerSource = new VectorSource();
-    private readonly routeSource = new VectorSource();
-    private readonly routeBehindSource = new VectorSource();
-    private readonly sharedSource = new VectorSource();
-    private readonly advisorSource = new VectorSource();
-    private readonly waypointSource = new VectorSource();
-    private readonly measurementSource = new VectorSource();
+    public readonly playerSource = new VectorSource();
+    public readonly routeSource = new VectorSource();
+    public readonly routeBehindSource = new VectorSource();
+    public readonly sharedSource = new VectorSource();
+    public readonly advisorSource = new VectorSource();
+    public readonly waypointSource = new VectorSource();
+    public readonly measurementSource = new VectorSource();
 
     private readonly playerLayer: VectorLayer<VectorSource>;
     private readonly routeLayer: VectorLayer<VectorSource>;
     private readonly routeBehindLayer: VectorLayer<VectorSource>;
     private readonly sharedLayer: VectorLayer<VectorSource>;
     private readonly advisorLayer: VectorLayer<VectorSource>;
-    private readonly waypointLayer: VectorLayer<VectorSource>;
+    public readonly waypointLayer: VectorLayer<VectorSource>;
     private readonly measurementLayer: VectorLayer<VectorSource>;
 
-    private readonly playerIcon = new Icon({
+    public readonly playerIcon = new Icon({
         src: PLAYER_ICON_URL,
         anchor: [0.5, 0.5],
         rotation: 0,
     });
     private readonly playerFeature = new Feature(new Point([0, 0]));
-    private readonly legStyles = new Map<string, Style>();
-    private readonly waypointStyles: Style[] = [];
+    public readonly legStyles = new Map<string, Style>();
+    public readonly waypointStyles: Style[] = [];
 
     private readonly unregisterUpdate: () => void;
     private readonly unregisterVehicle: () => void;
     private readonly unsubscribeOptions: () => void;
 
-    private settings: GpsSettings = { rotateWithPlayer: true, autoRepath: false };
-    private readonly planner = new RoutePlanner(null);
+    public settings: GpsSettings = { rotateWithPlayer: true, autoRepath: false };
+    public readonly planner = new RoutePlanner(null);
+
+    // Sibling sections; constructed in the constructor before the test probe
+    // is registered and before the first `emitState`.
+    public camera: GpsCamera;
+    public routes: GpsRoutes;
+    public navigation: GpsNavigation;
+    public advisorFlow: GpsAdvisor;
+    public debugProbe: GpsDebugProbe;
 
     private state: GpsViewState = createInitialGpsViewState();
-    private mode: TravelMode = 'foot';
-    private detectedMode: TravelMode = 'foot';
-    private waterCapable = false;
+    public mode: TravelMode = 'foot';
+    public detectedMode: TravelMode = 'foot';
+    public waterCapable = false;
     /** Ground routing preference controlled from the route panel. */
-    private groundFastest = false;
-    private performance: VehiclePerformance = {};
+    public groundFastest = false;
+    public performance: VehiclePerformance = {};
     private manualMode = false;
 
-    private position: [number, number] | null = null;
-    private heading: number | null = null;
-    private speed = 0;
-    private hasFix = false;
+    public position: [number, number] | null = null;
+    public heading: number | null = null;
+    public speed = 0;
+    public hasFix = false;
 
-    private followEnabled = true;
-    private followSuspendedUntil = 0;
-    private lastCenter: [number, number] | null = null;
-    private lastCenterHeading: number | null = null;
-    private everCentered = false;
+    public followEnabled = true;
+    public followSuspendedUntil = 0;
+    public lastCenter: [number, number] | null = null;
+    public lastCenterHeading: number | null = null;
+    public everCentered = false;
     private terrainRecenterTimer: number | null = null;
-    private planning = false;
+    public planning = false;
 
-    private waypoints: Array<[number, number]> = [];
-    private activeRoute: ActiveRoute | null = null;
-    private routeGeometry: RouteGeometry | null = null;
-    private waypointAlong: number[] = [];
+    public waypoints: Array<[number, number]> = [];
+    public activeRoute: ActiveRoute | null = null;
+    public routeGeometry: RouteGeometry | null = null;
+    public waypointAlong: number[] = [];
 
-    private navigating = false;
-    private arrived = false;
+    public navigating = false;
+    public arrived = false;
     /** Pending auto-clear of the route after the Arrived badge. */
-    private arrivalTimer: number | null = null;
-    private stale = false;
-    private turn: 'left' | 'right' | 'straight' | null = null;
-    private turnDistance: number | null = null;
+    public arrivalTimer: number | null = null;
+    public stale = false;
+    public turn: 'left' | 'right' | 'straight' | null = null;
+    public turnDistance: number | null = null;
     /** Speech cues already delivered for the active route. */
-    private readonly spokenGuidance = new Set<string>();
-    private lastSpeechAt = 0;
-    private offRoute = false;
-    private readonly deviation = new DeviationTracker();
-    private lastRouteDrawAlong = -1;
-    private arrivalSoundPlayed = false;
+    public readonly spokenGuidance = new Set<string>();
+    public lastSpeechAt = 0;
+    public offRoute = false;
+    public readonly deviation = new DeviationTracker();
+    public lastRouteDrawAlong = -1;
+    public arrivalSoundPlayed = false;
 
-    private calculating = false;
-    private status: GpsStatus | null = null;
+    public calculating = false;
+    public status: GpsStatus | null = null;
 
-    private sharedPreview: SharedRouteData | null = null;
+    public sharedPreview: SharedRouteData | null = null;
     /** True while the route panel is open and route hover should be tracked. */
-    private routeHoverEnabled = true;
-    private routeHover: RouteLegHoverInfo | null = null;
+    public routeHoverEnabled = true;
+    public routeHover: RouteLegHoverInfo | null = null;
 
-    private readonly advisor = new TransportModeAdvisor();
-    private advisorPlanning = false;
-    private advisorToken = 0;
+    public readonly advisor = new TransportModeAdvisor();
+    public advisorPlanning = false;
+    public advisorToken = 0;
     /** Alternative route drawn for the shown offer; spliced on accept. */
-    private advisorAlternative: ActiveRoute | null = null;
+    public advisorAlternative: ActiveRoute | null = null;
 
-    private previewTimer: number | null = null;
-    private measurementTimer: number | null = null;
-    private measurementToken = 0;
-    private waypointDrag: { index: number; pointerId: number } | null = null;
-    private waypointDragMoved = false;
-    private lastWaypointDragAt = 0;
+    public previewTimer: number | null = null;
+    public measurementTimer: number | null = null;
+    public measurementToken = 0;
+    public waypointDrag: { index: number; pointerId: number } | null = null;
+    public waypointDragMoved = false;
+    public lastWaypointDragAt = 0;
 
-    private generation = 0;
-    private readonly vehicleChanges: VehicleChangeDebouncer;
-    private destroyed = false;
+    public generation = 0;
+    public readonly vehicleChanges: VehicleChangeDebouncer;
+    public destroyed = false;
     private lastEmitAt = 0;
 
     // Debug-only test counters and the `setLiveUpdates` switch; the browser
     // tests read them through the debug hook and nothing else depends on them.
-    private liveUpdates = true;
-    private fixCount = 0;
-    private vehicleChangesApplied = 0;
+    public liveUpdates = true;
+    public fixCount = 0;
+    public vehicleChangesApplied = 0;
     /** Auto-repaths that actually replaced the route (off-route recovery). */
-    private repathCount = 0;
+    public repathCount = 0;
 
     // Debug-only route-planning overlay (see `setDebugOverlay`). All of it is
     // inert unless `gameInfo.isDebug()` is true when the module is created.
-    private readonly debugEnabled: boolean = isDebugEnabled();
-    private debugOverlay: GpsDebugOverlayMode = 'none';
-    private debugSlopeInfluence = true;
-    private debugAlpha = DEBUG_OVERLAY_ALPHA;
-    private lastDebugGrid: RouteDebugGrid | null = null;
-    private debugCostLayer: ImageLayer<ImageStatic> | null = null;
-    private debugHeightLayer: ImageLayer<ImageStatic> | null = null;
+    public readonly debugEnabled: boolean = isDebugEnabled();
+    public debugOverlay: GpsDebugOverlayMode = 'none';
+    public debugSlopeInfluence = true;
+    public debugAlpha = DEBUG_OVERLAY_ALPHA;
+    public lastDebugGrid: RouteDebugGrid | null = null;
+    public debugCostLayer: ImageLayer<ImageStatic> | null = null;
+    public debugHeightLayer: ImageLayer<ImageStatic> | null = null;
 
     constructor(map: OlMap, callbacks: GpsModuleCallbacks) {
         this.map = map;
@@ -345,6 +291,15 @@ export class GpsModule implements MapGpsTestProbe {
             // Debug-only: collect the planning grid with every plan.
             this.planner.setDebug(true);
         }
+
+        // Sibling sections first: the options subscription and the event
+        // handlers registered below already call into them, and the first
+        // `emitState` reads the navigation state.
+        this.camera = new GpsCamera(this);
+        this.routes = new GpsRoutes(this);
+        this.navigation = new GpsNavigation(this);
+        this.advisorFlow = new GpsAdvisor(this);
+        this.debugProbe = new GpsDebugProbe(this);
 
         this.playerLayer = new VectorLayer<VectorSource>({
             source: this.playerSource,
@@ -386,21 +341,21 @@ export class GpsModule implements MapGpsTestProbe {
 
         this.unsubscribeOptions = onGpsSettingsChanged((settings) => {
             this.settings = settings;
-            this.applyRotation(true);
+            this.camera.applyRotation(true);
             this.emitState(true);
         });
 
-        this.map.on('singleclick', this.handleSingleClick);
-        this.map.on('pointerdrag', this.handleUserPan);
-        this.map.on('pointermove', this.handleRoutePointerMove);
+        this.map.on('singleclick', this.routes.handleSingleClick);
+        this.map.on('pointerdrag', this.camera.handleUserPan);
+        this.map.on('pointermove', this.camera.handleRoutePointerMove);
         // OpenLayers only exposes pointermove/pointerdrag/singleclick publicly;
         // the waypoint drag lifecycle (capture, cancel, leave) stays on the DOM.
-        this.map.getViewport().addEventListener('wheel', this.handleUserPan, { passive: true });
-        this.map.getViewport().addEventListener('pointerdown', this.handleWaypointPointerDown, true);
-        this.map.getViewport().addEventListener('pointermove', this.handleWaypointPointerMove, true);
-        this.map.getViewport().addEventListener('pointerleave', this.handleRoutePointerLeave, true);
-        this.map.getViewport().addEventListener('pointerup', this.handleWaypointPointerUp, true);
-        this.map.getViewport().addEventListener('pointercancel', this.handleWaypointPointerUp, true);
+        this.map.getViewport().addEventListener('wheel', this.camera.handleUserPan, { passive: true });
+        this.map.getViewport().addEventListener('pointerdown', this.camera.handleWaypointPointerDown, true);
+        this.map.getViewport().addEventListener('pointermove', this.camera.handleWaypointPointerMove, true);
+        this.map.getViewport().addEventListener('pointerleave', this.camera.handleRoutePointerLeave, true);
+        this.map.getViewport().addEventListener('pointerup', this.camera.handleWaypointPointerUp, true);
+        this.map.getViewport().addEventListener('pointercancel', this.camera.handleWaypointPointerUp, true);
 
         // Unconditional, like MarkerModule: the registry is only reachable
         // through the dev-only `window.__TACPHONE_MAP_TEST__` hook.
@@ -436,7 +391,7 @@ export class GpsModule implements MapGpsTestProbe {
         }
         this.routeHoverEnabled = enabled;
         if (!enabled) {
-            this.setRouteHover(null);
+            this.camera.setRouteHover(null);
         }
     }
 
@@ -464,11 +419,11 @@ export class GpsModule implements MapGpsTestProbe {
     }
 
     /** Performance only applies when the selected mode matches the vehicle. */
-    private effectivePerformance(): VehiclePerformance | undefined {
+    public effectivePerformance(): VehiclePerformance | undefined {
         return this.mode === this.detectedMode ? this.performance : undefined;
     }
 
-    private effectiveWaterCapable(): boolean {
+    public effectiveWaterCapable(): boolean {
         return this.mode === this.detectedMode && this.waterCapable;
     }
 
@@ -482,7 +437,7 @@ export class GpsModule implements MapGpsTestProbe {
         this.planner.setTerrain(terrain);
         const hasRoads = this.planner.hasRoadLayer();
         // A new terrain snapshot invalidates the debug grid's masks and heights.
-        this.setDebugGrid(null);
+        this.debugProbe.setDebugGrid(null);
         // The Map replaces its view when terrain arrives. Recenter immediately
         // if a fix already exists; waiting for the next movement left the GPS
         // stuck at the whole-terrain fit when the player was stationary.
@@ -508,7 +463,7 @@ export class GpsModule implements MapGpsTestProbe {
         if (this.position && Date.now() >= this.followSuspendedUntil) {
             this.terrainRecenterTimer = window.setTimeout(() => {
                 this.terrainRecenterTimer = null;
-                if (this.destroyed || !this.position || !this.isFollowing) {
+                if (this.destroyed || !this.position || !this.camera.isFollowing) {
                     return;
                 }
                 const view = this.map.getView();
@@ -561,16 +516,16 @@ export class GpsModule implements MapGpsTestProbe {
     }
 
     public addWaypoint(coordinate: [number, number]): void {
-        const point = this.clampToTerrain(coordinate);
+        const point = this.routes.clampToTerrain(coordinate);
         if (!point) {
             return;
         }
 
         this.waypoints.push(point);
         this.planning = true;
-        this.rebuildWaypointLayer();
-        this.scheduleMeasurements();
-        this.schedulePreviewRoute();
+        this.routes.rebuildWaypointLayer();
+        this.routes.scheduleMeasurements();
+        this.routes.schedulePreviewRoute();
         this.emitState(true);
     }
 
@@ -580,20 +535,20 @@ export class GpsModule implements MapGpsTestProbe {
         }
 
         this.waypoints.splice(index, 1);
-        this.rebuildWaypointLayer();
-        this.scheduleMeasurements();
+        this.routes.rebuildWaypointLayer();
+        this.routes.scheduleMeasurements();
 
         if (this.waypoints.length === 0) {
-            this.clearRoute();
+            this.routes.clearRoute();
         } else {
-            this.schedulePreviewRoute();
+            this.routes.schedulePreviewRoute();
         }
 
         this.emitState(true);
     }
 
     public clearWaypoints(): void {
-        this.cancelArrivalClear();
+        this.navigation.cancelArrivalClear();
         this.waypoints = [];
         if (this.previewTimer !== null) {
             window.clearTimeout(this.previewTimer);
@@ -604,8 +559,8 @@ export class GpsModule implements MapGpsTestProbe {
             this.measurementTimer = null;
         }
         this.measurementSource.clear();
-        this.rebuildWaypointLayer();
-        this.clearRoute();
+        this.routes.rebuildWaypointLayer();
+        this.routes.clearRoute();
         this.emitState(true);
     }
 
@@ -621,7 +576,7 @@ export class GpsModule implements MapGpsTestProbe {
         }
 
         const start = this.position ?? this.waypoints[0];
-        await this.planRoute(start, this.waypoints, true);
+        await this.routes.planRoute(start, this.waypoints, true);
         return this.activeRoute !== null;
     }
 
@@ -639,7 +594,7 @@ export class GpsModule implements MapGpsTestProbe {
             return false;
         }
 
-        const target = this.clampToTerrain(position);
+        const target = this.routes.clampToTerrain(position);
         if (!target) {
             return false;
         }
@@ -651,10 +606,10 @@ export class GpsModule implements MapGpsTestProbe {
         const replace = options.replace !== false;
         this.waypoints = replace ? [target] : [...this.waypoints, target];
         this.planning = false;
-        this.rebuildWaypointLayer();
-        this.scheduleMeasurements();
+        this.routes.rebuildWaypointLayer();
+        this.routes.scheduleMeasurements();
 
-        await this.planRoute(this.position ?? this.waypoints[0], this.waypoints, true);
+        await this.routes.planRoute(this.position ?? this.waypoints[0], this.waypoints, true);
         if (this.destroyed || !this.activeRoute) {
             return false;
         }
@@ -677,12 +632,12 @@ export class GpsModule implements MapGpsTestProbe {
         // waypoint list. For a shared route those waypoints were adopted at
         // Start, so this replaces the shared geometry with the current cost
         // model instead of merely splicing the old shared legs.
-        await this.planRoute(this.position ?? this.waypoints[0], this.waypoints, true);
+        await this.routes.planRoute(this.position ?? this.waypoints[0], this.waypoints, true);
     }
 
     public startNavigation(): void {
         if (this.activeRoute) {
-            this.cancelArrivalClear();
+            this.navigation.cancelArrivalClear();
             this.navigating = true;
             this.arrived = false;
             this.planning = false;
@@ -692,7 +647,7 @@ export class GpsModule implements MapGpsTestProbe {
             this.deviation.resetProgress();
             this.arrivalSoundPlayed = false;
             this.lastRouteDrawAlong = -1;
-            this.drawRoute();
+            this.routes.drawRoute();
             this.emitState(true);
         } else if (this.waypoints.length > 0) {
             void this.calculateRoute().then(() => {
@@ -704,14 +659,14 @@ export class GpsModule implements MapGpsTestProbe {
     }
 
     public stopNavigation(): void {
-        this.cancelArrivalClear();
+        this.navigation.cancelArrivalClear();
         this.navigating = false;
         this.arrived = false;
         this.offRoute = false;
         this.deviation.reset();
         this.lastRouteDrawAlong = -1;
-        this.clearAdvisorPrompt();
-        this.drawRoute();
+        this.advisorFlow.clearAdvisorPrompt();
+        this.routes.drawRoute();
         this.emitState(true);
     }
 
@@ -727,7 +682,7 @@ export class GpsModule implements MapGpsTestProbe {
         }
 
         this.sharedPreview = data;
-        this.drawSharedPreview(data);
+        this.routes.drawSharedPreview(data);
         this.status = null;
         this.suspendFollow();
 
@@ -779,7 +734,7 @@ export class GpsModule implements MapGpsTestProbe {
             : [geometry.points[0], geometry.points[1]];
         const segment = projection?.segment ?? 0;
 
-        const connector = await this.planConnector(player, joinPoint);
+        const connector = await this.routes.planConnector(player, joinPoint);
         if (isCancelled()) {
             return false;
         }
@@ -810,7 +765,7 @@ export class GpsModule implements MapGpsTestProbe {
             ? remainingWaypoints
             : waypoints.slice(-1);
 
-        this.setActiveRoute({
+        this.routes.setActiveRoute({
             source: 'shared',
             legs,
             waypoints: routeWaypoints,
@@ -825,7 +780,7 @@ export class GpsModule implements MapGpsTestProbe {
         // Starting a shared route takes over the local waypoint list, so the
         // route panel lists the shared targets instead of stale local ones.
         this.waypoints = routeWaypoints.map((point): [number, number] => [point[0], point[1]]);
-        this.rebuildWaypointLayer();
+        this.routes.rebuildWaypointLayer();
 
         this.sharedPreview = null;
         this.sharedSource.clear();
@@ -837,7 +792,7 @@ export class GpsModule implements MapGpsTestProbe {
         this.followEnabled = true;
         this.followSuspendedUntil = 0;
         this.advisor.reset();
-        this.clearAdvisorPrompt();
+        this.advisorFlow.clearAdvisorPrompt();
         this.emitState(true);
         return true;
     }
@@ -871,8 +826,8 @@ export class GpsModule implements MapGpsTestProbe {
         const eta = legs.reduce((total, leg) => total + leg.eta, 0);
 
         this.advisor.accept();
-        this.clearAdvisorPrompt();
-        this.setActiveRoute({
+        this.advisorFlow.clearAdvisorPrompt();
+        this.routes.setActiveRoute({
             ...this.activeRoute,
             legs,
             distance,
@@ -887,7 +842,7 @@ export class GpsModule implements MapGpsTestProbe {
         }
 
         this.advisor.dismiss();
-        this.clearAdvisorPrompt();
+        this.advisorFlow.clearAdvisorPrompt();
         this.emitState(true);
     }
 
@@ -899,7 +854,7 @@ export class GpsModule implements MapGpsTestProbe {
         this.destroyed = true;
         this.generation += 1;
         this.advisorToken += 1;
-        this.cancelArrivalClear();
+        this.navigation.cancelArrivalClear();
 
         unregisterGpsTestProbe(this);
 
@@ -909,16 +864,16 @@ export class GpsModule implements MapGpsTestProbe {
         this.unregisterVehicle();
         this.unsubscribeOptions();
 
-        this.map.un('singleclick', this.handleSingleClick);
-        this.map.un('pointerdrag', this.handleUserPan);
-        this.map.un('pointermove', this.handleRoutePointerMove);
+        this.map.un('singleclick', this.routes.handleSingleClick);
+        this.map.un('pointerdrag', this.camera.handleUserPan);
+        this.map.un('pointermove', this.camera.handleRoutePointerMove);
         const viewport = this.map.getViewport();
-        viewport.removeEventListener('wheel', this.handleUserPan);
-        viewport.removeEventListener('pointerdown', this.handleWaypointPointerDown, true);
-        viewport.removeEventListener('pointermove', this.handleWaypointPointerMove, true);
-        viewport.removeEventListener('pointerleave', this.handleRoutePointerLeave, true);
-        viewport.removeEventListener('pointerup', this.handleWaypointPointerUp, true);
-        viewport.removeEventListener('pointercancel', this.handleWaypointPointerUp, true);
+        viewport.removeEventListener('wheel', this.camera.handleUserPan);
+        viewport.removeEventListener('pointerdown', this.camera.handleWaypointPointerDown, true);
+        viewport.removeEventListener('pointermove', this.camera.handleWaypointPointerMove, true);
+        viewport.removeEventListener('pointerleave', this.camera.handleRoutePointerLeave, true);
+        viewport.removeEventListener('pointerup', this.camera.handleWaypointPointerUp, true);
+        viewport.removeEventListener('pointercancel', this.camera.handleWaypointPointerUp, true);
         if (this.previewTimer !== null) {
             window.clearTimeout(this.previewTimer);
             this.previewTimer = null;
@@ -951,8 +906,8 @@ export class GpsModule implements MapGpsTestProbe {
             source?.dispose();
         }
 
-        this.removeDebugLayer('cost');
-        this.removeDebugLayer('height');
+        this.debugProbe.removeDebugLayer('cost');
+        this.debugProbe.removeDebugLayer('height');
         this.lastDebugGrid = null;
 
         this.planner.dispose();
@@ -960,430 +915,76 @@ export class GpsModule implements MapGpsTestProbe {
 
     // ---------------------------------------------------------------------
     // Debug/test probe (window.__TACPHONE_MAP_TEST__.gps)
+    //
+    // The module stays the registered `MapGpsTestProbe`; every method below
+    // is a one-line forward to the section that owns the behaviour.
     // ---------------------------------------------------------------------
 
-    /** Live state for the browser tests; reads module fields, not `state`. */
-    public getGpsDebugState(): MapGpsDebugState {
-        const metrics = this.activeRoute ? this.currentMetrics() : null;
-        const rotation = this.map.getView().getRotation();
-        const remaining = metrics?.remaining ?? this.activeRoute?.distance ?? 0;
-        const remainingTime = remainingEta(
-            this.activeRoute?.eta ?? null,
-            this.activeRoute?.distance ?? 0,
-            remaining,
-        );
-
-        let shared: MapGpsDebugState['shared'] = null;
-        if (this.sharedPreview) {
-            shared = {
-                author: this.sharedPreview.author,
-                mode: sharedRoutePrimaryMode(this.sharedPreview),
-                distance: this.sharedPreview.distance,
-                eta: this.sharedPreview.eta,
-                waypointCount: flatPointCount(this.sharedPreview.waypoints),
-                walkDistance: sharedRouteWalkDistance(this.sharedPreview),
-                label: this.sharedPreview.label,
-            };
-        }
-
-        return {
-            hasFix: this.hasFix,
-            heading: this.heading,
-            position: this.position ? [this.position[0], this.position[1]] : null,
-            speed: this.speed,
-            mode: this.mode,
-            detectedMode: this.detectedMode,
-            waterCapable: this.waterCapable,
-            planning: this.planning,
-            navigating: this.navigating,
-            calculating: this.calculating,
-            rotating: this.settings.rotateWithPlayer,
-            mapRotation: normalizeDegrees((rotation * 180) / Math.PI),
-            offRoute: this.offRoute,
-            stale: this.stale,
-            arrived: this.arrived,
-            turn: this.turn,
-            turnDistance: this.turnDistance,
-            waypoints: this.waypoints.map((point): [number, number] => [point[0], point[1]]),
-            route: this.activeRoute
-                ? {
-                    source: this.activeRoute.source,
-                    distance: this.activeRoute.distance,
-                    eta: this.activeRoute.eta,
-                    remaining,
-                    remainingEta: remainingTime,
-                    walkDistance: this.activeRoute.legs
-                        .filter((leg) => leg.kind === 'walk')
-                        .reduce((total, leg) => total + leg.distance, 0),
-                    legs: this.activeRoute.legs.map((leg) => ({
-                        mode: leg.mode,
-                        kind: leg.kind,
-                        surface: leg.surface,
-                        roadKind: leg.roadKind,
-                        passable: leg.passable,
-                        distance: leg.distance,
-                        eta: leg.eta,
-                        pointCount: flatPointCount(leg.points),
-                        source: leg.source,
-                    })),
-                }
-                : null,
-            shared,
-            advisor: this.advisor.prompt,
-            status: this.status,
-            fixCount: this.fixCount,
-            vehicleChangesApplied: this.vehicleChangesApplied,
-            repathCount: this.repathCount,
-            liveUpdates: this.liveUpdates,
-            road: this.planner.getRoadStats(),
-            heights: this.planner.getHeightStats(),
-            debug: {
-                enabled: this.debugEnabled,
-                overlay: this.debugOverlay,
-                alpha: this.debugAlpha,
-                hasGrid: this.lastDebugGrid !== null,
-                costLayer: this.debugCostLayer !== null,
-                heightLayer: this.debugHeightLayer !== null,
-                slopeInfluence: this.debugSlopeInfluence,
-            },
-            layers: this.getLayersDebugState(),
-        };
+    public getGpsDebugState() {
+        return this.debugProbe.getGpsDebugState();
     }
 
-    /** Replaces the waypoint list with clamped copies of `points`. */
     public setWaypoints(points: Array<[number, number]>): void {
-        // New waypoints cancel a pending arrival auto-clear.
-        this.cancelArrivalClear();
-        const next: Array<[number, number]> = [];
-
-        for (const point of points) {
-            if (!Array.isArray(point) || point.length < 2) {
-                continue;
-            }
-
-            const clamped = this.clampToTerrain([Number(point[0]), Number(point[1])]);
-            if (clamped) {
-                next.push(clamped);
-            }
-        }
-
-        this.waypoints = next;
-        this.rebuildWaypointLayer();
-        this.scheduleMeasurements();
-
-        if (this.waypoints.length === 0) {
-            this.clearRoute();
-        } else {
-            this.schedulePreviewRoute();
-        }
-
-        this.emitState(true);
+        this.debugProbe.setWaypoints(points);
     }
 
-    /** Decodes and previews a shared route, exactly like the overlay does. */
     public async openSharedRoute(route: unknown): Promise<boolean> {
-        if (this.destroyed) {
-            return false;
-        }
-
-        const decoded = decodeSharedRoute(route, this.planner.getBounds() ?? undefined);
-        if (!decoded.ok) {
-            return false;
-        }
-
-        return this.showSharedRoutePreview(decoded.data);
+        return this.debugProbe.openSharedRoute(route);
     }
 
-    /** Debug only: ignores `GPS.Update` pushes while disabled. */
     public setLiveUpdates(enabled: boolean): void {
-        this.liveUpdates = enabled === true;
+        this.debugProbe.setLiveUpdates(enabled);
     }
 
-    /**
-     * Debug only: picks which route-planning overlay is drawn.
-     *
-     * `mode` selects none/cost/height/both, `slopeInfluence` decides whether
-     * the cost overlay multiplies in the slope component (ignored when the
-     * planner had no height data). Both are inert in non-debug builds.
-     */
     public setDebugOverlay(
         mode: GpsDebugOverlayMode,
         slopeInfluence: boolean,
-        alpha = this.debugAlpha,
+        alpha?: number,
     ): void {
-        if (this.destroyed || !this.debugEnabled) {
-            return;
-        }
-
-        this.debugOverlay = mode === 'cost' || mode === 'height' || mode === 'both'
-            ? mode
-            : 'none';
-        this.debugSlopeInfluence = slopeInfluence !== false;
-        this.debugAlpha = Math.max(0.05, Math.min(1, Number.isFinite(alpha) ? alpha : this.debugAlpha));
-        this.updateDebugLayers();
+        this.debugProbe.setDebugOverlay(mode, slopeInfluence, alpha);
     }
 
-    /**
-     * Debug only: scans the visible map extent and draws the cost/slope
-     * overlays without planning a route. This is the "why is this area
-     * expensive?" view, available even before a waypoint exists.
-     */
     public async scanDebugViewport(mode?: GpsDebugOverlayMode): Promise<boolean> {
-        if (this.destroyed || !this.debugEnabled) {
-            return false;
-        }
-
-        const size = this.map.getSize();
-        if (!size || size[0] <= 0 || size[1] <= 0) {
-            return false;
-        }
-
-        const extent = this.map.getView().calculateExtent(size);
-        const overlay = mode ?? this.debugOverlay;
-        this.debugOverlay = overlay === 'none' ? 'cost' : overlay;
-
-        const grid = await this.planner.scanDebugGrid(
-            [extent[0], extent[1], extent[2], extent[3]],
-            this.mode,
-            this.effectiveWaterCapable(),
-            this.effectivePerformance(),
-        );
-
-        if (this.destroyed) {
-            return false;
-        }
-
-        this.setDebugGrid(grid);
-        return grid !== null;
+        return this.debugProbe.scanDebugViewport(mode);
     }
 
-    /** Debug only: values under the mouse for the hover readout. */
-    public getDebugSampleAt(position: [number, number]): DebugSample | null {
-        if (!this.debugEnabled || !this.lastDebugGrid) {
-            return null;
-        }
-        return sampleDebugGrid(
-            this.lastDebugGrid,
-            position[0],
-            position[1],
-            this.debugSlopeInfluence,
-        );
+    public getDebugSampleAt(position: [number, number]) {
+        return this.debugProbe.getDebugSampleAt(position);
     }
 
-    /** Debug only: remembers the grid from the last plan and redraws. */
-    private setDebugGrid(grid: RouteDebugGrid | null): void {
-        if (!this.debugEnabled) {
-            return;
-        }
-
-        this.lastDebugGrid = grid;
-        this.updateDebugLayers();
-    }
-
-    /** Rebuilds the overlay image layers from the stored grid. Idempotent. */
-    private updateDebugLayers(): void {
-        this.removeDebugLayer('cost');
-        this.removeDebugLayer('height');
-
-        if (this.destroyed || !this.debugEnabled || this.debugOverlay === 'none') {
-            return;
-        }
-
-        const grid = this.lastDebugGrid;
-        if (!grid) {
-            return;
-        }
-
-        const extent = debugGridExtent(grid);
-        const wantsCost = this.debugOverlay === 'cost' || this.debugOverlay === 'both';
-        const wantsHeight = this.debugOverlay === 'height' || this.debugOverlay === 'both';
-
-        if (wantsCost) {
-            const canvas = buildCostOverlayCanvas(grid, this.debugSlopeInfluence, this.debugAlpha);
-            if (canvas) {
-                // Under the route, above the terrain and marker layers.
-                this.debugCostLayer = this.createDebugLayer(canvas, extent, 5);
-            }
-        }
-
-        if (wantsHeight) {
-            const canvas = buildHeightOverlayCanvas(grid, this.debugAlpha);
-            if (canvas) {
-                this.debugHeightLayer = this.createDebugLayer(canvas, extent, 6);
-            }
-        }
-    }
-
-    private createDebugLayer(
-        canvas: HTMLCanvasElement,
-        extent: [number, number, number, number],
-        zIndex: number,
-    ): ImageLayer<ImageStatic> {
-        const layer = new ImageLayer<ImageStatic>({
-            source: new ImageStatic({
-                url: canvas.toDataURL('image/png'),
-                projection: this.map.getView().getProjection(),
-                imageExtent: extent,
-            }),
-            zIndex,
-        });
-
-        this.map.addLayer(layer);
-        return layer;
-    }
-
-    private removeDebugLayer(which: 'cost' | 'height'): void {
-        const layer = which === 'cost' ? this.debugCostLayer : this.debugHeightLayer;
-        if (!layer) {
-            return;
-        }
-
-        if (which === 'cost') {
-            this.debugCostLayer = null;
-        } else {
-            this.debugHeightLayer = null;
-        }
-
-        // Same teardown as the other GPS layers: the layer stays registered in
-        // the map's frame state, so no `dispose()` on the layer itself.
-        this.map.removeLayer(layer);
-        layer.clearRenderer();
-
-        const source = layer.getSource();
-        layer.setSource(null);
-        source?.dispose();
-    }
-
-    /** Debug only: feeds a synthetic `GPS.Update` past the liveUpdates switch. */
     public applyFix(payload: unknown): void {
-        this.handleGpsUpdate(payload, true);
+        this.debugProbe.applyFix(payload);
     }
 
-    /** Debug only: applies a `GPS.VehicleChanged` payload without the debounce. */
     public applyVehicle(payload: unknown): void {
-        this.applyTravelMode(payload, true);
+        this.debugProbe.applyVehicle(payload);
     }
 
-    /** Viewport pixels of a world coordinate, or null when it is off-screen. */
     public getPixel(coordinate: [number, number]): [number, number] | null {
-        const pixel = this.map.getPixelFromCoordinate(coordinate);
-        const size = this.map.getSize();
-
-        if (!pixel || !size) {
-            return null;
-        }
-
-        const [x, y] = pixel;
-        if (!isFiniteNumber(x) || !isFiniteNumber(y)) {
-            return null;
-        }
-
-        if (x < 0 || y < 0 || x > size[0] || y > size[1]) {
-            return null;
-        }
-
-        return [x, y];
+        return this.debugProbe.getPixel(coordinate);
     }
 
-    /** Terrain-only water lookup plus the nearest water point. */
     public queryWater(
         point: [number, number],
         radiusM: number,
     ): Promise<{ water: boolean; nearestWater: [number, number] | null; hasTerrain: boolean }> {
-        return this.planner.queryWater(point, radiusM);
+        return this.debugProbe.queryWater(point, radiusM);
     }
 
-    /**
-     * Debug/test only: a complete snapshot of the current planner result,
-     * including every leg point and the flattened route geometry. This is what
-     * `window.__TACPHONE_DEBUG_EVAL__` reads when a route looks wrong.
-     */
     public getRouteDebugSnapshot(): unknown {
-        return {
-            position: this.position ? [this.position[0], this.position[1]] : null,
-            mode: this.mode,
-            detectedMode: this.detectedMode,
-            waterCapable: this.waterCapable,
-            planning: this.planning,
-            navigating: this.navigating,
-            waypoints: this.waypoints.map((point) => [point[0], point[1]]),
-            route: this.activeRoute
-                ? {
-                    source: this.activeRoute.source,
-                    distance: this.activeRoute.distance,
-                    eta: this.activeRoute.eta,
-                    waypoints: this.activeRoute.waypoints.map((point) => [point[0], point[1]]),
-                    legs: this.activeRoute.legs.map((leg) => ({
-                        mode: leg.mode,
-                        kind: leg.kind,
-                        surface: leg.surface,
-                        roadKind: leg.roadKind,
-                        passable: leg.passable,
-                        distance: leg.distance,
-                        eta: leg.eta,
-                        source: leg.source,
-                        points: [...leg.points],
-                    })),
-                }
-                : null,
-            geometry: this.routeGeometry
-                ? {
-                    points: [...this.routeGeometry.points],
-                    legStarts: [...this.routeGeometry.legStarts],
-                    total: this.routeGeometry.total,
-                }
-                : null,
-            turn: this.turn,
-            turnDistance: this.turnDistance,
-            offRoute: this.offRoute,
-            status: this.status,
-            debugGrid: this.lastDebugGrid
-                ? {
-                    bbox: [...this.lastDebugGrid.bbox],
-                    cell: this.lastDebugGrid.cell,
-                    width: this.lastDebugGrid.width,
-                    height: this.lastDebugGrid.height,
-                    hasSlope: this.lastDebugGrid.hasSlope,
-                }
-                : null,
-        };
+        return this.debugProbe.getRouteDebugSnapshot();
     }
 
-    /** Debug/test only: a nearby water-only boat destination. */
     public findBoatTarget(start: [number, number]): Promise<[number, number] | null> {
-        return this.planner.findBoatTarget(start);
+        return this.debugProbe.findBoatTarget(start);
     }
 
-    /** Debug/test only: road/water/road waypoints for a water-capable route. */
-    public findWaterRouteWaypoints(start: [number, number]): Promise<WaterRouteWaypoints | null> {
-        return this.planner.findWaterRouteWaypoints(start);
+    public findWaterRouteWaypoints(start: [number, number]) {
+        return this.debugProbe.findWaterRouteWaypoints(start);
     }
 
-    /** Debug/test only: nearest road nodes and a road path. */
-    public debugRoadQuery(
-        start: [number, number],
-        goal: [number, number],
-    ): {
-        startNode: number | null;
-        goalNode: number | null;
-        startPoint: [number, number] | null;
-        goalPoint: [number, number] | null;
-        pathLength: number | null;
-    } {
-        return this.planner.debugRoadQuery(start, goal, this.effectivePerformance(), this.effectiveWaterCapable());
-    }
-
-    private getLayersDebugState(): MapGpsLayersDebugState {
-        return {
-            route: describeLineLayer(this.routeSource),
-            shared: describeLineLayer(this.sharedSource),
-            advisor: describeLineLayer(this.advisorSource),
-            waypoints: { features: this.waypointSource.getFeatures().length },
-            playerIcon: {
-                visible: this.hasFix,
-                rotation: this.playerIcon.getRotation(),
-            },
-        };
+    public debugRoadQuery(start: [number, number], goal: [number, number]) {
+        return this.debugProbe.debugRoadQuery(start, goal);
     }
 
     // ---------------------------------------------------------------------
@@ -1412,7 +1013,7 @@ export class GpsModule implements MapGpsTestProbe {
         }
     }
 
-    private applyTravelMode(payload: unknown, fromEvent: boolean): void {
+    public applyTravelMode(payload: unknown, fromEvent: boolean): void {
         const parsed = parseVehicleChange(payload, this.detectedMode);
         if (!parsed) {
             return;
@@ -1440,9 +1041,9 @@ export class GpsModule implements MapGpsTestProbe {
 
         // Stopping close to the destination and getting out counts as arrival.
         if (this.navigating && this.activeRoute && previousDetected !== 'foot' && detected === 'foot') {
-            const metrics = this.currentMetrics();
+            const metrics = this.navigation.currentMetrics();
             if (metrics && metrics.remaining <= 150) {
-                this.completeArrival();
+                this.navigation.completeArrival();
                 this.emitState(true);
                 return;
             }
@@ -1461,7 +1062,7 @@ export class GpsModule implements MapGpsTestProbe {
         this.vehicleChanges.push(payload);
     }
 
-    private handleGpsUpdate(payload: unknown, force = false): void {
+    public handleGpsUpdate(payload: unknown, force = false): void {
         if (this.destroyed || !payload || typeof payload !== 'object') {
             return;
         }
@@ -1506,1181 +1107,14 @@ export class GpsModule implements MapGpsTestProbe {
         this.fixCount += 1;
 
         this.playerFeature.getGeometry()?.setCoordinates(position);
-        this.applyRotation(false);
-        this.applyFollow();
+        this.camera.applyRotation(false);
+        this.camera.applyFollow();
 
         if (this.navigating && this.activeRoute) {
-            this.updateNavigation();
+            this.navigation.updateNavigation();
         }
 
         this.emitState(false);
-    }
-
-    // ---------------------------------------------------------------------
-    // Follow, rotation and zoom
-    // ---------------------------------------------------------------------
-
-    private get isFollowing(): boolean {
-        // Planning is an explicit editing mode: never pull the map back while
-        // the player is placing or dragging waypoints.
-        return !this.planning && this.followEnabled && Date.now() >= this.followSuspendedUntil;
-    }
-
-    private applyFollow(): void {
-        if (!this.isFollowing || !this.position) {
-            return;
-        }
-
-        const view = this.map.getView();
-        const center = view.getCenter();
-        // Follow the player whenever the actual view is not on them. The old
-        // check only looked at `lastCenter`, so a view replacement (terrain
-        // load / Vite reload) could leave the map at the terrain center while
-        // `lastCenter` still described the player.
-        const offCenter = !center
-            || distanceBetween(center[0], center[1], this.position[0], this.position[1]) > 5;
-        const moved = this.lastCenter === null
-            || distanceBetween(this.position[0], this.position[1], this.lastCenter[0], this.lastCenter[1]) > 1;
-        const headingChanged = this.lastCenterHeading !== null
-            && this.heading !== null
-            && Math.abs(normalizeDegrees(this.heading - this.lastCenterHeading)) > 5;
-
-        if (
-            !this.everCentered
-            || this.lastCenter === null
-            || offCenter
-            || (moved && (this.speed > 0.3 || headingChanged))
-        ) {
-            view.setCenter(this.position);
-            this.lastCenter = this.position;
-            this.lastCenterHeading = this.heading;
-            this.everCentered = true;
-        }
-
-        this.applySpeedZoom();
-    }
-
-    private applyRotation(force: boolean): void {
-        const view = this.map.getView();
-        const rotating = this.settings.rotateWithPlayer;
-
-        if (!force && !this.isFollowing) {
-            // The map keeps its current rotation while the user pans around.
-            this.playerIcon.setRotation(
-                Math.abs(view.getRotation()) > 0.01 ? 0 : ((this.heading ?? 0) * Math.PI) / 180,
-            );
-            return;
-        }
-
-        const target = rotating && this.heading !== null
-            ? -(this.heading * Math.PI) / 180
-            : 0;
-
-        if (Math.abs(view.getRotation() - target) > 0.001) {
-            view.setRotation(target);
-        }
-
-        this.playerIcon.setRotation(rotating ? 0 : ((this.heading ?? 0) * Math.PI) / 180);
-    }
-
-    /**
-     * Keeps about one minute of travel visible ahead of the player, with a
-     * 200 m local radius while standing still. The target is eased so a speed
-     * change zooms smoothly instead of jumping.
-     */
-    private applySpeedZoom(): void {
-        const view = this.map.getView();
-        const current = view.getResolution();
-        const size = this.map.getSize();
-        if (!isFiniteNumber(current) || !size || size[0] <= 0 || size[1] <= 0) {
-            return;
-        }
-
-        const target = followResolution(
-            this.speed,
-            Math.min(size[0], size[1]),
-            view.getMinResolution(),
-            view.getMaxResolution(),
-        );
-        if (target === null) {
-            return;
-        }
-
-        if (Math.abs(current - target) / target > 0.05) {
-            view.setResolution(current * 0.9 + target * 0.1);
-        }
-    }
-
-    private handleUserPan = (): void => {
-        this.suspendFollow();
-        const center = this.map.getView().getCenter();
-        this.lastCenter = center ? [center[0], center[1]] : this.lastCenter;
-        this.lastCenterHeading = this.heading;
-    };
-
-    private setDragPanActive(active: boolean): void {
-        this.map.getInteractions().forEach((interaction) => {
-            if (interaction instanceof DragPan) {
-                interaction.setActive(active);
-            }
-        });
-    }
-
-    private waypointIndexAtEvent(event: PointerEvent): number | null {
-        const feature = this.map.forEachFeatureAtPixel(
-            this.map.getEventPixel(event),
-            (candidate) => candidate,
-            {
-                layerFilter: (layer) => layer === this.waypointLayer,
-                hitTolerance: 12,
-            },
-        );
-
-        const index = feature?.get('waypointIndex');
-        return typeof index === 'number' && Number.isInteger(index) ? index : null;
-    }
-
-    /**
-     * Hover readout for the planned/active route. Projects the pointer onto the
-     * full route geometry; a pixel-distance threshold replaces vector feature
-     * hit-testing, which is unreliable for lines in Firefox at low zoom.
-     */
-    private handleRoutePointerMove = (event: MapBrowserEvent): void => {
-        if (!this.routeHoverEnabled || !this.activeRoute || !this.routeGeometry) {
-            if (this.routeHover !== null) {
-                this.setRouteHover(null);
-            }
-            return;
-        }
-
-        if (this.waypointDrag) {
-            if (this.routeHover !== null) {
-                this.setRouteHover(null);
-            }
-            return;
-        }
-
-        const coordinate = event.coordinate;
-        const projection = projectPointToPolyline(
-            coordinate[0],
-            coordinate[1],
-            this.routeGeometry.points,
-        );
-        const resolution = this.map.getView().getResolution();
-        if (!projection || !isFiniteNumber(resolution) || resolution <= 0) {
-            this.setRouteHover(null);
-            return;
-        }
-
-        // Geometry-distance hover instead of vector feature hit-testing:
-        // Firefox's line hit-testing is unreliable at low zoom and would only
-        // answer on some route features.
-        if (projection.distance > Math.max(20 * resolution, 10)) {
-            if (this.routeHover !== null) {
-                this.setRouteHover(null);
-            }
-            return;
-        }
-        const legIndex = findLegIndexForSegment(this.routeGeometry.legStarts, projection.segment);
-        this.setRouteHover(describeRouteLegHover(
-            this.activeRoute.legs,
-            this.routeGeometry,
-            legIndex,
-            this.position,
-            this.activeRoute.waypoints,
-        ));
-    };
-
-    private handleRoutePointerLeave = (): void => {
-        this.setRouteHover(null);
-    };
-
-    private setRouteHover(info: RouteLegHoverInfo | null): void {
-        const current = this.routeHover;
-        if (current === info) {
-            return;
-        }
-        if (current && info
-            && current.legIndex === info.legIndex
-            && current.fromPlayer === info.fromPlayer
-            && current.nextWaypointIndex === info.nextWaypointIndex
-            && current.spanDistance === info.spanDistance) {
-            return;
-        }
-        this.routeHover = info;
-        this.emitState(true);
-    }
-
-    private handleWaypointPointerDown = (event: PointerEvent): void => {
-        if (!event.isPrimary || event.button !== 0) {
-            return;
-        }
-
-        const index = this.waypointIndexAtEvent(event);
-        if (index === null) {
-            return;
-        }
-
-        event.preventDefault();
-        event.stopPropagation();
-        this.waypointDrag = { index, pointerId: event.pointerId };
-        this.waypointDragMoved = false;
-        this.lastWaypointDragAt = Date.now();
-        this.setDragPanActive(false);
-        this.map.getViewport().style.cursor = 'grabbing';
-
-        try {
-            this.map.getViewport().setPointerCapture(event.pointerId);
-        } catch {
-            // Pointer capture is an enhancement; the document listeners still work.
-        }
-    };
-
-    private handleWaypointPointerMove = (event: PointerEvent): void => {
-        const drag = this.waypointDrag;
-        if (!drag || event.pointerId !== drag.pointerId) {
-            return;
-        }
-
-        event.preventDefault();
-        const coordinate = this.map.getEventCoordinate(event);
-        const point = this.clampToTerrain([coordinate[0], coordinate[1]]);
-        if (!point) {
-            return;
-        }
-
-        this.waypoints[drag.index] = point;
-        this.waypointDragMoved = true;
-        this.rebuildWaypointLayer();
-        this.scheduleMeasurements();
-        this.schedulePreviewRoute();
-    };
-
-    private handleWaypointPointerUp = (event: PointerEvent): void => {
-        const drag = this.waypointDrag;
-        if (!drag || event.pointerId !== drag.pointerId) {
-            return;
-        }
-
-        this.waypointDrag = null;
-        this.lastWaypointDragAt = Date.now();
-        this.setDragPanActive(true);
-        this.map.getViewport().style.cursor = '';
-        try {
-            this.map.getViewport().releasePointerCapture(event.pointerId);
-        } catch {
-            // The capture may already be gone.
-        }
-
-        if (this.waypointDragMoved) {
-            this.schedulePreviewRoute();
-        }
-    };
-
-    // ---------------------------------------------------------------------
-    // Waypoints and route calculation
-    // ---------------------------------------------------------------------
-
-    private handleSingleClick = (event: MapBrowserEvent): void => {
-        if (!this.planning || this.destroyed) {
-            return;
-        }
-
-        if (Date.now() - this.lastWaypointDragAt < 300) {
-            return;
-        }
-
-        const coordinate = event.coordinate;
-        const point = this.clampToTerrain([coordinate[0], coordinate[1]]);
-        if (!point) {
-            return;
-        }
-
-        // Clicking an existing route line inserts a waypoint there and keeps
-        // the later waypoints after it.
-        if (this.activeRoute && this.routeGeometry) {
-            const projection = projectPointToPolyline(point[0], point[1], this.routeGeometry.points);
-            if (projection && projection.distance <= 25) {
-                let index = this.waypointAlong.findIndex((along) => along > projection.along);
-                if (index < 0) {
-                    index = this.waypoints.length;
-                }
-                this.waypoints.splice(index, 0, point);
-                this.planning = true;
-                this.rebuildWaypointLayer();
-                this.schedulePreviewRoute();
-                this.emitState(true);
-                return;
-            }
-        }
-
-        this.addWaypoint(point);
-    };
-
-    private scheduleMeasurements(): void {
-        if (this.measurementTimer !== null) {
-            window.clearTimeout(this.measurementTimer);
-        }
-        this.measurementSource.clear();
-
-        if (this.waypoints.length < 2) {
-            return;
-        }
-
-        const token = ++this.measurementToken;
-        this.measurementTimer = window.setTimeout(() => {
-            this.measurementTimer = null;
-            void getTerrainHeights(this.waypoints)
-                .catch(() => null)
-                .then((heights) => {
-                    if (this.destroyed || token !== this.measurementToken) {
-                        return;
-                    }
-                    this.drawMeasurements(heights);
-                });
-        }, 250);
-    }
-
-    private drawMeasurements(heights: number[] | null): void {
-        this.measurementSource.clear();
-
-        for (let index = 0; index + 1 < this.waypoints.length; index += 1) {
-            const a = this.waypoints[index];
-            const b = this.waypoints[index + 1];
-            const distance = distanceBetween(a[0], a[1], b[0], b[1]);
-            const heightA = heights?.[index];
-            const heightB = heights?.[index + 1];
-            const heightText = heightA !== undefined && heightB !== undefined
-                ? `  Δh ${heightB - heightA >= 0 ? '+' : ''}${Math.round(heightB - heightA)} m`
-                : '';
-            const feature = new Feature(new Point([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]));
-            feature.setStyle(new Style({
-                text: new Text({
-                    text: `${Math.round(distance)} m${heightText}`,
-                    font: 'bold 11px sans-serif',
-                    fill: new Fill({ color: '#0f172a' }),
-                    stroke: new Stroke({ color: '#ffffff', width: 3 }),
-                    backgroundFill: new Fill({ color: 'rgba(255,255,255,0.82)' }),
-                    padding: [2, 5, 2, 5],
-                }),
-            }));
-            this.measurementSource.addFeature(feature);
-        }
-    }
-
-    private schedulePreviewRoute(): void {
-        if (this.previewTimer !== null) {
-            window.clearTimeout(this.previewTimer);
-        }
-
-        if (this.waypoints.length === 0) {
-            this.clearRoute();
-            return;
-        }
-
-        this.previewTimer = window.setTimeout(() => {
-            this.previewTimer = null;
-            if (this.destroyed) {
-                return;
-            }
-
-            if (this.navigating) {
-                void this.recalculate();
-            } else {
-                void this.planRoute(this.position ?? this.waypoints[0], this.waypoints);
-            }
-        }, 250);
-    }
-
-    private clampToTerrain(point: [number, number]): [number, number] | null {
-        if (!isFiniteNumber(point[0]) || !isFiniteNumber(point[1])) {
-            return null;
-        }
-
-        const bounds = this.planner.getBounds();
-        if (!bounds) {
-            return [point[0], point[1]];
-        }
-
-        return [
-            Math.max(0, Math.min(bounds.width, point[0])),
-            Math.max(0, Math.min(bounds.height, point[1])),
-        ];
-    }
-
-    private rebuildWaypointLayer(): void {
-        this.waypointSource.clear();
-
-        for (let index = 0; index < this.waypoints.length; index += 1) {
-            const feature = new Feature(new Point(this.waypoints[index]));
-            feature.set('waypointIndex', index);
-            feature.setStyle(this.waypointStyle(index));
-            this.waypointSource.addFeature(feature);
-        }
-    }
-
-    private waypointStyle(index: number): Style {
-        const cached = this.waypointStyles[index];
-        if (cached) {
-            return cached;
-        }
-
-        const style = new Style({
-            image: new CircleStyle({
-                radius: 8,
-                fill: new Fill({ color: '#0ea5e9' }),
-                stroke: new Stroke({ color: '#ffffff', width: 2 }),
-            }),
-            text: new Text({
-                text: String(index + 1),
-                font: 'bold 11px sans-serif',
-                fill: new Fill({ color: '#ffffff' }),
-            }),
-        });
-        this.waypointStyles[index] = style;
-        return style;
-    }
-
-    private async planRoute(
-        start: [number, number],
-        waypoints: Array<[number, number]>,
-        validate = false,
-    ): Promise<void> {
-        if (this.previewTimer !== null) {
-            window.clearTimeout(this.previewTimer);
-            this.previewTimer = null;
-        }
-
-        const generation = ++this.generation;
-        const isCancelled = (): boolean => this.destroyed || generation !== this.generation;
-
-        this.calculating = true;
-        this.status = { kind: 'analyzing' };
-        this.emitState(true);
-
-        let result: RoutePlanResult;
-
-        try {
-            result = await this.planner.plan({
-                start,
-                waypoints,
-                mode: this.mode,
-                waterCapable: this.effectiveWaterCapable(),
-                performance: this.effectivePerformance(),
-                groundFastest: this.groundFastest,
-                validate,
-                cancelled: isCancelled,
-            });
-        } catch (error) {
-            console.error('GPS: route plan failed', error);
-            result = { ok: false, reason: 'error' };
-        }
-
-        if (isCancelled()) {
-            return;
-        }
-
-        this.calculating = false;
-
-        // Debug only: refresh the overlay grid from this plan (no-op otherwise).
-        this.setDebugGrid(result.debug ?? null);
-
-        if (result.ok && result.route) {
-            this.status = null;
-            this.stale = false;
-            this.arrived = false;
-            this.deviation.reset();
-            this.advisor.reset();
-            this.setActiveRoute(result.route);
-        } else if (result.reason === 'cancelled') {
-            return;
-        } else {
-            this.status = { kind: result.reason === 'no-terrain' ? 'no-terrain' : 'no-path' };
-            this.setActiveRoute(null);
-        }
-
-        this.emitState(true);
-    }
-
-    private async recalculateRemaining(
-        start: [number, number],
-        reason: 'manual' | 'auto' = 'manual',
-    ): Promise<void> {
-        if (!this.activeRoute || this.calculating) {
-            return;
-        }
-
-        const generation = this.generation;
-
-        if (this.activeRoute.source === 'shared' && this.routeGeometry) {
-            const projection = projectPointToPolyline(start[0], start[1], this.routeGeometry.points);
-            const segment = projection?.segment ?? 0;
-            const aheadIndex = Math.min(
-                flatPointCount(this.routeGeometry.points) - 1,
-                segment + 1,
-            );
-            const ahead = this.routeGeometry.points.slice(aheadIndex * 2, aheadIndex * 2 + 2);
-            const target: [number, number] = ahead.length >= 2
-                ? [ahead[0], ahead[1]]
-                : this.activeRoute.waypoints[this.activeRoute.waypoints.length - 1];
-
-            const connector = await this.planConnector(start, target);
-            if (this.destroyed || generation !== this.generation) {
-                // A manual Recalculate (or a newer auto repath) owns the route.
-                return;
-            }
-            if (!connector) {
-                this.status = { kind: 'route-failed' };
-                this.emitState(true);
-                return;
-            }
-
-            const remaining = sliceLegsFrom(
-                this.activeRoute.legs,
-                this.routeGeometry,
-                segment,
-                target,
-            );
-            const legs = [...connector, ...remaining].filter((leg) => leg.points.length >= 4);
-            const distance = legs.reduce((total, leg) => total + leg.distance, 0);
-            const eta = legs.reduce((total, leg) => total + leg.eta, 0);
-
-            this.setActiveRoute({
-                ...this.activeRoute,
-                legs,
-                distance,
-                eta: Number.isFinite(eta) ? eta : null,
-            });
-            this.stale = false;
-            if (reason === 'auto') {
-                this.repathCount += 1;
-            }
-            this.emitState(true);
-            return;
-        }
-
-        const remaining = this.waypoints.filter((waypoint) => {
-            if (!this.routeGeometry) {
-                return true;
-            }
-            const along = projectionAlong(waypoint, this.routeGeometry.points);
-            const current = projectPointToPolyline(start[0], start[1], this.routeGeometry.points);
-            return along === null || !current || along > current.along + 5;
-        });
-
-        if (remaining.length === 0) {
-            return;
-        }
-
-        const before = this.activeRoute;
-        await this.planRoute(start, remaining, true);
-
-        // `planRoute` keeps the previous route on failure, so only a new route
-        // object counts as a replacement.
-        if (reason === 'auto' && this.activeRoute !== null && this.activeRoute !== before) {
-            this.repathCount += 1;
-        }
-    }
-
-    private async planConnector(
-        start: [number, number],
-        target: [number, number],
-    ): Promise<RouteLeg[] | null> {
-        if (distanceBetween(start[0], start[1], target[0], target[1]) < 5) {
-            return [];
-        }
-
-        if (this.mode === 'air') {
-            const distance = distanceBetween(start[0], start[1], target[0], target[1]);
-            const speed = legSpeed('air', 'air', this.performance, false);
-            return [{
-                mode: 'air',
-                kind: 'air',
-                points: [start[0], start[1], target[0], target[1]],
-                distance,
-                eta: speed > 0 ? distance / speed : 0,
-                source: 'connector',
-            }];
-        }
-
-        const result = await this.planner.plan({
-            start,
-            waypoints: [target],
-            mode: this.mode,
-            waterCapable: this.effectiveWaterCapable(),
-            performance: this.effectivePerformance(),
-            cancelled: () => this.destroyed,
-        });
-
-        if (!result.ok || !result.route) {
-            return null;
-        }
-
-        return result.route.legs.map((leg) => ({ ...leg, source: 'connector' as const }));
-    }
-
-    private setActiveRoute(route: ActiveRoute | null): void {
-        this.cancelArrivalClear();
-        this.activeRoute = route;
-        this.routeGeometry = route ? buildRouteGeometry(route.legs) : null;
-        this.waypointAlong = route && this.routeGeometry
-            ? route.waypoints.map((waypoint) =>
-                projectionAlong(waypoint, this.routeGeometry?.points ?? []) ?? 0)
-            : [];
-
-        this.arrived = false;
-        this.deviation.reset();
-        this.deviation.resetProgress();
-        this.arrivalSoundPlayed = false;
-        this.lastRouteDrawAlong = -1;
-        this.routeHover = null;
-        this.spokenGuidance.clear();
-        this.clearAdvisorPrompt();
-        this.drawRoute();
-        this.emitState(true);
-    }
-
-    private clearRoute(): void {
-        this.generation += 1;
-        this.activeRoute = null;
-        this.routeGeometry = null;
-        this.waypointAlong = [];
-        this.routeHover = null;
-        this.spokenGuidance.clear();
-        this.routeSource.clear();
-        this.routeBehindSource.clear();
-        this.advisorSource.clear();
-        this.navigating = false;
-        this.arrived = false;
-        this.deviation.reset();
-        this.deviation.resetProgress();
-        this.arrivalSoundPlayed = false;
-        this.lastRouteDrawAlong = -1;
-        this.offRoute = false;
-        this.stale = false;
-        this.calculating = false;
-        this.status = null;
-        this.clearAdvisorPrompt();
-    }
-
-    private drawRoute(): void {
-        this.routeSource.clear();
-        this.routeBehindSource.clear();
-        this.advisorSource.clear();
-
-        if (!this.activeRoute) {
-            return;
-        }
-
-        const geometry = this.routeGeometry;
-        const projection = this.navigating && this.position && geometry
-            ? projectPointToPolyline(this.position[0], this.position[1], geometry.points)
-            : null;
-        const along = projection?.along ?? null;
-
-        if (projection !== null && along !== null && geometry) {
-            // Fade the part already travelled, so the remaining line stands out.
-            for (const leg of this.activeRoute.legs) {
-                if (leg.points.length < 4) {
-                    continue;
-                }
-                this.routeBehindSource.addFeature(
-                    new Feature(new LineString(flattenToCoordinates(leg.points))),
-                );
-            }
-
-            // `sliceLegsFrom` takes a flattened segment index, not metres along
-            // the route. Passing the distance made the ahead slice jump past the
-            // player and faded the whole route instead of only the passed part.
-            const ahead = sliceLegsFrom(
-                this.activeRoute.legs,
-                geometry,
-                projection.segment,
-                this.position,
-            );
-            for (const leg of ahead) {
-                if (leg.points.length < 4) {
-                    continue;
-                }
-                const feature = new Feature(new LineString(flattenToCoordinates(leg.points)));
-                feature.setStyle(this.routeStyle(leg.kind, leg.mode, leg.passable !== false));
-                this.routeSource.addFeature(feature);
-            }
-            this.lastRouteDrawAlong = along;
-            return;
-        }
-
-        for (const leg of this.activeRoute.legs) {
-            if (leg.points.length < 4) {
-                continue;
-            }
-            const feature = new Feature(new LineString(flattenToCoordinates(leg.points)));
-            feature.setStyle(this.routeStyle(leg.kind, leg.mode, leg.passable !== false));
-            this.routeSource.addFeature(feature);
-        }
-    }
-
-    private drawSharedPreview(data: SharedRouteData): void {
-        this.sharedSource.clear();
-
-        const legs = sharedRouteLegs(data);
-        for (const leg of legs) {
-            if (leg.points.length < 4) {
-                continue;
-            }
-            const feature = new Feature(new LineString(flattenToCoordinates(leg.points)));
-            feature.setStyle(this.sharedStyle(leg.kind));
-            this.sharedSource.addFeature(feature);
-        }
-
-        const waypoints = sharedRouteWaypoints(data);
-        for (let index = 0; index < waypoints.length; index += 1) {
-            const feature = new Feature(new Point(waypoints[index]));
-            feature.setStyle(this.waypointStyle(index));
-            this.sharedSource.addFeature(feature);
-        }
-    }
-
-    private routeStyle(kind: RouteLegKind, mode: TravelMode, passable = true): Style {
-        const key = `${mode}:${kind}:${passable ? 'ok' : 'blocked'}`;
-        const cached = this.legStyles.get(key);
-        if (cached) {
-            return cached;
-        }
-
-        const colors: Record<RouteLegKind, string> = {
-            road: '#22c55e',
-            offroad: '#f59e0b',
-            walk: '#38bdf8',
-            water: '#3b82f6',
-            air: '#a78bfa',
-        };
-        const dashed = !passable || kind === 'walk' || kind === 'air';
-
-        const style = new Style({
-            stroke: new Stroke({
-                color: passable ? colors[kind] : '#ef4444',
-                width: passable ? (mode === 'air' ? 2 : 4) : 5,
-                lineDash: dashed ? [8, 6] : undefined,
-            }),
-        });
-
-        this.legStyles.set(key, style);
-        return style;
-    }
-
-    private sharedStyle(kind: RouteLegKind): Style {
-        return new Style({
-            stroke: new Stroke({
-                color: kind === 'walk' ? 'rgba(56, 189, 248, 0.9)' : 'rgba(34, 211, 238, 0.9)',
-                width: 3,
-                lineDash: [6, 6],
-            }),
-        });
-    }
-
-    // ---------------------------------------------------------------------
-    // Navigation metrics, deviation and arrival
-    // ---------------------------------------------------------------------
-
-    private updateNavigation(): void {
-        const metrics = this.currentMetrics();
-        if (!metrics || !this.routeGeometry) {
-            return;
-        }
-
-        const legs = this.activeRoute?.legs ?? [];
-        const currentLeg = legs[metrics.legIndex];
-        const nextLeg = legs[metrics.legIndex + 1];
-        const transition = nextSurfaceTransition(
-            legs,
-            this.routeGeometry,
-            metrics.along,
-            metrics.legIndex,
-            550,
-        );
-        const maneuver = nextManeuver(this.routeGeometry.points, metrics.along);
-        const roadTurn = isRoadLeg(currentLeg)
-            && (nextLeg === undefined || isRoadLeg(nextLeg))
-            && this.isJunctionManeuver(maneuver, metrics.along);
-        this.turn = roadTurn ? maneuver.turn : null;
-        this.turnDistance = roadTurn ? maneuver.distance : null;
-
-        if (this.navigating) {
-            this.speakGuidance(metrics, currentLeg, transition);
-        }
-
-        if (Math.abs(metrics.along - this.lastRouteDrawAlong) > 5) {
-            this.drawRoute();
-        }
-
-        const decision = this.deviation.update({
-            now: Date.now(),
-            metrics,
-            mode: this.mode,
-            navigating: this.navigating,
-            autoRepath: this.settings.autoRepath,
-            waypointAlong: this.waypointAlong,
-        });
-
-        this.offRoute = decision.offRoute;
-
-        if (decision.reachedWaypoint) {
-            window.TacPhone.audio.play('message');
-        }
-
-        if (decision.repath && this.position && !this.calculating) {
-            void this.recalculateRemaining(this.position, 'auto');
-        }
-
-        if (decision.arrived) {
-            this.completeArrival();
-        }
-
-        if (
-            this.navigating
-            && this.activeRoute?.source === 'shared'
-            && !decision.offRoute
-            && this.speed > ADVISOR_MIN_SPEED
-        ) {
-            this.evaluateAdvisor(metrics);
-        } else if (this.advisor.prompt) {
-            this.clearAdvisorPrompt();
-        }
-    }
-
-    /**
-     * Nearest real junction for a left/right maneuver, or null. The node
-     * position is stable, so it also identifies the junction for speech
-     * deduplication.
-     */
-    private maneuverJunction(maneuver: Maneuver, along: number): [number, number] | null {
-        if (
-            (maneuver.turn !== 'left' && maneuver.turn !== 'right')
-            || maneuver.distance === null
-            || !this.routeGeometry
-        ) {
-            return null;
-        }
-
-        const point = pointAtDistance(this.routeGeometry.points, along + maneuver.distance);
-        return point ? this.planner.roadJunction(point, 20) : null;
-    }
-
-    /**
-     * True when a maneuver happens at a real road junction. A bend in one
-     * road, or two road ends meeting head-to-head, has only two branches and
-     * must not produce a turn cue.
-     */
-    private isJunctionManeuver(maneuver: Maneuver, along: number): boolean {
-        if (maneuver.turn === null) {
-            return false;
-        }
-        if (maneuver.turn === 'straight') {
-            return true;
-        }
-        return this.maneuverJunction(maneuver, along) !== null;
-    }
-
-    /**
-     * Voice guidance for the next road turn or road/off-road transition.
-     *
-     * Each junction and each surface transition is announced once, when it
-     * first comes within 500 m; the spoken distance is the real distance, not
-     * a fixed bucket. Off-road turns are deliberately silent. English text is
-     * a test implementation and is not a stringtable key.
-     */
-    private speakGuidance(
-        metrics: { along: number },
-        currentLeg: RouteLeg | undefined,
-        transition: ReturnType<typeof nextSurfaceTransition>,
-    ): void {
-        const audio = window.TacPhone.audio;
-        if (typeof audio?.speak !== 'function') {
-            return;
-        }
-
-        const now = Date.now();
-        if (now - this.lastSpeechAt < 3000) {
-            return;
-        }
-
-        const speak = (key: string, text: string): void => {
-            this.spokenGuidance.add(key);
-            this.lastSpeechAt = now;
-            try {
-                audio.speak(text);
-            } catch {
-                // Voice guidance must never break navigation.
-            }
-        };
-
-        if (transition && transition.distance <= GUIDANCE_FAR_CUE_M) {
-            // The leg boundary is a route distance, so it stays stable while
-            // the player moves; it is a good identity for the transition.
-            const key = `transition:${Math.round(transition.boundaryAlong)}`;
-            if (!this.spokenGuidance.has(key)) {
-                const direction = transition.direction;
-                const meters = spokenDistance(transition.distance);
-                speak(
-                    key,
-                    transition.enteringRoad
-                        ? `in ${meters} meters, enter the road and continue ${direction === 'straight' ? 'straight' : `to the ${direction}`}`
-                        : `in ${meters} meters, leave the road${direction === 'straight' ? '' : ` to the ${direction}`} and continue offroad`,
-                );
-                return;
-            }
-        }
-
-        if (!isRoadLeg(currentLeg) || !this.routeGeometry) {
-            return;
-        }
-
-        const maneuver = nextManeuver(this.routeGeometry.points, metrics.along, 550);
-        if (maneuver.turn !== 'left' && maneuver.turn !== 'right') {
-            return;
-        }
-        const cue = maneuver.distance === null ? null : guidanceCue(maneuver.distance);
-        if (cue === null || maneuver.distance === null) {
-            return;
-        }
-
-        const junction = this.maneuverJunction(maneuver, metrics.along);
-        if (!junction) {
-            return;
-        }
-
-        // A surface transition at this junction already includes the
-        // direction; announcing the turn again would double the message.
-        if (
-            transition
-            && Math.abs(transition.boundaryAlong - (metrics.along + maneuver.distance)) < 80
-        ) {
-            return;
-        }
-
-        // The graph node identifies the junction even when the sampled turn
-        // distance drifts by a few metres between fixes. The far and near
-        // cues are separate, so approaching a junction gets exactly two
-        // announcements.
-        const key = `turn:${Math.round(junction[0])},${Math.round(junction[1])}:${cue}`;
-        if (this.spokenGuidance.has(key)) {
-            return;
-        }
-        speak(key, `turn ${maneuver.turn} in ${spokenDistance(maneuver.distance)} meters`);
-    }
-
-    private completeArrival(): void {
-        if (this.arrived) {
-            return;
-        }
-
-        this.arrived = true;
-        this.navigating = false;
-        this.clearAdvisorPrompt();
-        if (!this.arrivalSoundPlayed) {
-            this.arrivalSoundPlayed = true;
-            window.TacPhone.audio.play('success');
-        }
-
-        // Keep the Arrived badge visible, then drop the finished route and
-        // leave waypoint-planning mode.
-        this.cancelArrivalClear();
-        this.arrivalTimer = window.setTimeout(() => {
-            this.arrivalTimer = null;
-            if (this.destroyed) {
-                return;
-            }
-            this.planning = false;
-            this.clearWaypoints();
-        }, ARRIVAL_CLEAR_MS);
-    }
-
-    /** Cancels a pending post-arrival route clear. */
-    private cancelArrivalClear(): void {
-        if (this.arrivalTimer !== null) {
-            window.clearTimeout(this.arrivalTimer);
-            this.arrivalTimer = null;
-        }
-    }
-
-    private currentMetrics() {
-        if (!this.position || !this.routeGeometry) {
-            return null;
-        }
-        return computeRouteMetrics(this.position, this.routeGeometry);
-    }
-
-    // ---------------------------------------------------------------------
-    // Transport-mode advisor
-    // ---------------------------------------------------------------------
-
-    private evaluateAdvisor(metrics: {
-        along: number;
-        segment: number;
-        legIndex: number;
-    }): void {
-        const route = this.activeRoute;
-        if (!route || !this.routeGeometry) {
-            return;
-        }
-
-        const authoredLeg = route.legs[metrics.legIndex];
-        if (!authoredLeg) {
-            return;
-        }
-
-        const authoredPerf = route.shared?.vehicle;
-        const authoredWater = authoredPerf?.canFloat === true;
-        const authoredSpeed = authoredLeg.distance > 0 && authoredLeg.eta > 0
-            ? authoredLeg.distance / authoredLeg.eta
-            : legSpeed(authoredLeg.mode, authoredLeg.kind, authoredPerf, authoredWater);
-
-        const decision = this.advisor.evaluate({
-            now: Date.now(),
-            source: route.source,
-            navigating: this.navigating,
-            moving: this.speed > ADVISOR_MIN_SPEED,
-            onRoute: !this.offRoute,
-            planningInFlight: this.advisorPlanning,
-            mode: this.mode,
-            authoredMode: authoredLeg.mode,
-            legSource: authoredLeg.source,
-            along: metrics.along,
-            waypointAlong: this.waypointAlong,
-            authoredSpeed,
-        });
-
-        if (decision.kind === 'cancel-prompt') {
-            this.clearAdvisorPrompt();
-            return;
-        }
-
-        if (decision.kind !== 'evaluate') {
-            return;
-        }
-
-        this.requestAdvisorAlternative(decision, route, metrics, authoredLeg);
-    }
-
-    /** Plans the alternative the advisor asked for and shows the offer. */
-    private requestAdvisorAlternative(
-        decision: { nextWaypointIndex: number; authoredRemaining: number; threshold: number },
-        route: ActiveRoute,
-        metrics: { along: number; segment: number; legIndex: number },
-        authoredLeg: RouteLeg,
-    ): void {
-        const waypoint = route.waypoints[decision.nextWaypointIndex];
-        if (!waypoint) {
-            return;
-        }
-
-        const authoredMode = authoredLeg.mode;
-
-        this.advisorPlanning = true;
-        const token = ++this.advisorToken;
-        // The plan is only valid for the mode it was requested with: the player
-        // can switch travel mode while it runs.
-        const plannedMode = this.mode;
-
-        void this.planner.plan({
-            start: this.position ?? waypoint,
-            waypoints: [waypoint],
-            mode: plannedMode,
-            waterCapable: this.effectiveWaterCapable(),
-            performance: this.effectivePerformance(),
-            cancelled: () => this.destroyed || token !== this.advisorToken,
-        }).then((result) => {
-            this.advisorPlanning = false;
-
-            if (this.destroyed || token !== this.advisorToken || plannedMode !== this.mode) {
-                return;
-            }
-
-            if (!result.ok || !result.route || result.route.eta === null) {
-                const failed = this.advisor.markPlanFailed(
-                    Date.now(),
-                    result.reason === 'no-path' ? 'no-path' : 'error',
-                );
-
-                if (failed.warnUnreachable && !this.destroyed) {
-                    this.status = { kind: 'advisor-unreachable', mode: this.mode };
-                    this.emitState(true);
-                }
-                return;
-            }
-
-            this.advisor.markPlanSucceeded();
-            if (this.status?.kind === 'advisor-unreachable') {
-                this.status = null;
-            }
-
-            const alternativeSeconds = result.route.eta;
-            if (!this.advisor.accepts(alternativeSeconds, decision.authoredRemaining)) {
-                return;
-            }
-
-            const prompt: AdvisorPrompt = {
-                authoredMode,
-                mode: plannedMode,
-                alternativeSeconds,
-                savesSeconds: decision.authoredRemaining - alternativeSeconds,
-                waypointIndex: decision.nextWaypointIndex,
-            };
-            this.advisor.showPrompt(prompt, {
-                segment: metrics.segment,
-                authoredRemaining: decision.authoredRemaining,
-            });
-            this.advisorAlternative = result.route;
-
-            this.drawAdvisorAlternative(result.route, authoredMode);
-
-            try {
-                window.TacPhone.audio.play('alert');
-            } catch (error) {
-                console.warn('GPS: could not play the advisor sound', error);
-            }
-
-            this.emitState(true);
-        }).catch((error: unknown) => {
-            this.advisorPlanning = false;
-            console.warn('GPS: advisor route planning failed', error);
-        });
-    }
-
-    private drawAdvisorAlternative(route: ActiveRoute, authoredMode: TravelMode): void {
-        this.advisorSource.clear();
-
-        for (const leg of route.legs) {
-            if (leg.points.length < 4) {
-                continue;
-            }
-            const feature = new Feature(new LineString(flattenToCoordinates(leg.points)));
-            feature.setStyle(new Style({
-                stroke: new Stroke({
-                    color: 'rgba(244, 114, 182, 0.95)',
-                    width: 3,
-                    lineDash: [3, 5],
-                }),
-            }));
-            this.advisorSource.addFeature(feature);
-        }
-
-        // Keep the authored mode readable for the card text.
-        this.advisorSource.set('authoredMode', authoredMode);
-    }
-
-    private clearAdvisorPrompt(): void {
-        const hadPrompt = this.advisor.prompt !== null;
-        this.advisor.clearPrompt();
-        this.advisorAlternative = null;
-
-        if (!hadPrompt && this.advisorSource.getFeatures().length === 0) {
-            return;
-        }
-
-        this.advisorToken += 1;
-        this.advisorSource.clear();
     }
 
     // ---------------------------------------------------------------------
@@ -2688,7 +1122,7 @@ export class GpsModule implements MapGpsTestProbe {
     // ---------------------------------------------------------------------
 
     private buildState(): GpsViewState {
-        const metrics = this.activeRoute ? this.currentMetrics() : null;
+        const metrics = this.activeRoute ? this.navigation.currentMetrics() : null;
         const rotation = this.map.getView().getRotation();
 
         let route: RouteSummary | null = null;
@@ -2760,7 +1194,7 @@ export class GpsModule implements MapGpsTestProbe {
         return state;
     }
 
-    private emitState(force: boolean): void {
+    public emitState(force: boolean): void {
         if (this.destroyed) {
             return;
         }

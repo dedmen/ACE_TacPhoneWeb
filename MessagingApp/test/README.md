@@ -211,8 +211,9 @@ protocol concern.
   `Debug.SaveState` + `Debug.Reset` does not auto-restore, and only an explicit
   `Debug.LoadState` brings rooms back. The test leaves an empty saved state in
   `missionProfileNamespace` at the end.
-- **`Debug.Reset` has no `Room.Remove` push.** The page is not told that rooms
-  disappeared; the tests resync with `RequestChatState` after a reset.
+- **`Debug.Reset` pushes `Room.Upsert` with `removed: true`.** The server
+  broadcasts it to every participant before clearing the database, so the page
+  is told that its rooms disappeared.
 - **Map UI behavior is not protocol-testable.** `map-marker.test.mjs` checks the
   object shape and `data.position` round-trip only. Live `focusMarker`, deleted
   markers, `flyTo` and the host target chooser are in

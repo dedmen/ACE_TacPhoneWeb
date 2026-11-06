@@ -39,8 +39,8 @@ host's job.
 ## How it works
 
 ```
-Arma (+ extension) ---- one outbound WSS ----> nginx --TLS--> app :5080
-Browser  ------------ one WSS per tab ------> nginx --TLS--> app :5080
+Arma (SQF webRequest) --- one outbound WSS ----> nginx --TLS--> app :5080
+Browser  --------------- one WSS per tab ------> nginx --TLS--> app :5080
 ```
 
 - The game opens **one** outbound WebSocket, authenticated with a host id and a
@@ -133,52 +133,14 @@ the process starts.
 | `TacPhone:TextureCache:MaxEntryBytes` | long | `8388608` (8 MiB) | A single reply larger than this is forwarded but not cached. |
 | `TacPhone:TextureCache:PendingTimeoutSeconds` | int | `60` | How long a forwarded texture request may wait for the game's reply before it is forgotten. |
 
-The shipped `appsettings.json` is exactly this shape:
+The shipped `appsettings.json` is exactly this shape — every `TacPhone` key in
+the table above, plus stock ASP.NET logging:
 
 ```json
 {
-  "Logging": {
-    "LogLevel": {
-      "Default": "Information",
-      "Microsoft.AspNetCore": "Warning",
-      "Microsoft.AspNetCore.HttpOverrides": "Warning"
-    }
-  },
+  "Logging": { "LogLevel": { "Default": "Information", "Microsoft.AspNetCore": "Warning" } },
   "AllowedHosts": "*",
-  "TacPhone": {
-    "BindAddress": "127.0.0.1",
-    "Port": 443,
-    "DatabasePath": "data/tacphone-remote.db",
-    "CompressedStaticPath": "",
-    "PublicBaseUrl": "",
-    "LogFile": "logs/tacphone-remote.log",
-    "LogFileMinLevel": "Information",
-    "LogFileMaxBytes": 10485760,
-    "LogFileKeep": 5,
-    "TrustedProxies": [ "127.0.0.1", "::1" ],
-    "Limits": {
-      "MaxFrameBytes": 33554432,
-      "MaxClientsPerHost": 64,
-      "MaxHosts": 5000,
-      "PairCodeTtlSeconds": 120,
-      "MaxShareTtlSeconds": 86400,
-      "AttachAttemptsPerMinutePerIp": 10,
-      "AttachAttemptsPerMinutePerShare": 60,
-      "IdleTimeoutSeconds": 120
-    },
-    "TerrainCache": {
-      "Enabled": true,
-      "MaxTotalBytes": 268435456,
-      "PendingTimeoutSeconds": 60
-    },
-    "TextureCache": {
-      "Enabled": true,
-      "MaxTotalBytes": 67108864,
-      "MaxEntries": 4096,
-      "MaxEntryBytes": 8388608,
-      "PendingTimeoutSeconds": 60
-    }
-  }
+  "TacPhone": { "BindAddress": "127.0.0.1", "Port": 443, "…": "… (table above)" }
 }
 ```
 
@@ -233,34 +195,8 @@ and no authentication on `/health` or the static page.
 | `GET` | `/ws` | WebSocket endpoint. The first control frame selects the role: `auth` with `"role":"game"`, or `attach` with `"role":"client"`. Also carries the CORS origin header. |
 | any | anything else | Falls back to the static entry (`index.html`); the UI is hash-routed, so there are no server-side routes. |
 
-`/health` returns, on success:
-
-```json
-{
-  "status": "ok",
-  "version": "0.1.0",
-  "uptimeSeconds": 86412,
-  "hostsOnline": 3,
-  "clientsOnline": 7,
-  "terrainCacheEntries": 2,
-  "terrainCacheBytes": 18734210,
-  "terrainCacheHosts": 3,
-  "terrainCacheHits": 41,
-  "terrainCacheMisses": 5,
-  "terrainCachePending": 1,
-  "terrainCachePendingBytes": 2097152,
-  "textureCacheEntries": 128,
-  "textureCacheBytes": 3145728,
-  "textureCacheHits": 512,
-  "textureCacheMisses": 37,
-  "textureCacheEvictions": 4,
-  "textureCachePending": 2
-}
-```
-
-`hostsOnline` counts connected game sockets, `clientsOnline` counts connected
-browser sockets. The `terrainCache*` fields are described in
-[Terrain cache](#terrain-cache).
+`/health` returns a JSON snapshot; the full response shape and a field-by-field
+table are in [Health check usage](#health-check-usage).
 
 ### CORS for `arma://`
 
@@ -445,7 +381,7 @@ TacPhone__PublicBaseUrl=https://tacphone.arma3.io
 ```
 
 Then `curl http://127.0.0.1:5080/health`, open `http://127.0.0.1:5080/` (the
-placeholder page), and point the game or a WebSocket client at
+phone UI), and point the game or a WebSocket client at
 `ws://127.0.0.1:5080/ws`. The database is created on first start; delete the
 file to start from a blank slate.
 
@@ -511,9 +447,8 @@ content root.
 
 ### 5. Install the systemd unit
 
-Copy the unit from [systemd unit](#systemd-unit) into
-`/etc/systemd/system/tacphone-remote.service` (the same file ships as
-`deploy/tacphone-remote.service` in this repository).
+Copy [`deploy/tacphone-remote.service`](deploy/tacphone-remote.service) into
+`/etc/systemd/system/tacphone-remote.service` (see [systemd unit](#systemd-unit)).
 
 Optionally create the environment file the unit reads:
 
@@ -634,61 +569,9 @@ machine's address instead of opening it generally.
 
 ## systemd unit
 
-The full unit, verbatim. The same file lives in
+The unit lives in
 [`deploy/tacphone-remote.service`](deploy/tacphone-remote.service); install it as
 `/etc/systemd/system/tacphone-remote.service`.
-
-```ini
-[Unit]
-Description=TacPhone Remote Server (relay + static web UI)
-Documentation=https://tacphone.arma3.io/
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=tacphone
-Group=tacphone
-WorkingDirectory=/opt/tacphone-remote
-ExecStart=/usr/bin/dotnet /opt/tacphone-remote/TacPhone.RemoteServer.dll
-Restart=always
-RestartSec=5
-TimeoutStopSec=20
-KillSignal=SIGTERM
-SyslogIdentifier=tacphone-remote
-
-# Optional overrides: config keys can also live here as
-# TacPhone__Port=5080, TacPhone__BindAddress=127.0.0.1,
-# TacPhone__LogFile=/var/lib/tacphone-remote/logs/tacphone-remote.log, etc.
-EnvironmentFile=-/etc/tacphone-remote.env
-Environment=DOTNET_ENVIRONMENT=Production
-Environment=ASPNETCORE_ENVIRONMENT=Production
-
-# Only needed when binding 443 directly instead of using nginx.
-AmbientCapabilities=CAP_NET_BIND_SERVICE
-
-# Hardening. Do NOT add MemoryDenyWriteExecute: the .NET JIT needs W+X memory.
-NoNewPrivileges=true
-PrivateTmp=true
-PrivateDevices=true
-ProtectSystem=strict
-ProtectHome=true
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectControlGroups=true
-ProtectClock=true
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-RestrictNamespaces=true
-RestrictRealtime=true
-LockPersonality=true
-SystemCallArchitectures=native
-ReadWritePaths=/var/lib/tacphone-remote
-LimitNOFILE=65535
-UMask=0027
-
-[Install]
-WantedBy=multi-user.target
-```
 
 Two things that are easy to get wrong:
 
@@ -706,85 +589,10 @@ Two things that are easy to get wrong:
 
 ## nginx example
 
-The full example, verbatim. The same file lives in
-[`deploy/nginx-tacphone.conf.example`](deploy/nginx-tacphone.conf.example).
-
-```nginx
-# Example nginx site for the TacPhone Remote Server (HTTP/3 optional).
-#
-# Move to /etc/nginx/sites-available/tacphone.arma3.io and symlink into
-# sites-enabled. The .NET app listens on plain HTTP (default 127.0.0.1:5080).
-#
-# HTTP/3 requires nginx built with --with-http_v3_module (1.25.0+). It serves
-# the static page and /health only: the WebSocket relay always uses HTTP/1.1
-# Upgrade, because browsers do not speak WebSocket over HTTP/3.
-# Check with: nginx -V 2>&1 | grep -o http_v3_module
-# To disable it on a build without HTTP/3, comment out the marked HTTP/3 block
-# and the Alt-Svc header below.
-
-map $http_upgrade $connection_upgrade {
-    default upgrade;
-    ''      close;
-}
-
-server {
-    listen 80;
-    listen [::]:80;
-    server_name tacphone.arma3.io;
-    return 301 https://$host$request_uri;
-}
-
-server {
-    listen 443 ssl;
-    listen [::]:443 ssl;
-
-    # ---- HTTP/3 (optional) ------------------------------------------------
-    # If nginx was not built with --with-http_v3_module (1.25.0+), comment out
-    # this whole block and the Alt-Svc header below. The site keeps working on
-    # HTTP/1.1 + HTTP/2; only the QUIC listener disappears.
-    listen 443 quic reuseport;
-    listen [::]:443 quic reuseport;
-    http3 on;
-    quic_retry on;
-    ssl_early_data on;
-    # ---- end HTTP/3 --------------------------------------------------------
-
-    http2 on;
-
-    server_name tacphone.arma3.io;
-
-    ssl_certificate     /etc/letsencrypt/live/tacphone.arma3.io/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/tacphone.arma3.io/privkey.pem;
-    ssl_protocols       TLSv1.2 TLSv1.3;
-    ssl_session_cache   shared:SSL:10m;
-
-    # Comment out with the HTTP/3 block above if nginx has no v3 support.
-    add_header Alt-Svc 'h3=":443"; ma=86400' always;
-
-    # Terrain layers and app bundles travel as WebSocket messages (terrain is
-    # chunked per layer part).
-    client_max_body_size 32m;
-
-    location / {
-        proxy_pass http://127.0.0.1:5080;
-        proxy_http_version 1.1;
-
-        proxy_set_header Upgrade           $http_upgrade;
-        proxy_set_header Connection        $connection_upgrade;
-        proxy_set_header Host              $host;
-        proxy_set_header Origin            $http_origin;
-        proxy_set_header X-Real-IP         $remote_addr;
-        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-
-        # Long-lived game connections: do not cut them at the default 60 s.
-        proxy_buffering         off;
-        proxy_request_buffering off;
-        proxy_read_timeout      1h;
-        proxy_send_timeout      1h;
-    }
-}
-```
+The site lives in
+[`deploy/nginx-tacphone.conf.example`](deploy/nginx-tacphone.conf.example); copy
+it to `/etc/nginx/sites-available/tacphone`, symlink it into `sites-enabled`,
+and replace `tacphone.arma3.io` with your own name.
 
 ### Installing the site
 
@@ -896,8 +704,9 @@ Things the swap must not lose:
 - `appsettings.json` if you edited it in place — the publish output contains the
   shipped defaults, so re-apply your edits or keep them in
   `/etc/tacphone-remote.env`,
-- `wwwroot/index.html` when you build the phone UI separately: publish copies the
-  placeholder from the repository, so copy your real UI build over it again.
+- `wwwroot/index.html` when you build the phone UI separately: the publish output
+  carries the checked-in build from the repository, so copy your freshly built
+  `index.html` over it again.
   The precompressed Brotli/gzip variants are regenerated automatically on the
   next start because the source hash changed (see
   [Static compression](#static-compression)); delete
@@ -1097,9 +906,10 @@ compatibility handshake — is in
 
 - **Device labels are read-only.** They are derived from the browser's
   `User-Agent`, truncated to 80 characters. Making them user-editable is a TODO.
-- **`wwwroot/index.html` in this repository is a placeholder.** Replace it with
-  the real phone UI build output after `npm run build` (copy the generated
-  `index.html` and any inlined assets). The server does not build the web UI.
+- **`wwwroot/index.html` is the built phone UI** — the full single-file host
+  build (~600 KB, inline JS and CSS), checked in so the server serves a working
+  page out of the box. The server does not build the web UI; after
+  `npm run build`, copy the generated `index.html` over it to update.
 - **No TLS in the app.** nginx (or another terminator) does TLS.
 - **No accounts.** Identities and tokens are the only credentials.
 - **No message history.** Frames exist only while both peers are connected.
@@ -1110,8 +920,8 @@ compatibility handshake — is in
 - [`../tacphone-remote-relay.md`](../tacphone-remote-relay.md) — the authoritative
   plan: architecture, database schema, full wire protocol, security model.
 - [`deploy/tacphone-remote.service`](deploy/tacphone-remote.service) — the systemd
-  unit, source of the block above.
+  unit, source of truth for the [systemd unit](#systemd-unit) section.
 - [`deploy/nginx-tacphone.conf.example`](deploy/nginx-tacphone.conf.example) — the
-  nginx site, source of the block above.
+  nginx site, source of truth for the [nginx example](#nginx-example) section.
 - [`../TODO.md`](../TODO.md) — all known incomplete work and recorded decisions
   for the workspace.

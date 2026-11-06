@@ -8,8 +8,8 @@ SQF. The relay is **WebSocket only**: one outbound `wss://` from the game, no
 WebRTC, no TURN, no port forwarding. Direct LAN access
 (`https://<lan-ip>:8001/`) is a **debug-only** extension path. Plans for a
 peer-to-peer transport live at the workspace root:
-`tacphone-remote-p2p-future.md`; `tacphone-native-websocket-future.md` records
-the native-WebSocket decision.
+`tacphone-remote-p2p-future.md`; the native-WebSocket decision is recorded in
+`plans/completed/tacphone-native-websocket-future.md`.
 
 ## Topology
 

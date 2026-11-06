@@ -12,6 +12,8 @@
 import { decodeGameText } from "./GameText";
 import { encodeTerrainChunks } from "./TerrainCache";
 import type { TerrainData } from "./Types";
+import { RelayPeers } from "./RelayPeers";
+import { buildRelayStatus, PROTOCOL_VERSION, type RelayState } from "./RelayStatus";
 
 const RELAY_PREFIX = "RELAY:";
 const WEBHOST_PREFIX = "WEBHOST:";
@@ -21,23 +23,11 @@ const REQUEST_TIMEOUT_MS = 30_000;
 const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
 
-const PROTOCOL_VERSION = 1;
-
 type Transport = "relay" | "webhost";
-
-type RelayState = "idle" | "connecting" | "online" | "error";
 
 type Identity = {
     hostId: string;
     secret: string;
-};
-
-type RemotePeer = {
-    id: string;
-    label: string;
-    via: string;
-    connectedAt: string;
-    firstSeenAt: string;
 };
 
 type PendingRemoteRequest = {
@@ -110,10 +100,7 @@ export class RelayManager {
     private shareUrl = "";
     private shareExpiresAt = 0;
 
-    private readonly peers = new Map<string, RemotePeer>();
-    private readonly lanClients = new Set<string>();
-    private readonly interestClients = new Map<string, Set<string>>();
-    private readonly announcedInterests = new Set<string>();
+    private readonly peers: RelayPeers;
     private readonly pendingRemoteRequests = new Map<string, PendingRemoteRequest>();
 
     private reconnectAttempt = 0;
@@ -122,6 +109,9 @@ export class RelayManager {
     public constructor(net: RelayNetworking, isDebug: () => boolean) {
         this.net = net;
         this.isDebug = isDebug;
+        this.peers = new RelayPeers({
+            send: (data) => this.net.RequestDirect(data),
+        });
     }
 
     // ---------------------------------------------------------------------
@@ -223,7 +213,7 @@ export class RelayManager {
         }
 
         // The first forwarded request is the LAN client's connect signal.
-        this.lanClients.add(clientId);
+        this.peers.addLanClient(clientId);
 
         if (typeof message.k === "string") {
             this.handleRequest("webhost", clientId, message.k, message.d);
@@ -262,7 +252,7 @@ export class RelayManager {
             case "peer-joined": {
                 const id = asString(frame.peerId);
                 if (!id) break;
-                this.peers.set(id, {
+                this.peers.registerRelayPeer({
                     id,
                     label: asString(frame.label),
                     via: asString(frame.via),
@@ -363,17 +353,17 @@ export class RelayManager {
 
         // Peer ids from the old socket are never reused, so every relay client
         // and its in-flight requests are gone.
-        const relayClients = new Set(this.peers.keys());
+        const relayClients = new Set(this.peers.relayPeerIds());
         for (const pending of this.pendingRemoteRequests.values()) {
             if (pending.transport === "relay") relayClients.add(pending.clientId);
         }
 
-        this.peers.clear();
+        this.peers.clearRelayPeers();
         for (const [key, pending] of [...this.pendingRemoteRequests]) {
             if (pending.transport === "relay") this.pendingRemoteRequests.delete(key);
         }
         for (const clientId of relayClients) {
-            this.clearClientInterests(clientId);
+            this.peers.clearClientInterests(clientId);
             void this.net.RequestDirect({
                 a: "main",
                 c: "Client.Disconnected",
@@ -437,7 +427,7 @@ export class RelayManager {
 
     private handleLocalInterest(request: Frame): object {
         if (request.c === "Interest.Clear") {
-            this.clearClientInterests("local");
+            this.peers.clearClientInterests("local");
             return { ok: true };
         }
 
@@ -446,7 +436,7 @@ export class RelayManager {
             return { ok: false, error: "invalid interest name" };
         }
 
-        this.applyInterest("local", interest, request.active === true);
+        this.peers.applyInterest("local", interest, request.active === true);
         return { ok: true };
     }
 
@@ -568,7 +558,7 @@ export class RelayManager {
         this.authSent = false;
         this.state = "connecting";
         this.error = "";
-        this.peers.clear();
+        this.peers.clearRelayPeers();
         this.code = "";
         this.codeTtl = 0;
         this.codeExpiresAt = 0;
@@ -659,11 +649,11 @@ export class RelayManager {
         this.clearReconnectTimer();
         this.reconnectAttempt = 0;
 
-        const relayClients = new Set([...this.peers.keys(), ...this.remoteInterestClients()]);
+        const relayClients = new Set([...this.peers.relayPeerIds(), ...this.peers.remoteInterestClients()]);
 
         this.state = "idle";
         this.error = "";
-        this.peers.clear();
+        this.peers.clearRelayPeers();
         this.code = "";
         this.codeTtl = 0;
         this.codeExpiresAt = 0;
@@ -679,7 +669,7 @@ export class RelayManager {
         }
 
         for (const clientId of relayClients) {
-            this.clearClientInterests(clientId);
+            this.peers.clearClientInterests(clientId);
             void this.net.RequestDirect({
                 a: "main",
                 c: "Client.Disconnected",
@@ -694,16 +684,6 @@ export class RelayManager {
         });
 
         return Promise.resolve(this.status());
-    }
-
-    private remoteInterestClients(): Set<string> {
-        const clients = new Set<string>();
-        for (const set of this.interestClients.values()) {
-            for (const clientId of set) {
-                if (clientId !== "local") clients.add(clientId);
-            }
-        }
-        return clients;
     }
 
     private scheduleReconnect(): void {
@@ -729,34 +709,19 @@ export class RelayManager {
     }
 
     private status(): Record<string, unknown> {
-        const now = Date.now();
-
-        const peers = [...this.peers.values()]
-            .sort((a, b) => (a.connectedAt || a.firstSeenAt).localeCompare(b.connectedAt || b.firstSeenAt))
-            .map(peer => ({ ...peer }));
-
-        return {
-            ok: true,
-            proto: PROTOCOL_VERSION,
+        return buildRelayStatus({
             state: this.state,
             hostId: this.hostId,
             webBase: this.webBase,
             error: this.error,
-            code: now < this.codeExpiresAt ? this.code : "",
-            codeExpiresIn: now < this.codeExpiresAt
-                ? Math.max(0, Math.floor((this.codeExpiresAt - now) / 1000))
-                : 0,
+            code: this.code,
             codeTtl: this.codeTtl,
-            share: this.shareKey && now < this.shareExpiresAt
-                ? {
-                    url: this.shareUrl,
-                    key: this.shareKey,
-                    expiresIn: Math.max(0, Math.floor((this.shareExpiresAt - now) / 1000)),
-                }
-                : null,
-            peerCount: peers.length,
-            peers,
-        };
+            codeExpiresAt: this.codeExpiresAt,
+            shareKey: this.shareKey,
+            shareUrl: this.shareUrl,
+            shareExpiresAt: this.shareExpiresAt,
+            peers: this.peers.relayPeers(),
+        });
     }
 
     // ---------------------------------------------------------------------
@@ -933,7 +898,7 @@ export class RelayManager {
         request: Frame,
     ): void {
         if (request.c === "Interest.Clear") {
-            this.clearClientInterests(clientId);
+            this.peers.clearClientInterests(clientId);
             this.reply(transport, clientId, originalKey, { ok: true });
             return;
         }
@@ -947,65 +912,8 @@ export class RelayManager {
             return;
         }
 
-        this.applyInterest(clientId, interest, request.active === true);
+        this.peers.applyInterest(clientId, interest, request.active === true);
         this.reply(transport, clientId, originalKey, { ok: true });
-    }
-
-    private applyInterest(clientId: string, interest: string, active: boolean): void {
-        if (active) {
-            let clients = this.interestClients.get(interest);
-            if (!clients) {
-                clients = new Set<string>();
-                this.interestClients.set(interest, clients);
-            }
-
-            const wasEmpty = clients.size === 0;
-            clients.add(clientId);
-
-            if (wasEmpty && !this.announcedInterests.has(interest)) {
-                this.announcedInterests.add(interest);
-                this.sendInterest(interest, true);
-            }
-
-            return;
-        }
-
-        const clients = this.interestClients.get(interest);
-        if (!clients || !clients.delete(clientId)) return;
-
-        if (clients.size === 0) {
-            this.interestClients.delete(interest);
-            if (this.announcedInterests.delete(interest)) {
-                this.sendInterest(interest, false);
-            }
-        }
-    }
-
-    private clearClientInterests(clientId: string): void {
-        for (const [interest, clients] of [...this.interestClients]) {
-            if (!clients.delete(clientId)) continue;
-
-            if (clients.size === 0) {
-                this.interestClients.delete(interest);
-                if (this.announcedInterests.delete(interest)) {
-                    this.sendInterest(interest, false);
-                }
-            }
-        }
-    }
-
-    private sendInterest(interest: string, active: boolean): void {
-        // `Interest.Clear` in SQF clears every interest for the client, which
-        // would deactivate the other interests this hub still has active.
-        // Use Interest.Set with active:false for one interest at a time.
-        void this.net.RequestDirect({
-            a: "main",
-            c: "Interest.Set",
-            interest,
-            active,
-        }).catch((error) => {
-            console.warn("[TacPhone] Could not update an aggregated interest:", error);
-        });
     }
 
     // ---------------------------------------------------------------------
@@ -1013,10 +921,10 @@ export class RelayManager {
     // ---------------------------------------------------------------------
 
     private removeRelayPeer(clientId: string): void {
-        if (!this.peers.delete(clientId)) return;
+        if (!this.peers.removeRelayPeer(clientId)) return;
 
         this.dropPendingForClient("relay", clientId);
-        this.clearClientInterests(clientId);
+        this.peers.clearClientInterests(clientId);
 
         void this.net.RequestDirect({
             a: "main",
@@ -1030,9 +938,9 @@ export class RelayManager {
     private removeWebhostClient(clientId: string): void {
         if (!clientId) return;
 
-        this.lanClients.delete(clientId);
+        this.peers.removeLanClient(clientId);
         this.dropPendingForClient("webhost", clientId);
-        this.clearClientInterests(clientId);
+        this.peers.clearClientInterests(clientId);
     }
 
     private dropPendingForClient(transport: Transport, clientId: string): void {
@@ -1067,7 +975,7 @@ export class RelayManager {
             return;
         }
 
-        if (!this.lanClients.has(clientId)) return;
+        if (!this.peers.hasLanClient(clientId)) return;
         this.sendLan([clientId], payload);
     }
 
@@ -1094,7 +1002,7 @@ export class RelayManager {
                 return;
             }
 
-            if (!this.lanClients.has(clientId)) return;
+            if (!this.peers.hasLanClient(clientId)) return;
             await this.net.RequestDirect({
                 a: "main",
                 c: "WebHost.Send",
@@ -1123,7 +1031,7 @@ export class RelayManager {
     }
 
     private sendLan(targets: string[], data: string): void {
-        if (this.lanClients.size === 0) return;
+        if (this.peers.lanClientsCount() === 0) return;
 
         void this.net.RequestDirect({
             a: "main",

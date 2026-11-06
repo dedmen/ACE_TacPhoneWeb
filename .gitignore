@@ -100,3 +100,4 @@ WebServerExtension/obj/
 RemoteServer/src/TacPhone.RemoteServer/wwwroot/index.html
 
 RemoteServer/.vs/
+RemoteServer/publish/

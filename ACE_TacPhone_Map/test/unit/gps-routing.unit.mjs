@@ -146,13 +146,14 @@ export async function run() {
     ok(leaving, 'leaving the road is detected');
     equal(leaving.enteringRoad, false, 'road -> offroad is leaving');
 
-    // ---- follow zoom: one minute ahead, 200 m while stationary -----------
+    // ---- follow zoom: 20 seconds ahead, 200 m while stationary -----------
     approx(followRadius(0), 200, 'a stationary player keeps a 200 m radius');
-    approx(followRadius(10), 600, 'ten metres per second shows one minute of travel');
+    approx(followRadius(5), 200, 'below ten metres per second the stationary radius wins');
+    approx(followRadius(30), 600, 'thirty metres per second shows twenty seconds of travel');
     approx(followRadius(-5), 200, 'a negative speed uses the stationary radius');
     approx(followRadius(Number.NaN), 200, 'an unknown speed uses the stationary radius');
     approx(followResolution(0, 400, 0.1, 100), 1, '200 m each way fills a 400 px side');
-    approx(followResolution(20, 600, 0.1, 100), 4, '1200 m each way fills a 600 px side');
+    approx(followResolution(40, 800, 0.1, 100), 2, '800 m each way fills an 800 px side');
     approx(followResolution(0, 4000, 1, 100), 1, 'the view minimum resolution wins');
     approx(followResolution(60, 100, 0.1, 10), 10, 'the view maximum resolution wins');
     equal(followResolution(0, 0, 0.1, 100), null, 'no viewport means no target');

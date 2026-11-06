@@ -5,6 +5,7 @@
 export class A3API {
   private pendingRequests: { [key: string]: Array<{resolve: (_:string)=>void, reject: (_:any)=>void}> } = {};
 
+  // Called by engine's handler giving us responses
   _response(key: string, content: string) {
     if (!(key in this.pendingRequests)) return; // Request doesn't exist
 
@@ -12,7 +13,16 @@ export class A3API {
     this.pendingRequests[key].forEach((e: any) => e.resolve(content));
     delete this.pendingRequests[key];
   }
+  
+  // Called by engine's handler giving us responses
+  _errorResponse(key: string, message: string) {
+    if (!(key in this.pendingRequests)) return; // Request doesn't exist
 
+    // Trigger all promises
+    this.pendingRequests[key].forEach((e: any) => e.reject(new Error(message)));
+    delete this.pendingRequests[key];
+  }
+  
   _push(key: string, d: {resolve: (_:string)=>void, reject: (_:any)=>void}) : boolean
   {
     const waiterList = (this.pendingRequests[key] = this.pendingRequests[key] || []);
