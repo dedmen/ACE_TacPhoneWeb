@@ -27,6 +27,9 @@ flexlayout model, and the Remote Access relay.
 - The `display-mode` scenario briefly opens the phone in HUD/DIALOG/HIDDEN
   states and restores `CLOSED` at the end. It also needs an `__A3_DEBUG__` build
   with **Allow debug mode**.
+- The `notify` scenario needs an `__A3_DEBUG__` build with **Allow debug mode**.
+  It briefly opens the phone in HUD mode, restores `CLOSED`, and clears the
+  notify rate-limit bucket at the end, even after a failure.
 
 ### Local certificate
 
@@ -105,6 +108,7 @@ test/
 │   ├── layout-options.test.mjs      # options envelope survives SaveLayout/GetLayout
 │   ├── remote-access.test.mjs       # relay start, share link, remote clients, dead-peer cleanup
 │   ├── display-mode.test.mjs        # Debug.SetLocalDisplayMode CLOSED/HUD/DIALOG/HIDDEN
+│   ├── notify.test.mjs              # Notify.Show shown/suppression/rate limit/reset
 │   ├── audio.test.mjs               # Playwright: first-gesture unlock, keep-alive, pending sound
 │   └── background-tabs.test.mjs     # Playwright: a background tab keeps its panel instance
 └── browser/

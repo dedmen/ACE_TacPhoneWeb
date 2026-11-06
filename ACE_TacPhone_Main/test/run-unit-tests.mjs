@@ -27,6 +27,11 @@ const MODULES = [
         file: path.join(APP_ROOT, 'test/unit/message-router.unit.mjs'),
     },
     {
+        name: 'notify-request',
+        description: 'Notify.Show request mapping for in-game notifications',
+        file: path.join(APP_ROOT, 'test/unit/notify-request.unit.mjs'),
+    },
+    {
         name: 'relay-manager',
         description: 'Hub transport decode, request correlation, broadcast and interests',
         file: path.join(APP_ROOT, 'test/unit/relay-manager.unit.mjs'),

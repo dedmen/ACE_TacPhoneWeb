@@ -21,6 +21,8 @@ import type {
 } from "./Types";
 import { appDirectory } from "./AppDirectory";
 import { audio } from "./Audio";
+import { networking } from "./Networking";
+import { buildInGameNotifyRequest } from "./notifyRequest";
 
 export type {
     NotificationAction,
@@ -93,6 +95,31 @@ export class NotificationCenter
         // never throws; a missing/unknown preset only logs a warning.
         if (options.sound)
             audio.play(options.sound);
+
+        // In-game channel: fire-and-forget Notify.Show. The banner above is
+        // already shown, so the in-game path must never fail or block it.
+        const inGameRequest = buildInGameNotifyRequest(options);
+        if (inGameRequest)
+            networking
+                .Request(inGameRequest)
+                .then(reply => {
+                    // Suppression while the phone is open is expected and silent;
+                    // a rate-limited one is worth one warning so chatty apps are
+                    // diagnosable in release.
+                    if (
+                        reply !== null &&
+                        typeof reply === "object" &&
+                        (reply as { ok?: unknown }).ok === true &&
+                        (reply as { shown?: unknown }).shown === false &&
+                        (reply as { reason?: unknown }).reason === "rate limited"
+                    )
+                        console.warn(
+                            "TacPhone in-game notification was rate limited by the game",
+                        );
+                })
+                .catch(error => {
+                    console.warn("TacPhone in-game notification request failed:", error);
+                });
 
         return id;
     }

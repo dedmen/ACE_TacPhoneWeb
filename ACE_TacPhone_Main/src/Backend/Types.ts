@@ -29,6 +29,7 @@ export type {
     ComponentsApi,
     GameInfo,
     GameInfoApi,
+    InGameNotificationOptions,
     InterestRegistryApi,
     LocalizationApi,
     Networking,

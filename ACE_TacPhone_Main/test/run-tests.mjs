@@ -20,6 +20,7 @@ import * as apps from './scenarios/apps.test.mjs';
 import * as layoutOptions from './scenarios/layout-options.test.mjs';
 import * as remoteAccess from './scenarios/remote-access.test.mjs';
 import * as displayMode from './scenarios/display-mode.test.mjs';
+import * as notify from './scenarios/notify.test.mjs';
 import * as localization from './scenarios/localization.test.mjs';
 
 const ALL_SCENARIOS = [
@@ -27,6 +28,7 @@ const ALL_SCENARIOS = [
     layoutOptions,
     remoteAccess,
     displayMode,
+    notify,
     localization,
 ];
 
