@@ -28,8 +28,8 @@ const RUNNERS = [
     {
         name: 'host',
         script: 'ACE_TacPhone_Main/test/run-unit-tests.mjs',
-        description: 'Relay hub transport, request correlation, broadcast, interests',
-        modules: ['relay-manager'],
+        description: 'Command routing, relay hub transport, request correlation, broadcast, interests',
+        modules: ['message-router', 'relay-manager'],
     },
     {
         name: 'messaging',
@@ -49,6 +49,7 @@ const RUNNERS = [
             'gps-routing',
             'gps-water-corridor',
             'gps-leg-info',
+            'gps-update-rate-sync',
             'terrain-layer-priority',
         ],
     },

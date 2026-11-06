@@ -7,6 +7,7 @@ import {
 } from '@ace-tacphone/api';
 import { mapCommandRegistry } from './CommandRegistry.ts';
 import { registerMapOptions } from './MapOptions.ts';
+import { startGpsUpdateRateSync } from './MapGps/GpsUpdateRateSync.ts';
 import { installMapTestHooks } from './MapMarkers/MapTestHooks.ts';
 import { MAP_BASE_GAME_STRINGS, t } from './i18n.ts';
 // Registers the module-scope marker notification backup handler, so a marker
@@ -30,6 +31,10 @@ export async function init(): Promise<void> {
     window.TacPhone.localization.onDidChange(() => {
         registerMapOptions();
     });
+
+    // The saved layout (and its stored options) can arrive after init(), so the
+    // sync converges on the first option change instead of trusting one value.
+    startGpsUpdateRateSync();
 
     installMapTestHooks();
 }

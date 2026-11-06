@@ -181,7 +181,9 @@ export class GpsModule implements MapGpsTestProbe {
     private readonly unregisterVehicle: () => void;
     private readonly unsubscribeOptions: () => void;
 
-    public settings: GpsSettings = { rotateWithPlayer: true, autoRepath: false };
+    // updateRate only affects the game-side sync (GpsUpdateRateSync); 10 is the
+    // schema default until readSettings() picks up the stored value.
+    public settings: GpsSettings = { rotateWithPlayer: true, autoRepath: false, updateRate: 10 };
     public readonly planner = new RoutePlanner(null);
 
     // Sibling sections; constructed in the constructor before the test probe

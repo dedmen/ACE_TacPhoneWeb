@@ -124,6 +124,7 @@ Open the host **Options** panel (app chooser → Options → Map). Presets are
 | Smooth scaling | on | Canvas smoothing and tile interpolation |
 | GPS: rotate map with view direction | on | Rotate the map instead of the player arrow |
 | GPS: automatically recalculate route | off | Recalculate after deviating |
+| GPS: position update rate | 10 Hz | How often the game pushes the position to the GPS panel (10 or 30 Hz); applies live |
 
 Changing the tile size or another tiling option rebuilds the tile layers from
 the already-decoded terrain, without asking the game again; layer visibility

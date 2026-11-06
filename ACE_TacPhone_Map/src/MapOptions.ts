@@ -19,21 +19,33 @@ export const MAP_OPTION_KEYS = {
     smoothScaling: "smoothScaling",
     gpsRotateWithPlayer: "gpsRotateWithPlayer",
     gpsAutoRepath: "gpsAutoRepath",
+    gpsUpdateRate: "gpsUpdateRate",
 } as const;
+
+/** GPS push rates (Hz) the game accepts; the web select offers exactly these. */
+export const GPS_UPDATE_RATES = [10, 30] as const;
+
+export type GpsUpdateRate = (typeof GPS_UPDATE_RATES)[number];
 
 /** GPS settings read from the shared Map option schema. */
 export interface GpsSettings {
     rotateWithPlayer: boolean;
     autoRepath: boolean;
+    /** GPS.Update push rate in Hz sent to the game (10 or 30). */
+    updateRate: GpsUpdateRate;
 }
 
 export function readGpsSettings(): GpsSettings {
     const rotate = window.TacPhone.options.get<unknown>(MAP_APP, MAP_OPTION_KEYS.gpsRotateWithPlayer);
     const auto = window.TacPhone.options.get<unknown>(MAP_APP, MAP_OPTION_KEYS.gpsAutoRepath);
+    const rate = window.TacPhone.options.get<unknown>(MAP_APP, MAP_OPTION_KEYS.gpsUpdateRate);
 
     return {
         rotateWithPlayer: typeof rotate === "boolean" ? rotate : true,
         autoRepath: typeof auto === "boolean" ? auto : false,
+        updateRate: typeof rate === "number" && (GPS_UPDATE_RATES as readonly number[]).includes(rate)
+            ? rate as GpsUpdateRate
+            : 10,
     };
 }
 
@@ -208,6 +220,17 @@ const MAP_OPTIONS = (): readonly AppOptionDefinition[] => [
         description: t('STR_ACE_Tacphone_Map_Gps_Options_AutoRepath_Desc'),
         type: "boolean",
         default: false,
+    },
+    {
+        key: MAP_OPTION_KEYS.gpsUpdateRate,
+        label: t('STR_ACE_Tacphone_Map_Gps_Options_UpdateRate_Label'),
+        description: t('STR_ACE_Tacphone_Map_Gps_Options_UpdateRate_Desc'),
+        type: "select",
+        default: 10,
+        choices: [
+            { label: t('STR_ACE_Tacphone_Map_Gps_Options_UpdateRate_10'), value: 10 },
+            { label: t('STR_ACE_Tacphone_Map_Gps_Options_UpdateRate_30'), value: 30 },
+        ],
     },
 ];
 

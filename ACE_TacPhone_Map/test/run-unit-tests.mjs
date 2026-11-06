@@ -58,6 +58,11 @@ const MODULES = [
         file: path.join(APP_ROOT, 'test/unit/gps-leg-info.unit.mjs'),
     },
     {
+        name: 'gps-update-rate-sync',
+        description: 'gpsUpdateRate option: validation and SetGpsUpdateRate game sync',
+        file: path.join(APP_ROOT, 'test/unit/gps-update-rate-sync.unit.mjs'),
+    },
+    {
         name: 'terrain-layer-priority',
         description: 'terrain layer rank/LOD planning',
         file: path.join(APP_ROOT, 'test/unit/terrain-layer-priority.unit.mjs'),
